@@ -9,6 +9,8 @@
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=for-the-badge)](LICENSE)
 [![Based on Nuvio](https://img.shields.io/badge/based%20on-NuvioMedia%2FNuvioTV-8A2BE2?style=for-the-badge)](https://github.com/NuvioMedia/NuvioTV)
 
+**Downloader code: 6532491**
+
 [What's new](#-whats-new) · [Download](#-installation) · [Features](#-features) · [Setup](#-getting-started) · [Remote controls](#-remote-controls) · [Report a bug](#-reporting-bugs-and-requesting-features)
 
 </div>
@@ -115,6 +117,16 @@
 ---
 
 ## 📥 Installation
+
+### The quick way: Downloader code **6532491**
+
+1. Install **Downloader** (by AFTVnews) from your TV's app store.
+2. Open it, type **6532491** in the search or address box, and press **Go**.
+3. It downloads the latest **universal** version (works on every device). Press **Install**, allowing installs from unknown sources when asked.
+
+### Or pick the APK for your device
+
+The universal version works everywhere. The device-specific ones are smaller downloads.
 
 1. Open the **[latest release](https://github.com/homelessbrian/NuvioTV/releases)**.
 2. Download the APK for your device:

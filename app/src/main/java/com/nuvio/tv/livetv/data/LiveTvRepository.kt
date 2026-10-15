@@ -124,10 +124,11 @@ class LiveTvRepository @Inject constructor(
     }
 
     /** After a restore from Google Drive: rebuild from the new sources, downloading what's missing. */
-    fun reloadAfterSync() {
+    /** After another TV's setup was applied: [changedPlaylists] get downloaded again straight away. */
+    fun reloadAfterSync(changedPlaylists: Set<String> = emptySet()) {
         scope.launch {
             rebuild()
-            refreshInternal(forcePlaylists = false, forceEpg = false)
+            refreshInternal(forcePlaylists = false, forceEpg = false, forceIds = changedPlaylists)
         }
     }
 

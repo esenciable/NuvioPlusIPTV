@@ -947,7 +947,9 @@ class LiveTvPreferences @Inject constructor(
     }
 
     /** Replaces this TV's Live TV setup with [data] from [exportForSync], keeping per-TV state. */
-    suspend fun importFromSync(data: JSONObject) {
+    suspend fun importFromSync(data: JSONObject): Set<String> {
+        // Playlists whose address or login changed: they need downloading again.
+        val changed = HashSet<String>()
         store.edit { p ->
             val localPlaylists = decodePlaylists(p[Keys.playlists]).associateBy { it.id }
             val localEpgs = decodeEpgs(p[Keys.epgs]).associateBy { it.id }
@@ -973,6 +975,9 @@ class LiveTvPreferences @Inject constructor(
                         if (name == Keys.playlists.name) {
                             v = encodePlaylists(decodePlaylists(v).map { r ->
                                 localPlaylists[r.id]?.let { l ->
+                                    if (l.url != r.url || l.xtreamServer != r.xtreamServer || l.xtreamUsername != r.xtreamUsername ||
+                                        l.xtreamPassword != r.xtreamPassword || l.userAgent != r.userAgent || l.streamFormat != r.streamFormat
+                                    ) changed += r.id
                                     r.copy(lastUpdatedMs = l.lastUpdatedMs, lastError = l.lastError, channelCount = l.channelCount)
                                 } ?: r
                             })
@@ -988,6 +993,7 @@ class LiveTvPreferences @Inject constructor(
                 }
             }
         }
+        return changed
     }
 
     // ---------- JSON helpers ----------

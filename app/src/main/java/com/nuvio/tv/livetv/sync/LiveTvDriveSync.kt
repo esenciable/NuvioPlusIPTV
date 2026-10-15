@@ -355,9 +355,10 @@ class LiveTvDriveSync @Inject constructor(
     private suspend fun applyLocally(data: JSONObject) {
         applying = true
         try {
-            prefs.importFromSync(data)
-            // Download any playlists or guides this TV doesn't have yet, and rebuild the guide.
-            repository.reloadAfterSync()
+            val changed = prefs.importFromSync(data)
+            // Download any playlists or guides this TV doesn't have yet, playlists whose address
+            // or login changed on the other TV, and rebuild the guide.
+            repository.reloadAfterSync(changed)
             delay(500)
         } finally {
             applying = false
@@ -394,10 +395,73 @@ class LiveTvDriveSync @Inject constructor(
             val l = local.opt(k)?.toString()
             val b = base.opt(k)?.toString()
             if (l != b) {
-                if (local.has(k)) out.put(k, local.get(k)) else out.remove(k)
+                // Playlists and guides are lists: combine them source by source, setting by
+                // setting. Taking this TV's whole list whenever anything in it had changed (a
+                // playlist switched off, the server's time zone learned) threw away the other
+                // TV's edits, like a provider's new server address, and then sent the old one back.
+                val listMerged = if (k in SOURCE_LISTS && local.has(k) && remote.has(k)) {
+                    runCatching {
+                        mergeSources(
+                            base.optJSONObject(k)?.optString("v"),
+                            local.getJSONObject(k).optString("v"),
+                            remote.getJSONObject(k).optString("v")
+                        )
+                    }.getOrNull()
+                } else null
+                when {
+                    listMerged != null -> out.put(k, JSONObject(local.getJSONObject(k).toString()).put("v", listMerged))
+                    local.has(k) -> out.put(k, local.get(k))
+                    else -> out.remove(k)
+                }
             }
         }
         return out
+    }
+
+    /**
+     * Three-way merge of two source lists (JSON arrays of objects with an "id"): sources added
+     * or removed on either TV are added or removed, and within a source each setting changed on
+     * this TV since the last sync is kept, everything else comes from the other TV.
+     */
+    private fun mergeSources(baseRaw: String?, localRaw: String, remoteRaw: String): String {
+        fun read(raw: String?): LinkedHashMap<String, JSONObject> {
+            val out = LinkedHashMap<String, JSONObject>()
+            if (raw.isNullOrBlank()) return out
+            val arr = org.json.JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optString("id")
+                if (id.isNotBlank()) out[id] = o
+            }
+            return out
+        }
+        val base = read(baseRaw)
+        val local = read(localRaw)
+        val remote = read(remoteRaw)
+        val result = org.json.JSONArray()
+        // The other TV's order, with its additions and edits.
+        for ((id, r) in remote) {
+            val l = local[id]
+            val b = base[id]
+            when {
+                // Removed on this TV since the last sync: stays removed.
+                l == null && b != null -> continue
+                l == null -> result.put(r)
+                b == null -> result.put(r) // On both TVs but new to the last sync: the other TV's.
+                else -> {
+                    val merged = JSONObject(r.toString())
+                    l.keys().forEach { f ->
+                        if (l.opt(f)?.toString() != b.opt(f)?.toString()) merged.put(f, l.get(f))
+                    }
+                    result.put(merged)
+                }
+            }
+        }
+        // Added on this TV since the last sync.
+        for ((id, l) in local) {
+            if (id !in remote && id !in base) result.put(l)
+        }
+        return result.toString()
     }
 
     private fun baseFile() = java.io.File(context.filesDir, "livetv_drive_base.json")
@@ -512,6 +576,8 @@ class LiveTvDriveSync @Inject constructor(
 
     private companion object {
         const val TAG = "LiveTvDriveSync"
+        /** Settings that are lists of sources, merged source by source. */
+        val SOURCE_LISTS = setOf("playlists", "epg_sources")
         const val MODE_APPDATA = "appdata"
         const val MODE_FILE = "file"
         /** Tried in order until Google accepts one. */

@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import com.nuvio.tv.livetv.model.effectiveGuideSize
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -76,6 +77,45 @@ private sealed interface ScheduleRow {
  */
 @Composable
 internal fun LiveTvOverlayMode(
+    viewModel: LiveTvViewModel,
+    onClose: () -> Unit,
+    onFindInNuvio: (String) -> Unit
+) {
+    // Guide Size (Settings → Live TV) sets the size of overlay mode too: text, icons and rows.
+    val sizeSettings by viewModel.settings.collectAsStateWithLifecycle()
+    val (textScale, rowScale) = when (sizeSettings.effectiveGuideSize) {
+        "COMPACT" -> 0.93f to 0.85f
+        "LARGE" -> 1.2f to 1.2f
+        "XLARGE" -> 1.4f to 1.4f
+        else -> 1f to 1f
+    }
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalOverlayScale provides textScale,
+        LocalOverlayRowScale provides rowScale
+    ) {
+        OverlayModeContent(viewModel, onClose, onFindInNuvio)
+    }
+}
+
+/** Text and icon size scale for overlay mode, from Guide Size; 1 = Standard. */
+private val LocalOverlayScale = androidx.compose.runtime.compositionLocalOf { 1f }
+/** Row height scale for overlay mode, from Guide Size; 1 = Standard. */
+private val LocalOverlayRowScale = androidx.compose.runtime.compositionLocalOf { 1f }
+
+@Composable
+@androidx.compose.runtime.ReadOnlyComposable
+private fun osp(v: Float): androidx.compose.ui.unit.TextUnit = (v * LocalOverlayScale.current).sp
+
+@Composable
+@androidx.compose.runtime.ReadOnlyComposable
+private fun orow(v: Float): androidx.compose.ui.unit.Dp = (v * LocalOverlayRowScale.current).dp
+
+@Composable
+@androidx.compose.runtime.ReadOnlyComposable
+private fun odp(v: Float): androidx.compose.ui.unit.Dp = (v * LocalOverlayScale.current.coerceAtLeast(1f)).dp
+
+@Composable
+private fun OverlayModeContent(
     viewModel: LiveTvViewModel,
     onClose: () -> Unit,
     onFindInNuvio: (String) -> Unit
@@ -290,13 +330,13 @@ internal fun LiveTvOverlayMode(
                     .background(Color.Black.copy(alpha = 0.55f))
                     .padding(16.dp)
             ) {
-                LiveText(about.name, size = 20.sp, weight = FontWeight.Bold, marquee = true, modifier = Modifier.fillMaxWidth())
+                LiveText(about.name, size = osp(20f), weight = FontWeight.Bold, marquee = true, modifier = Modifier.fillMaxWidth())
                 aboutLine(about).takeIf { it.isNotBlank() }?.let {
                     Spacer(Modifier.height(6.dp))
-                    LiveText(it, size = 13.sp, color = Color.White.copy(alpha = 0.75f))
+                    LiveText(it, size = osp(13f), color = Color.White.copy(alpha = 0.75f))
                 }
                 Spacer(Modifier.height(8.dp))
-                LiveText(about.description.orEmpty(), size = 13.sp, color = Color.White.copy(alpha = 0.85f), maxLines = 6)
+                LiveText(about.description.orEmpty(), size = osp(13f), color = Color.White.copy(alpha = 0.85f), maxLines = 6)
             }
         }
         rememberShowDetails(cardChannelKey, card)?.let { p ->
@@ -309,23 +349,23 @@ internal fun LiveTvOverlayMode(
                     .background(Color.Black.copy(alpha = 0.55f))
                     .padding(16.dp)
             ) {
-                LiveText(p.title, size = 20.sp, weight = FontWeight.Bold, marquee = true, modifier = Modifier.fillMaxWidth())
+                LiveText(p.title, size = osp(20f), weight = FontWeight.Bold, marquee = true, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(6.dp))
                 val live = now >= p.startMs && now < p.stopMs
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val range = (if (startOfDay(p.startMs) != startOfDay(now)) "${dayLabel(startOfDay(p.startMs), now)}, " else "") +
                         formatRange(p.startMs, p.stopMs, use24h)
-                    LiveText(range, color = NuvioTheme.colors.TextSecondary, size = 14.sp)
+                    LiveText(range, color = NuvioTheme.colors.TextSecondary, size = osp(14f))
                     if (live) {
                         Spacer(Modifier.width(10.dp))
                         ProgressBar(p.progress(now), Modifier.width(60.dp))
                         Spacer(Modifier.width(10.dp))
-                        LiveText(minutesLeftLabel(p.stopMs, now), color = NuvioTheme.colors.TextSecondary, size = 14.sp)
+                        LiveText(minutesLeftLabel(p.stopMs, now), color = NuvioTheme.colors.TextSecondary, size = osp(14f))
                     }
                 }
                 p.description?.let {
                     Spacer(Modifier.height(8.dp))
-                    LiveText(it, color = NuvioTheme.colors.TextSecondary, size = 14.sp, maxLines = 4)
+                    LiveText(it, color = NuvioTheme.colors.TextSecondary, size = osp(14f), maxLines = 4)
                 }
             }
         }
@@ -334,10 +374,10 @@ internal fun LiveTvOverlayMode(
     futurePrompt?.let { (ch, p) ->
         val first = remember { FocusRequester() }
         LiveDialog(onDismiss = { futurePrompt = null; activity++ }, width = 460.dp) {
-            LiveText(p.title, size = 20.sp, weight = FontWeight.Bold, maxLines = 2)
+            LiveText(p.title, size = osp(20f), weight = FontWeight.Bold, maxLines = 2)
             LiveText(
                 "${dayLabel(startOfDay(p.startMs), now)}, ${formatRange(p.startMs, p.stopMs, use24h)} · ${ch.name}",
-                color = NuvioTheme.colors.TextSecondary, size = 13.sp
+                color = NuvioTheme.colors.TextSecondary, size = osp(13f)
             )
             Spacer(Modifier.height(14.dp))
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -390,7 +430,7 @@ private fun PanelHeader(content: @Composable () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp)
+            .height(orow(56f))
             .background(Color.White.copy(alpha = 0.05f))
             .padding(horizontal = 18.dp),
         contentAlignment = Alignment.CenterStart
@@ -419,7 +459,7 @@ private fun ChannelsPanel(
         restingIndex = index
     }
     Column(modifier = Modifier.width(300.dp).fillMaxHeight().background(PanelDark)) {
-        PanelHeader { LiveText(title, size = 17.sp, weight = FontWeight.SemiBold) }
+        PanelHeader { LiveText(title, size = osp(17f), weight = FontWeight.SemiBold) }
         LazyColumn(state = state, modifier = Modifier.fillMaxSize()) {
             itemsIndexed(channels, key = { _, c -> c.key }) { i, ch ->
                 val p = programs[ch.key]?.firstOrNull { now >= it.startMs && now < it.stopMs }
@@ -432,7 +472,7 @@ private fun ChannelsPanel(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(62.dp)
+                        .height(orow(62f))
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                         .clip(shape)
                         .background(colors.background)
@@ -440,19 +480,19 @@ private fun ChannelsPanel(
                         .padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (showNumbers) LiveText(ch.number.toString(), modifier = Modifier.width(36.dp), color = NuvioTheme.colors.TextSecondary, size = 13.sp)
+                    if (showNumbers) LiveText(ch.number.toString(), modifier = Modifier.width(36.dp), color = NuvioTheme.colors.TextSecondary, size = osp(13f))
                     if (showLogos) {
                         ChannelLogo(ch.logo, 32.dp)
                         Spacer(Modifier.width(8.dp))
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            LiveText(ch.name, color = colors.text, size = 15.sp, modifier = Modifier.weight(1f, fill = false), marquee = isFocused && i == restingIndex)
+                            LiveText(ch.name, color = colors.text, size = osp(15f), modifier = Modifier.weight(1f, fill = false), marquee = isFocused && i == restingIndex)
                             if (ch.catchup != null) {
                                 Spacer(Modifier.width(4.dp))
-                                Icon(androidx.compose.material.icons.Icons.Default.History, contentDescription = "Catch-up", tint = if (onSolid) Color.White else NuvioTheme.colors.TextSecondary, modifier = Modifier.size(13.dp))
+                                Icon(androidx.compose.material.icons.Icons.Default.History, contentDescription = "Catch-up", tint = if (onSolid) Color.White else NuvioTheme.colors.TextSecondary, modifier = Modifier.size(odp(13f)))
                             }
-                            if (ch.key in favorites) LiveText("  ★", color = if (onSolid) Color.White else NuvioTheme.colors.Rating, size = 12.sp)
+                            if (ch.key in favorites) LiveText("  ★", color = if (onSolid) Color.White else NuvioTheme.colors.Rating, size = osp(12f))
                         }
                         LiveText(
                             p?.title ?: "No program information",
@@ -460,7 +500,7 @@ private fun ChannelsPanel(
                                 p == null -> if (onSolid) Color.White.copy(alpha = 0.8f) else NuvioTheme.colors.TextTertiary
                                 else -> accent
                             },
-                            size = 13.sp,
+                            size = osp(13f),
                             marquee = isFocused && i == restingIndex
                         )
                         if (p != null) {
@@ -474,7 +514,7 @@ private fun ChannelsPanel(
                         }
                     }
                     if (ch.key == playingKey) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = "Playing", tint = accent, modifier = Modifier.size(20.dp))
+                        Icon(Icons.Default.PlayArrow, contentDescription = "Playing", tint = accent, modifier = Modifier.size(odp(20f)))
                     }
                 }
             }
@@ -494,7 +534,7 @@ private fun GroupsPanel(groups: List<ChannelGroup>, index: Int, showCounts: Bool
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(44.dp)
+                        .height(orow(44f))
                         .padding(horizontal = 12.dp, vertical = 2.dp)
                         .clip(shape)
                         .background(colors.background)
@@ -502,8 +542,8 @@ private fun GroupsPanel(groups: List<ChannelGroup>, index: Int, showCounts: Bool
                         .padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    LiveText(g.title, color = colors.text, size = 16.sp, modifier = Modifier.weight(1f), marquee = i == index)
-                    if (showCounts) LiveText(g.count.toString(), color = NuvioTheme.colors.TextSecondary, size = 12.sp)
+                    LiveText(g.title, color = colors.text, size = osp(16f), modifier = Modifier.weight(1f), marquee = i == index)
+                    if (showCounts) LiveText(g.count.toString(), color = NuvioTheme.colors.TextSecondary, size = osp(12f))
                 }
             }
         }
@@ -522,8 +562,8 @@ private fun SchedulePreview(channel: LiveChannel, list: List<EpgProgram>, now: L
                 ChannelLogo(channel.logo, 26.dp)
                 Spacer(Modifier.width(10.dp))
                 Column {
-                    LiveText(channel.name, size = 15.sp, weight = FontWeight.SemiBold)
-                    LiveText(channel.group, color = NuvioTheme.colors.TextSecondary, size = 12.sp)
+                    LiveText(channel.name, size = osp(15f), weight = FontWeight.SemiBold)
+                    LiveText(channel.group, color = NuvioTheme.colors.TextSecondary, size = osp(12f))
                 }
             }
         }
@@ -538,9 +578,9 @@ private fun SchedulePreview(channel: LiveChannel, list: List<EpgProgram>, now: L
                 p.stopMs <= now -> NuvioTheme.colors.TextSecondary
                 else -> NuvioTheme.colors.TextPrimary
             }
-            Row(modifier = Modifier.fillMaxWidth().height(36.dp).padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                LiveText(formatClock(p.startMs, use24h), color = color, size = 14.sp, modifier = Modifier.width(80.dp))
-                LiveText(p.title, color = color, size = 14.sp, modifier = Modifier.weight(1f))
+            Row(modifier = Modifier.fillMaxWidth().height(orow(36f)).padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                LiveText(formatClock(p.startMs, use24h), color = color, size = osp(14f), modifier = Modifier.width(80.dp))
+                LiveText(p.title, color = color, size = osp(14f), modifier = Modifier.weight(1f))
             }
         }
     }
@@ -564,8 +604,8 @@ private fun SchedulePanel(
                 ChannelLogo(channel.logo, 28.dp)
                 Spacer(Modifier.width(10.dp))
                 Column {
-                    LiveText(channel.name, size = 16.sp, weight = FontWeight.SemiBold)
-                    LiveText(channel.group, color = NuvioTheme.colors.TextSecondary, size = 12.sp)
+                    LiveText(channel.name, size = osp(16f), weight = FontWeight.SemiBold)
+                    LiveText(channel.group, color = NuvioTheme.colors.TextSecondary, size = osp(12f))
                 }
             }
         }
@@ -578,7 +618,7 @@ private fun SchedulePanel(
                     is ScheduleRow.Day -> LiveText(
                         row.label,
                         color = NuvioTheme.colors.Secondary,
-                        size = 14.sp,
+                        size = osp(14f),
                         weight = FontWeight.SemiBold,
                         modifier = Modifier.padding(start = 18.dp, top = 12.dp, bottom = 4.dp)
                     )
@@ -596,7 +636,7 @@ private fun SchedulePanel(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(40.dp)
+                                .height(orow(40f))
                                 .padding(horizontal = 8.dp, vertical = 2.dp)
                                 .clip(shape)
                                 .background(colors.background)
@@ -604,14 +644,14 @@ private fun SchedulePanel(
                                 .padding(horizontal = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            LiveText(formatClock(p.startMs, use24h), color = colors.text, size = 14.sp, modifier = Modifier.width(80.dp))
-                            LiveText(p.title, color = colors.text, size = 14.sp, modifier = Modifier.weight(1f), marquee = isFocused)
+                            LiveText(formatClock(p.startMs, use24h), color = colors.text, size = osp(14f), modifier = Modifier.width(80.dp))
+                            LiveText(p.title, color = colors.text, size = osp(14f), modifier = Modifier.weight(1f), marquee = isFocused)
                             if (live && channel.key == playingKey) {
                                 val onSolid = isFocused && focused && LocalLiveSolidHighlight.current
                                 Icon(
                                     Icons.Default.PlayArrow, contentDescription = null,
                                     tint = if (onSolid) Color.White else NuvioTheme.colors.Secondary,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(odp(18f))
                                 )
                             }
                             if (live) {
@@ -622,7 +662,7 @@ private fun SchedulePanel(
                                         .border(1.dp, colors.text.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
                                         .padding(horizontal = 5.dp, vertical = 1.dp),
                                     color = colors.text,
-                                    size = 10.sp,
+                                    size = osp(10f),
                                     weight = FontWeight.Bold
                                 )
                             }
@@ -648,7 +688,7 @@ private fun DatesPanel(days: List<Long>, index: Int, focused: Boolean, today: Lo
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(64.dp)
+                        .height(orow(64f))
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                         .clip(shape)
                         .background(colors.background)
@@ -658,7 +698,7 @@ private fun DatesPanel(days: List<Long>, index: Int, focused: Boolean, today: Lo
                     LiveText(
                         fmt.format(Date(day)),
                         color = if (day == today && !(isSelected && focused)) NuvioTheme.colors.Secondary else colors.text,
-                        size = 13.sp,
+                        size = osp(13f),
                         maxLines = 2,
                         align = androidx.compose.ui.text.style.TextAlign.Center
                     )

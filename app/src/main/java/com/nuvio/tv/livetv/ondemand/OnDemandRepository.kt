@@ -146,7 +146,10 @@ class OnDemandRepository @Inject constructor(
         }
         scope.launch {
             // Auto-play may pick your provider's copy only when that's on and its tab is first.
-            prefs.settings.collect { s -> OnDemandStreams.autoPlayAllowed = s.onDemandAutoPlay && s.onDemandStreamsPosition == "FIRST" }
+            prefs.settings.collect { s ->
+                OnDemandStreams.autoPlayAllowed = s.onDemandAutoPlay && s.onDemandStreamsPosition == "FIRST"
+                OnDemandStreams.tabPosition = s.onDemandStreamsPosition
+            }
         }
         scope.launch {
             // A failed check (database busy) keeps the current answer instead of hiding On Demand.

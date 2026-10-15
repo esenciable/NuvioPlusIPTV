@@ -50,6 +50,13 @@ object OnDemandStreams {
     @Volatile
     var autoPlayAllowed: Boolean = false
 
+    /** Where the On Demand tab goes ("FIRST", "AFTER_FIRST" or "LAST"), kept up to date from settings. */
+    @Volatile
+    var tabPosition: String = "LAST"
+
+    /** Puts the On Demand tab in its place, after Nuvio has ordered the addon tabs. */
+    fun placeTab(ordered: List<AddonStreams>, mine: AddonStreams): List<AddonStreams> = place(ordered, mine, tabPosition)
+
     /** Puts the On Demand group where it's set to go: first, after the first addon, or last. */
     private fun place(groups: List<AddonStreams>, mine: AddonStreams, position: String): List<AddonStreams> = when (position) {
         "FIRST" -> listOf(mine) + groups

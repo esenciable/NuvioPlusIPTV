@@ -14,6 +14,13 @@ object StreamAutoPlaySelector {
         preferredNames: Set<String> = emptySet()
     ): List<AddonStreams> {
         if (streams.isEmpty()) return streams
+        // Live TV fork: the On Demand tab goes where it's set in Live TV settings (first, after
+        // the first addon, or last), not wherever sorting by installed addons would put it.
+        val onDemand = streams.firstOrNull { it.addonName == com.nuvio.tv.livetv.ondemand.OnDemandStreams.GROUP_NAME }
+        if (onDemand != null) {
+            val rest = orderAddonStreams(streams.filter { it !== onDemand }, installedOrder, preferredNames)
+            return com.nuvio.tv.livetv.ondemand.OnDemandStreams.placeTab(rest, onDemand)
+        }
         if (preferredNames.isNotEmpty()) {
             val (preferred, rest) = streams.partition { it.addonName in preferredNames }
             return preferred + orderAddonStreams(rest, installedOrder)

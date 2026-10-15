@@ -46,6 +46,17 @@ object OnDemandStreams {
     @Volatile
     var offeredInStreams: Boolean = false
 
+    /** Auto-play may pick your provider's copy (set on, and its tab is first). */
+    @Volatile
+    var autoPlayAllowed: Boolean = false
+
+    /** Puts the On Demand group where it's set to go: first, after the first addon, or last. */
+    private fun place(groups: List<AddonStreams>, mine: AddonStreams, position: String): List<AddonStreams> = when (position) {
+        "FIRST" -> listOf(mine) + groups
+        "AFTER_FIRST" -> groups.take(1) + mine + groups.drop(1)
+        else -> groups + mine
+    }
+
     fun withOnDemand(
         context: Context,
         source: Flow<NetworkResult<List<AddonStreams>>>,
@@ -59,16 +70,18 @@ object OnDemandStreams {
         val entry = runCatching {
             EntryPointAccessors.fromApplication(context.applicationContext, OnDemandEntryPoint::class.java)
         }.getOrNull() ?: return source
+        // Your provider's copies, and where they go in the list (their tab, left to right): set
+        // in Live TV settings, last by default.
         val onDemand = flow {
-            emit(emptyList<Stream>())
+            emit(emptyList<Stream>() to "LAST")
+            val position = runCatching { entry.liveTvPreferences().settings.first().onDemandStreamsPosition }.getOrDefault("LAST")
             val found = runCatching { lookup(entry, type, videoId, season, episode, title, year) }.getOrDefault(emptyList())
-            if (found.isNotEmpty()) emit(found)
+            if (found.isNotEmpty()) emit(found to position)
         }
-        // Added at the end, after your addon and debrid streams; auto-play never picks it.
-        return combine(source, onDemand) { result, extra ->
+        return combine(source, onDemand) { result, (extra, position) ->
             when {
                 extra.isEmpty() -> result
-                result is NetworkResult.Success -> NetworkResult.Success(result.data + AddonStreams(GROUP_NAME, null, extra))
+                result is NetworkResult.Success -> NetworkResult.Success(place(result.data, AddonStreams(GROUP_NAME, null, extra), position))
                 // No addon found anything (or they failed): your provider's copy is still offered,
                 // instead of "playback unavailable".
                 result is NetworkResult.Error -> NetworkResult.Success(listOf(AddonStreams(GROUP_NAME, null, extra)))

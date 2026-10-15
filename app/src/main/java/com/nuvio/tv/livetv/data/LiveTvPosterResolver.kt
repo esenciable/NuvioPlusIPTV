@@ -295,6 +295,16 @@ class LiveTvPosterResolver @Inject constructor(
             }
             if (poster != null) break
         }
+        // None of your addons' catalogs has it (shows like "SportsCenter" often aren't in them):
+        // TMDB's own entry with exactly that name, if there is one.
+        if (poster == null) {
+            for ((q, isShowName) in attempts) {
+                poster = runCatching { tmdbPoster(q, hint, if (isShowName) null else clues.year) }
+                    .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+                    .getOrNull()
+                if (poster != null) break
+            }
+        }
         // Only remember "no poster" when the catalogs actually answered. If addons hadn't
         // loaded yet or the network failed, try again next time instead of showing a logo forever.
         if (poster != null || attempt.reached) {
@@ -589,6 +599,51 @@ class LiveTvPosterResolver @Inject constructor(
         return best
     }
 
+    /**
+     * The poster of the TMDB show or movie named exactly [query], for titles none of your addons
+     * know. The kind the guide suggests comes first, then the best known (most votes). A movie
+     * must be within a year of the guide's year, when it gives one (a show's year in the guide
+     * is the episode's, so it doesn't count for shows).
+     */
+    private suspend fun tmdbPoster(query: String, hint: TypeHint?, year: Int?): String? {
+        val key = com.nuvio.tv.BuildConfig.TMDB_API_KEY
+        if (key.isBlank()) return null
+        val wanted = normalize(query)
+        if (wanted.length < 2) return null
+        return withContext(kotlinx.coroutines.Dispatchers.IO) {
+            data class Found(val poster: String, val series: Boolean, val votes: Int)
+            val found = ArrayList<Found>()
+            for ((path, nameKey, dateKey) in listOf(
+                Triple("tv", "name", "first_air_date"),
+                Triple("movie", "title", "release_date")
+            )) {
+                val url = java.net.URL(
+                    "https://api.themoviedb.org/3/search/$path?api_key=$key&query=" + java.net.URLEncoder.encode(query, "UTF-8")
+                )
+                val c = (url.openConnection() as java.net.HttpURLConnection).apply { connectTimeout = 6_000; readTimeout = 6_000 }
+                val body = runCatching { c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) } }.getOrNull() ?: continue
+                val results = org.json.JSONObject(body).optJSONArray("results") ?: continue
+                for (i in 0 until results.length()) {
+                    val r = results.optJSONObject(i) ?: continue
+                    if (normalize(r.optString(nameKey)) != wanted) continue
+                    val posterPath = r.optString("poster_path").takeIf { it.startsWith("/") } ?: continue
+                    val series = path == "tv"
+                    if (!series && year != null) {
+                        val y = r.optString(dateKey).take(4).toIntOrNull()
+                        if (y != null && kotlin.math.abs(y - year) > 1) continue
+                    }
+                    found += Found("https://image.tmdb.org/t/p/w342$posterPath", series, r.optInt("vote_count", 0))
+                }
+            }
+            val wantSeries = hint?.kind?.let { it == Kind.SERIES }
+            // A firm hint (an episode number, or "Movie") allows only that kind.
+            val pool = if (wantSeries != null && hint?.strong == true) found.filter { it.series == wantSeries } else found
+            pool.maxWithOrNull(
+                compareBy<Found>({ if (wantSeries != null && it.series == wantSeries) 1 else 0 }, { it.votes })
+            )?.poster
+        }
+    }
+
     /** How much TMDB's favourite counts for a candidate: same kind and (about) the same year. */
     private fun tmdbBonus(hit: Hit, fav: TmdbFavourite): Double {
         if (hit.type != fav.type) return 0.0
@@ -670,6 +725,65 @@ class LiveTvPosterResolver @Inject constructor(
          * series episode, over 80 minutes usually a movie) and the channel's group are weak ones.
          */
         private val TWENTY_FOUR_SEVEN = Regex("""(?i)\b24\s*[/\\|\-x]?\s*7\b""")
+
+        /** Sports networks and leagues, by a channel's or group's name. */
+        private val SPORTS_NAME = Regex(
+            """(?i)\b(sports?|espn\w*|dazn|bein|eurosport\w*|supersport\w*|sportsnet\w*|tsn\d*|redzone|ppv|nfl|nba|wnba|mlb|nhl|mls|ufc|wwe|aew|pga|lpga|nascar|indycar|motogp|f1|formula\s*1|premier\s*league|la\s*liga|serie\s*a|bundesliga|ligue\s*1|champions\s*league|golf|tennis|cricket|rugby|darts|snooker|boxing|wrestling|racing|motorsports?|acc\s*network|sec\s*network|big\s*ten|pac-?12|fanduel|tvg|willow|arena\s*sport|setanta)\b"""
+        )
+
+        /** A category naming a sport ("Football", "Basketball"…) or a sports event. */
+        private val SPORT_CATEGORY = Regex(
+            """(?i)\b(sports?\s*event|football|soccer|basketball|baseball|hockey|boxing|mma|wrestling|golf|tennis|racing|motorsports?|cricket|rugby|athletics|cycling|volleyball|darts|snooker)\b"""
+        )
+
+        /** Categories that mean a regular programme, even on a sports channel. */
+        private val SHOW_CATEGORY = Regex(
+            """(?i)(non-?event|documentar|docuseries|series|movie|film|talk|magazine|interview|biograph|reality|comedy|drama)"""
+        )
+
+        /** "Lakers vs Celtics", "Arsenal v Chelsea", "Bears @ Packers". */
+        private val VERSUS = Regex("""(?i)\S\s+(vs\.?|v\.?|@)\s+\S""")
+        /** "Bears at Packers" (only counted on sports channels: "Night at the Museum"). */
+        private val AT_GAME = Regex("""\S\s+at\s+\S""")
+
+        /** Words in event titles: leagues, sports, and game-day words ("Live", "Highlights"…). */
+        private val EVENT_WORDS = Regex(
+            """(?i)\b(live|highlights|pre-?game|post-?game|pre-?match|post-?match|countdown|kick-?off|half-?time|game\s*\d+|week\s*\d+|round\s*\d+|qualifying|practice|grand\s*prix|open|championships?|cup|tournament|playoffs?|finals?|semi-?finals?|quarter-?finals?|match|nfl|nba|wnba|mlb|nhl|mls|ncaa|ufc|wwe|aew|pga|lpga|nascar|indycar|motogp|f1|formula\s*1|atp|wta|premier\s*league|la\s*liga|serie\s*a|bundesliga|ligue\s*1|champions\s*league|europa\s*league|super\s*bowl|world\s*series|olympics?|college\s*(football|basketball|baseball|hockey)|football|basketball|baseball|hockey|soccer|boxing|wrestling|racing|golf|tennis|cricket|rugby|darts|snooker)\b"""
+        )
+
+        /**
+         * Show the channel's logo instead of looking up a poster: a game or other sports event
+         * ("Lakers at Celtics", "NFL Live", "UFC 300 Prelims"), or a sports channel with no real
+         * listing. Looking those titles up found random films and shows with similar names.
+         * Regular programmes on sports channels (documentaries like "SABAN - The Process",
+         * talk shows) still get their posters.
+         */
+        fun isSports(channel: LiveChannel?, program: EpgProgram? = null): Boolean {
+            val sportsChannel = channel != null && (SPORTS_NAME.containsMatchIn(channel.name) ||
+                SPORTS_NAME.containsMatchIn(channel.group) || SPORTS_NAME.containsMatchIn(channel.tvgName.orEmpty()))
+            val title = program?.title?.takeIf { it.isNotBlank() }
+            // A sports channel showing nothing in particular: its logo.
+            if (title == null || LiveTvRepository.isPlaceholderTitle(title) ||
+                (channel != null && isChannelFiller(channel, program))
+            ) return sportsChannel
+            return isSportsTitle(title, program?.category, sportsChannel)
+        }
+
+        /** The same check from a title, its category and whether the channel is a sports one. */
+        fun isSportsTitle(title: String, category: String?, sportsChannel: Boolean): Boolean {
+            val cat = category.orEmpty()
+            if (cat.isNotBlank() && SHOW_CATEGORY.containsMatchIn(cat)) return false // a documentary, a series…
+            if (VERSUS.containsMatchIn(title)) return true
+            if (cat.isNotBlank() && SPORT_CATEGORY.containsMatchIn(cat)) return true
+            val sportsContext = sportsChannel || cat.contains("sport", ignoreCase = true)
+            if (sportsContext && AT_GAME.containsMatchIn(title)) return true
+            if (sportsContext && EVENT_WORDS.containsMatchIn(title)) return true
+            return false
+        }
+
+        /** For recordings (they keep the channel's name and the show's title). */
+        fun isSportsRecording(channelName: String?, title: String): Boolean =
+            isSportsTitle(title, null, channelName != null && SPORTS_NAME.containsMatchIn(channelName))
 
         /** A 24/7 channel (by its name or its group). */
         fun is247(channel: LiveChannel): Boolean =

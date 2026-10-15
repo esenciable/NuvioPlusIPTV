@@ -95,7 +95,12 @@ object CatchupUrlBuilder {
      * panels differ: TS instead of HLS, the older timeshift.php form, the link in this device's
      * time instead of the server's (or the other way round), and with/without "/live".
      */
-    fun alternatives(url: String, serverTimezone: String?): List<String> {
+    fun alternatives(
+        url: String,
+        serverTimezone: String?,
+        /** The show's own length in minutes: some panels refuse a window longer than that. */
+        showMinutes: Long? = null
+    ): List<String> {
         val path = url.substringBefore('?')
         val query = url.substring(path.length)
         val m = Regex("""^(https?://[^/]+)/timeshift/([^/]+)/([^/]+)/(\d+)/([0-9-]+:[0-9-]+)/(\d+)(\.[a-z0-9]+)?$""", RegexOption.IGNORE_CASE)
@@ -104,6 +109,14 @@ object CatchupUrlBuilder {
         val ext = m.groupValues[7]
         val out = LinkedHashSet<String>()
         if (ext.equals(".m3u8", true)) out += "$host/timeshift/$user/$pass/$minutes/$stamp/$id.ts$query"
+        // TS answered with something that isn't video: many panels only replay as HLS.
+        else out += "$host/timeshift/$user/$pass/$minutes/$stamp/$id.m3u8$query"
+        // Just the show, without the extra time after it (in both forms).
+        val short = showMinutes?.coerceAtLeast(1)?.takeIf { it < (minutes.toLongOrNull() ?: 0) }
+        if (short != null) {
+            out += "$host/timeshift/$user/$pass/$short/$stamp/$id${ext.ifEmpty { ".ts" }}$query"
+            out += "$host/timeshift/$user/$pass/$short/$stamp/$id${if (ext.equals(".m3u8", true)) ".ts" else ".m3u8"}$query"
+        }
         // timeshift.php form (some panels only answer this).
         out += "$host/streaming/timeshift.php?username=$user&password=$pass&stream=$id&start=$stamp&duration=$minutes"
         // Same request with the time written in the other clock (server vs device).

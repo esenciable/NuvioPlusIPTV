@@ -33,7 +33,9 @@ data class LiveTvRecording(
     /** The folder it's in (absolute path). */
     val dir: String,
     /** Recorded by a series rule (its id): "keep the last N" applies. */
-    val seriesId: String? = null
+    val seriesId: String? = null,
+    /** Downloaded from the provider's catch-up (rather than recorded as it aired). */
+    val fromCatchup: Boolean = false
 ) {
     val isRecording: Boolean get() = status == RecordingStatus.RECORDING
 
@@ -47,6 +49,7 @@ data class LiveTvRecording(
         put("durationSec", durationSec); put("sizeBytes", sizeBytes)
         put("problem", problem ?: "")
         put("seriesId", seriesId ?: "")
+        put("fromCatchup", fromCatchup)
     }
 
     companion object {
@@ -69,7 +72,8 @@ data class LiveTvRecording(
                 sizeBytes = o.optLong("sizeBytes"),
                 problem = o.optString("problem").ifBlank { null },
                 dir = dir,
-                seriesId = o.optString("seriesId").ifBlank { null }
+                seriesId = o.optString("seriesId").ifBlank { null },
+                fromCatchup = o.optBoolean("fromCatchup", false)
             )
         }.getOrNull()
     }

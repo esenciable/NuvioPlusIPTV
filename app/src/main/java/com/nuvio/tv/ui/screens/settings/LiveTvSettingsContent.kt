@@ -44,6 +44,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -79,6 +85,21 @@ fun LiveTvSettingsScreen(
     }
 }
 
+private val CLOCK_MODES = listOf(
+    "always" to "Always",
+    "panel" to "With player controls",
+    "never" to "Never"
+)
+private val CLOCK_POSITIONS = listOf(
+    "top_left" to "Top left",
+    "top_right" to "Top right",
+    "bottom_left" to "Bottom left",
+    "bottom_right" to "Bottom right"
+)
+private fun padLabel(minutes: Int): String = if (minutes <= 0) "Off" else "$minutes min"
+
+private val CLOCK_SIZES = listOf("small" to "Small", "medium" to "Medium", "large" to "Large")
+
 private sealed interface LiveDialog {
     data object AddM3u : LiveDialog
     data object AddXtream : LiveDialog
@@ -90,6 +111,13 @@ private sealed interface LiveDialog {
     data object HiddenChannels : LiveDialog
     data object HiddenGroups : LiveDialog
     data object EpgShift : LiveDialog
+    data object CatchupShift : LiveDialog
+    data object ClockMode : LiveDialog
+    data object RecordPre : LiveDialog
+    data object RecordPost : LiveDialog
+    data object ClockPosition : LiveDialog
+    data object ClockSize : LiveDialog
+    data object ClockOpacity : LiveDialog
     data object ZapModeChoice : LiveDialog
     data object BannerTime : LiveDialog
     data object PlaylistRefresh : LiveDialog
@@ -170,6 +198,7 @@ fun LiveTvSettingsContent(
     val s by viewModel.settings.collectAsStateWithLifecycle()
     val user by viewModel.userState.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     var dialog by remember { mutableStateOf<LiveDialog?>(null) }
     val drive by viewModel.driveSync.state.collectAsStateWithLifecycle()
     val developerToolsOn by com.nuvio.tv.livetv.model.DeveloperTools.enabled.collectAsStateWithLifecycle()
@@ -243,15 +272,23 @@ fun LiveTvSettingsContent(
                     SubHeading("Playlists")
                     if (status.loading) LoadingLine(status.message ?: "Updating…")
                     playlists.forEach { pl ->
+                        val account = accounts[pl.id]
+                        val expiring = pl.enabled && account?.expiringSoon() == true
                         SettingsActionRow(
                             title = pl.name + if (pl.isXtream) " (Xtream)" else "",
                             subtitle = when {
                                 pl.isXtream && pl.enabled && !pl.importLive && pl.importVod -> "Movies & series only (TV channels off)"
                                 pl.isXtream && pl.enabled && !pl.importLive && !pl.importVod -> "Nothing included: turn on TV channels or movies & series under Edit"
                                 else -> sourceStatus(pl.enabled, pl.lastUpdatedMs, pl.lastError, "${pl.channelCount} channels") +
-                                    if (pl.isXtream && pl.importVod && pl.enabled) " · + movies & series" else ""
+                                    (if (pl.isXtream && pl.importVod && pl.enabled) " · + movies & series" else "")
+                            } + (account?.expiryLabel()?.let { " · Expires $it" } ?: ""),
+                            value = when {
+                                !pl.enabled -> "Off"
+                                expiring && (account?.expiresAtMs ?: 0L) <= System.currentTimeMillis() -> "Expired"
+                                expiring -> "Expires soon"
+                                else -> "On"
                             },
-                            value = if (pl.enabled) "On" else "Off",
+                            valueColor = if (expiring) NuvioTheme.colors.Error else NuvioTheme.colors.TextSecondary,
                             leadingIcon = Icons.Default.LiveTv,
                             onClick = { dialog = LiveDialog.PlaylistActions(pl) }
                         )
@@ -486,12 +523,6 @@ fun LiveTvSettingsContent(
                         s.onDemandInSidebar,
                         { update { it.copy(onDemandInSidebar = !it.onDemandInSidebar) } }
                     )
-                    SettingsToggleRow(
-                        "On Demand in Nuvio's Stream List",
-                        "Adds your provider's copy to the end of the stream list for movies and episodes. Auto-play never picks it.",
-                        s.onDemandInStreams,
-                        { update { it.copy(onDemandInStreams = !it.onDemandInStreams) } }
-                    )
                     SubHeading("Browsing")
                     var pickingSort by remember { mutableStateOf(false) }
                     val defaultSort = com.nuvio.tv.livetv.ondemand.VodSort.parse(s.vodDefaultSort)?.first
@@ -623,6 +654,12 @@ fun LiveTvSettingsContent(
                         { update { it.copy(showProgramTimes = !it.showProgramTimes) } }
                     )
                     SettingsToggleRow(
+                        "Show Episode Numbers",
+                        "Episode numbers like \"S2 E5\" after show titles, in the guide, show info and the player",
+                        s.showEpisodeNumbers,
+                        { update { it.copy(showEpisodeNumbers = !it.showEpisodeNumbers) } }
+                    )
+                    SettingsToggleRow(
                         "Striped Bars When There's No Guide",
                         "Channels with no show listings get striped bars. Turn off to show the channel name in a plain bar instead.",
                         s.stripeMissingGuide,
@@ -721,6 +758,39 @@ fun LiveTvSettingsContent(
                         value = "${s.infoBannerSeconds} seconds",
                         onClick = { dialog = LiveDialog.BannerTime }
                     )
+                    SubHeading("On-Screen Clock")
+                    SettingsActionRow(
+                        title = "Show Clock",
+                        subtitle = "A clock in the corner while you watch. With player controls: only on the info panel.",
+                        value = CLOCK_MODES.firstOrNull { it.first == s.clockMode }?.second ?: "With player controls",
+                        onClick = { dialog = LiveDialog.ClockMode }
+                    )
+                    if (s.clockMode == "always") {
+                        SettingsActionRow(
+                            title = "Clock Position",
+                            subtitle = "Which corner of the screen",
+                            value = CLOCK_POSITIONS.firstOrNull { it.first == s.clockPosition }?.second ?: "Top right",
+                            onClick = { dialog = LiveDialog.ClockPosition }
+                        )
+                        SettingsActionRow(
+                            title = "Clock Size",
+                            subtitle = "How big the time is",
+                            value = CLOCK_SIZES.firstOrNull { it.first == s.clockSize }?.second ?: "Medium",
+                            onClick = { dialog = LiveDialog.ClockSize }
+                        )
+                        SettingsActionRow(
+                            title = "Clock Opacity",
+                            subtitle = "Lower is more see-through, so it doesn't distract",
+                            value = "${s.clockOpacity}%",
+                            onClick = { dialog = LiveDialog.ClockOpacity }
+                        )
+                        SettingsToggleRow(
+                            "Clock Background",
+                            "A soft dark box behind the time, so it's easy to read on bright pictures",
+                            s.clockBackground,
+                            { update { it.copy(clockBackground = !it.clockBackground) } }
+                        )
+                    }
                     SubHeading("Picture & Sound")
                     SettingsToggleRow(
                         "Captions On by Default",
@@ -774,6 +844,12 @@ fun LiveTvSettingsContent(
                         "Asks Xtream providers for replays in HLS (m3u8) first, so the seek bar works. Falls back to TS if the provider doesn't offer it.",
                         s.catchupPreferHls,
                         { update { it.copy(catchupPreferHls = !it.catchupPreferHls) } }
+                    )
+                    SettingsActionRow(
+                        title = "Catch-Up Time Shift",
+                        subtitle = "If replays start the show before (or after) the one you picked, move the time asked for by that much. Example: it plays the show an hour earlier, set +1 h.",
+                        value = offsetLabel(s.catchupShiftMinutes),
+                        onClick = { dialog = LiveDialog.CatchupShift }
                     )
                     SubHeading("Connection")
                     SettingsActionRow(
@@ -838,7 +914,7 @@ fun LiveTvSettingsContent(
             item(key = "nuvio") {
                 LiveSection(
                     title = "Home Screen & Nuvio",
-                    summary = "The Live TV row, menu and search",
+                    summary = "The Live TV row and the menu",
                     icon = Icons.Default.Home,
                     open = "nuvio" in open,
                     onToggle = { toggle("nuvio") }
@@ -924,12 +1000,36 @@ fun LiveTvSettingsContent(
                             { update { it.copy(homeRowCompact = !it.homeRowCompact) } }
                         )
                     }
-                    SubHeading("Menu & Search")
+                    SubHeading("Menu")
                     SettingsToggleRow(
                         "Show Live TV in the Side Menu",
                         "Off: Live TV leaves Nuvio's main menu. You can still reach it from Settings.",
                         s.showInSidebar,
                         { update { it.copy(showInSidebar = !it.showInSidebar) } }
+                    )
+                }
+            }
+
+            // ------------------------------------------------------------ Search & Streams
+            item(key = "search_streams") {
+                var pickingStreamsPosition by remember { mutableStateOf(false) }
+                LiveSection(
+                    title = "Search & Streams",
+                    summary = "Search order · On Demand in streams",
+                    icon = Icons.Default.Search,
+                    open = "search_streams" in open,
+                    onToggle = { toggle("search_streams") }
+                ) {
+                    SubHeading("Search Results Order")
+                    SearchOrderList(
+                        order = com.nuvio.tv.livetv.ui.parseSearchOrder(s.searchOrder),
+                        onChange = { newOrder -> update { it.copy(searchOrder = newOrder.joinToString(",")) } }
+                    )
+                    SettingsToggleRow(
+                        "Preview Channels Behind Search",
+                        "OK on a channel plays it behind the search results, to check it loads and how it looks. OK again opens it full screen.",
+                        s.searchPreview,
+                        { update { it.copy(searchPreview = !it.searchPreview) } }
                     )
                     // Search from Home and the side menu always shows everything; these set what
                     // search shows when it's opened from the guide or from On Demand.
@@ -970,6 +1070,32 @@ fun LiveTvSettingsContent(
                         "Your provider's own movies and series",
                         s.onDemandSearchOnDemand,
                         { update { it.copy(onDemandSearchOnDemand = !it.onDemandSearchOnDemand) } }
+                    )
+                    SubHeading("Streams List")
+                    SettingsToggleRow(
+                        "On Demand in Streams",
+                        "Your provider's copy offered with your addon streams for movies and episodes",
+                        s.onDemandInStreams,
+                        { update { it.copy(onDemandInStreams = !it.onDemandInStreams) } }
+                    )
+                    SettingsActionRow(
+                        title = "On Demand Tab Position",
+                        subtitle = "Where its tab goes in the stream list, left to right after All",
+                        value = streamsPositionLabel(s.onDemandStreamsPosition),
+                        onClick = { pickingStreamsPosition = true }
+                    )
+                    SettingsToggleRow(
+                        "Let Auto-Play Pick On Demand",
+                        "Only when its tab is first (and auto-play is set to use all sources)",
+                        s.onDemandAutoPlay,
+                        { update { it.copy(onDemandAutoPlay = !it.onDemandAutoPlay) } }
+                    )
+                    if (pickingStreamsPosition) SettingsSingleChoiceDialog(
+                        title = "On Demand tab position",
+                        options = listOf("FIRST", "AFTER_FIRST", "LAST").map { SettingsPickerOption(it, streamsPositionLabel(it)) },
+                        selectedValue = s.onDemandStreamsPosition,
+                        onOptionSelected = { v -> update { it.copy(onDemandStreamsPosition = v) }; pickingStreamsPosition = false },
+                        onDismiss = { pickingStreamsPosition = false }
                     )
                 }
             }
@@ -1058,6 +1184,18 @@ fun LiveTvSettingsContent(
                         else "Where new recordings go. Ones already recorded stay where they are.",
                         value = chosen?.label ?: "This Device",
                         onClick = { pickingDrive = true }
+                    )
+                    SettingsActionRow(
+                        title = "Start Recording Early",
+                        subtitle = "Starts this long before the show, in case it begins early. Shows already set keep their times.",
+                        value = padLabel(s.recordPreMinutes),
+                        onClick = { dialog = LiveDialog.RecordPre }
+                    )
+                    SettingsActionRow(
+                        title = "Keep Recording After",
+                        subtitle = "Keeps going this long after the show, in case it runs over. Shows already set keep their times.",
+                        value = padLabel(s.recordPostMinutes),
+                        onClick = { dialog = LiveDialog.RecordPost }
                     )
                     SettingsActionRow(
                         title = "When Storage Runs Low",
@@ -1188,7 +1326,16 @@ fun LiveTvSettingsContent(
         )
         is LiveDialog.PlaylistActions -> ActionListDialog(
             title = d.source.name,
-            actions = listOf(
+            actions = listOfNotNull(
+                // The account, as the provider last reported it (nothing to do: shows the details).
+                accounts[d.source.id]?.let { a ->
+                    val parts = listOfNotNull(
+                        a.status.takeIf { it.isNotBlank() },
+                        a.expiryLabel()?.let { "Expires $it" } ?: "No expiry date",
+                        a.maxConnections.takeIf { it > 0 }?.let { "${a.activeConnections} of $it connections in use" }
+                    )
+                    ("Account: " + parts.joinToString(" · ")) to { viewModel.updatePlaylistNow(d.source); close() }
+                },
                 "Edit" to { dialog = LiveDialog.EditPlaylist(d.source) },
                 "Update now" to { viewModel.updatePlaylistNow(d.source); close() },
                 (if (d.source.enabled) "Disable" else "Enable") to { viewModel.setPlaylistEnabled(d.source.id, !d.source.enabled); close() },
@@ -1426,6 +1573,55 @@ fun LiveTvSettingsContent(
             options = EPG_OFFSETS.map { SettingsPickerOption(it, offsetLabel(it)) },
             selectedValue = s.epgOffsetMinutes,
             onOptionSelected = { v -> update { it.copy(epgOffsetMinutes = v) }; close() },
+            onDismiss = close
+        )
+        LiveDialog.RecordPre -> SettingsSingleChoiceDialog(
+            title = "Start recording early",
+            options = listOf(0, 1, 2, 5, 10, 15).map { SettingsPickerOption(it, padLabel(it)) },
+            selectedValue = s.recordPreMinutes,
+            onOptionSelected = { v -> update { it.copy(recordPreMinutes = v) }; close() },
+            onDismiss = close
+        )
+        LiveDialog.RecordPost -> SettingsSingleChoiceDialog(
+            title = "Keep recording after",
+            options = listOf(0, 2, 5, 10, 15, 30).map { SettingsPickerOption(it, padLabel(it)) },
+            selectedValue = s.recordPostMinutes,
+            onOptionSelected = { v -> update { it.copy(recordPostMinutes = v) }; close() },
+            onDismiss = close
+        )
+        LiveDialog.ClockMode -> SettingsSingleChoiceDialog(
+            title = "Show clock",
+            options = CLOCK_MODES.map { SettingsPickerOption(it.first, it.second) },
+            selectedValue = s.clockMode,
+            onOptionSelected = { v -> update { it.copy(clockMode = v) }; close() },
+            onDismiss = close
+        )
+        LiveDialog.ClockPosition -> SettingsSingleChoiceDialog(
+            title = "Clock position",
+            options = CLOCK_POSITIONS.map { SettingsPickerOption(it.first, it.second) },
+            selectedValue = s.clockPosition,
+            onOptionSelected = { v -> update { it.copy(clockPosition = v) }; close() },
+            onDismiss = close
+        )
+        LiveDialog.ClockSize -> SettingsSingleChoiceDialog(
+            title = "Clock size",
+            options = CLOCK_SIZES.map { SettingsPickerOption(it.first, it.second) },
+            selectedValue = s.clockSize,
+            onOptionSelected = { v -> update { it.copy(clockSize = v) }; close() },
+            onDismiss = close
+        )
+        LiveDialog.ClockOpacity -> SettingsSingleChoiceDialog(
+            title = "Clock opacity",
+            options = listOf(30, 50, 70, 100).map { SettingsPickerOption(it, "$it%") },
+            selectedValue = s.clockOpacity,
+            onOptionSelected = { v -> update { it.copy(clockOpacity = v) }; close() },
+            onDismiss = close
+        )
+        LiveDialog.CatchupShift -> SettingsSingleChoiceDialog(
+            title = "Catch-up time shift",
+            options = EPG_OFFSETS.map { SettingsPickerOption(it, offsetLabel(it)) },
+            selectedValue = s.catchupShiftMinutes,
+            onOptionSelected = { v -> update { it.copy(catchupShiftMinutes = v) }; close() },
             onDismiss = close
         )
         LiveDialog.ZapModeChoice -> SettingsSingleChoiceDialog(
@@ -1883,3 +2079,54 @@ private fun SubHeading(text: String) {
         modifier = Modifier.padding(start = NuvioTheme.spacing.lg, top = NuvioTheme.spacing.sm, bottom = NuvioTheme.spacing.xxs)
     )
 }
+
+private fun streamsPositionLabel(v: String): String = when (v) {
+    "FIRST" -> "First"
+    "AFTER_FIRST" -> "After the first addon"
+    else -> "Last"
+}
+
+private fun searchSectionLabel(kind: String): String = when (kind) {
+    "live" -> "Live TV channels"
+    "ondemand" -> "On Demand (your provider)"
+    else -> "Nuvio catalogs (addons)"
+}
+
+/**
+ * The search sections in order. OK picks one up (it's marked), Up and Down move it, OK again
+ * puts it down: the same way Reorder groups works in the guide.
+ */
+@Composable
+private fun SearchOrderList(order: List<String>, onChange: (List<String>) -> Unit) {
+    var moving by remember { mutableStateOf<String?>(null) }
+    val requesters = remember { order.associateWith { FocusRequester() } }
+    order.forEachIndexed { i, kind -> androidx.compose.runtime.key(kind) {
+        val isMoving = moving == kind
+        SettingsActionRow(
+            title = "${i + 1}   ${searchSectionLabel(kind)}",
+            subtitle = if (isMoving) "Up / Down to move it, OK to put it here" else null,
+            value = if (isMoving) "Moving" else null,
+            onClick = { moving = if (isMoving) null else kind },
+            modifier = Modifier
+                .focusRequester(requesters.getValue(kind))
+                .onPreviewKeyEvent { e ->
+                    if (!isMoving || e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    val step = when (e.key) {
+                        Key.DirectionUp -> -1
+                        Key.DirectionDown -> 1
+                        else -> return@onPreviewKeyEvent false
+                    }
+                    val to = i + step
+                    if (to in order.indices) {
+                        onChange(order.toMutableList().apply { add(to, removeAt(i)) })
+                    }
+                    true // stays on the row being moved
+                }
+        )
+    } }
+    // The moved row keeps the highlight in its new place.
+    LaunchedEffect(order, moving) {
+        moving?.let { runCatching { requesters.getValue(it).requestFocus() } }
+    }
+}
+

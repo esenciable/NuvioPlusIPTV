@@ -167,7 +167,10 @@ fun OnDemandHomeScreen(
             rows.forEach { r ->
                 add(GridItem.SectionDivider(r.catalogName, r.catalogId, r.addonBaseUrl, r.addonId, r.apiType))
                 r.items.forEach { add(GridItem.Content(it, r.addonBaseUrl, r.catalogId, r.catalogName, r.addonId)) }
-                if (r.hasMore) add(GridItem.SeeAll(r.catalogId, r.addonId, r.addonBaseUrl, r.apiType))
+                // The Grid layout only shows two or three rows of each group and cuts the rest
+                // off; without a See all tile there (a group whose titles were all loaded already)
+                // the rest of the group couldn't be reached. Any group that may not fit gets one.
+                if (r.hasMore || r.items.size > 6) add(GridItem.SeeAll(r.catalogId, r.addonId, r.addonBaseUrl, r.apiType))
             }
         }
     }

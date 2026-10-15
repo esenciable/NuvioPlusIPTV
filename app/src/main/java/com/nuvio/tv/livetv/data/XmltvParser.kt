@@ -179,12 +179,35 @@ object XmltvParser {
             val season = parts.getOrNull(0)?.substringBefore('/')?.trim()?.toIntOrNull()
             val ep = parts.getOrNull(1)?.substringBefore('/')?.trim()?.toIntOrNull()
             return when {
+                // A year used as the season (news: "S2026 E609") isn't a real episode number.
+                season != null && season >= 100 -> null
                 season != null && ep != null -> "S${season + 1} E${ep + 1}"
                 ep != null -> "E${ep + 1}"
                 else -> null
             }
         }
-        return text
+        // Other numbering systems (dd_progid, thetvdb, imdb, crid…) are database ids, not
+        // something to show: only the on-screen form (or one without a system) is used.
+        if (system != null && system != "onscreen") return null
+        return cleanEpisode(text)
+    }
+
+    /**
+     * An episode label worth showing ("S2 E5", "Ep. 12", "1x05"), or null for the ids some
+     * guides put there instead: long strings of digits ("609178259") and year-based numbers
+     * ("S2026E609"), which filled the end of every listing with numbers.
+     */
+    fun cleanEpisode(raw: String?): String? {
+        val t = raw?.trim().orEmpty()
+        if (t.isEmpty() || t.length > 24) return null
+        val letters = t.count { it.isLetter() }
+        val digits = t.count { it.isDigit() }
+        if (digits == 0) return t // "Part One", "Finale"
+        if (letters == 0 && digits > 4) return null // a plain id
+        if (Regex("""\d{5,}""").containsMatchIn(t)) return null // ids with a prefix ("EP012345678")
+        // Season numbers that are years.
+        Regex("""(?i)\bS(?:eason)?\s*(\d+)""").find(t)?.groupValues?.get(1)?.toIntOrNull()?.let { if (it >= 100) return null }
+        return t
     }
 
     private fun readText(parser: XmlPullParser): String {

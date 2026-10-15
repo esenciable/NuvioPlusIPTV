@@ -40,6 +40,8 @@ data class LivePlaybackState(
     val reconnectAttempt: Int = 0,
     val videoWidth: Int = 0,
     val videoHeight: Int = 0,
+    /** The stream's pixel-shape flag (1 = square pixels). */
+    val pixelRatio: Float = 1f,
     /** Non-null while an archive (catch-up) program is playing instead of the live stream. */
     val catchupTitle: String? = null,
     /**
@@ -473,6 +475,8 @@ class LiveTvPlaybackController @Inject constructor(
 
     /** Other links to try, in turn, if the current one can't be played (catch-up variants). */
     private val fallbackUrls = ArrayDeque<String>()
+    /** The catch-up now playing has actually started (pictures moving), at least once. */
+    @Volatile private var archiveStarted = false
 
     fun play(
         channel: LiveChannel,
@@ -494,6 +498,7 @@ class LiveTvPlaybackController @Inject constructor(
             formatGuess = 0
         }
         fallbackUrls.clear()
+        archiveStarted = false
         fallback?.let { fallbackUrls += it }
         fallbacks.forEach { if (it !in fallbackUrls) fallbackUrls += it }
         if (catchupTitle != null) com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Catch-up \"$catchupTitle\" on ${channel.name}: ${redact(url)}")
@@ -672,13 +677,35 @@ class LiveTvPlaybackController @Inject constructor(
         lastPosition = pos
         if (moving) {
             lastProgressAt = now
+            if (_state.value.catchupTitle != null) archiveStarted = true
             return
         }
         if (now - lastProgressAt < STALL_MS || !autoReconnect) return
         lastProgressAt = now
+        val archive = _state.value.catchupTitle != null
+        // A catch-up that never started (stuck on "Loading…" with no error): some panels answer
+        // a form of catch-up link they don't really support with an empty stream instead of an
+        // error, so the other link forms were never tried. Move on to the next one; when none
+        // are left, say so instead of loading forever.
+        if (archive && !archiveStarted) {
+            val fb = fallbackUrls.removeFirstOrNull()
+            com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                "Catch-up didn't start on ${ch.name} (nothing came in)" + (fb?.let { "; trying ${redact(it)}" } ?: "")
+            )
+            p.stop()
+            if (fb != null) {
+                currentUrl = fb
+                archiveStartPending = true
+                p.setMediaSource(buildMediaSource(fb, ch.headers, isLive = false))
+                p.prepare()
+                p.playWhenReady = true
+            } else {
+                scheduleReconnect("Catch-up didn't start: the provider sent nothing for this show")
+            }
+            return
+        }
         Log.w(TAG, "Stream stalled on ${ch.name}; reloading")
         val url = currentUrl ?: ch.url
-        val archive = _state.value.catchupTitle != null
         val resumeAt = if (archive) pos else C_TIME_UNSET
         p.stop()
         archiveStartPending = false
@@ -1003,7 +1030,10 @@ class LiveTvPlaybackController @Inject constructor(
         }
 
         override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
-            _state.value = _state.value.copy(videoWidth = videoSize.width, videoHeight = videoSize.height)
+            _state.value = _state.value.copy(
+                videoWidth = videoSize.width, videoHeight = videoSize.height,
+                pixelRatio = videoSize.pixelWidthHeightRatio
+            )
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -1039,6 +1069,9 @@ class LiveTvPlaybackController @Inject constructor(
             if (ch != null && p != null && isUnrecognizedFormat(error) && formatGuess < FORMAT_GUESSES.size) {
                 forcedMime = FORMAT_GUESSES[formatGuess++]
                 Log.w(TAG, "Unrecognized stream format for ${ch.name}; trying $forcedMime")
+                if (_state.value.catchupTitle != null) com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                    "Catch-up failed (${error.errorCodeName}); trying the last link as ${forcedMime?.substringAfter('/')}"
+                )
                 val url = currentUrl ?: ch.url
                 p.setMediaSource(buildMediaSource(url, ch.headers, isLive = _state.value.catchupTitle == null))
                 p.prepare()
@@ -1050,6 +1083,9 @@ class LiveTvPlaybackController @Inject constructor(
                 p.prepare()
                 return
             }
+            if (_state.value.catchupTitle != null) com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                "Catch-up failed on ${ch?.name} (${error.errorCodeName}); no other links left to try"
+            )
             scheduleReconnect(describe(error))
         }
     }

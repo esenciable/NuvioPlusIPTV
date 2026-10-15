@@ -108,6 +108,17 @@ class LiveTvViewModel @Inject constructor(
     val userState: StateFlow<LiveUserState> = prefs.userState
         .stateIn(viewModelScope, SharingStarted.Eagerly, LiveUserState())
 
+    /** Picture shape per channel (see [com.nuvio.tv.livetv.player.PictureShape]). */
+    val pictureShapes: StateFlow<Map<String, String>> = prefs.pictureShapes
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    fun pictureShapeOf(channelKey: String?): com.nuvio.tv.livetv.player.PictureShape =
+        com.nuvio.tv.livetv.player.PictureShape.of(channelKey?.let { pictureShapes.value[it] })
+
+    fun setPictureShape(channelKey: String, shape: com.nuvio.tv.livetv.player.PictureShape) {
+        viewModelScope.launch { prefs.setPictureShape(channelKey, shape) }
+    }
+
     val status: StateFlow<LiveTvStatus> = repository.status
     val playbackState: StateFlow<LivePlaybackState> = playback.state
 
@@ -504,7 +515,9 @@ class LiveTvViewModel @Inject constructor(
         zone: String?
     ): Boolean {
         val now = System.currentTimeMillis()
-        val shift = settings.value.epgOffsetMinutes * 60_000L
+        // The guide's time shift is taken back off (the archive goes by the guide's own times),
+        // then the catch-up time shift added, for providers whose archive is on another clock.
+        val shift = settings.value.epgOffsetMinutes * 60_000L - settings.value.catchupShiftMinutes * 60_000L
         val start = program.startMs + offsetMs.coerceAtLeast(0)
         // Ask for more than the show itself: up to 3 hours past its end (but not past what has
         // aired). Shows that run over keep playing, and the next show follows on seamlessly.
@@ -516,7 +529,7 @@ class LiveTvViewModel @Inject constructor(
         ) ?: return false
         playback.play(
             channel, overrideUrl = url, catchupTitle = program.title,
-            fallbacks = CatchupUrlBuilder.alternatives(url, zone),
+            fallbacks = CatchupUrlBuilder.alternatives(url, zone, showMinutes = (program.stopMs - start) / 60_000),
             catchupStartMs = start
         )
         _catchup.value = CatchupSession(channel, program, offsetMs.coerceAtLeast(0))
@@ -842,6 +855,8 @@ class LiveTvViewModel @Inject constructor(
         /** The show on screen (fast lane); false for fetching ahead of time (slow lane). */
         urgent: Boolean = true
     ): String? = if (!settings.value.showPosters) null // "Show posters" off: logo only, no lookups
+    // Sports: the channel's logo (game titles found random films and shows).
+    else if (com.nuvio.tv.livetv.data.LiveTvPosterResolver.isSports(channel, program)) null
     else if (channel != null && com.nuvio.tv.livetv.data.LiveTvPosterResolver.isChannelFiller(channel, program)) {
         // A 24/7 channel whose "listing" is just the channel ("24/7 South Park" all day, or no
         // guide at all): the show's poster, by the channel's name.
@@ -922,6 +937,7 @@ class LiveTvViewModel @Inject constructor(
      */
     suspend fun channelPoster(channel: LiveChannel, program: EpgProgram? = null, urgent: Boolean = true): String? {
         if (!settings.value.showPosters) return null
+        if (com.nuvio.tv.livetv.data.LiveTvPosterResolver.isSports(channel, program)) return null
         if (!com.nuvio.tv.livetv.data.LiveTvPosterResolver.is247(channel)) return null
         // TMDB first (a show, a film series' collection cover, an actor's photo or a film);
         // your addons' catalogs if TMDB has nothing by that name.

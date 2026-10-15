@@ -64,7 +64,11 @@ class LiveTvSearchResults(
     val posterFor: suspend (LiveSearchHit) -> String?,
     internal val viewModel: LiveTvViewModel? = null,
     /** Playlist id -> name, shown on each card when you have more than one playlist. */
-    val playlistNames: Map<String, String> = emptyMap()
+    val playlistNames: Map<String, String> = emptyMap(),
+    /** The channel playing behind the search (picked once with OK), or null. */
+    val previewKey: String? = null,
+    /** Plays [LiveSearchHit] behind the search (TiviMate style); OK again on it goes full screen. */
+    val preview: (LiveSearchHit) -> Unit = {}
 )
 
 private const val MAX_HITS = 40
@@ -111,6 +115,8 @@ private fun rememberLiveTvSearchResultsEnabled(
     val now by viewModel.now.collectAsStateWithLifecycle()
     val playlistNames by viewModel.playlistNames.collectAsStateWithLifecycle()
     val q = query.trim()
+    // The channel playing behind the search, if one was picked.
+    var previewKey by remember { mutableStateOf<String?>(null) }
 
     // Search once typing pauses (not on every letter), and off the main thread, so typing
     // stays smooth on slower devices with big playlists.
@@ -156,134 +162,161 @@ private fun rememberLiveTvSearchResultsEnabled(
             onOpened()
         },
         posterFor = { hit ->
-            hit.program?.takeIf { !LiveTvRepository.isPlaceholderTitle(it.title) }
-                ?.takeIf { viewModel.settings.value.showPosters }
-                ?.let { viewModel.posterFor(it.title, it, hit.channel) ?: it.icon }
+            val p = hit.program?.takeIf { !LiveTvRepository.isPlaceholderTitle(it.title) }
+            when {
+                !viewModel.settings.value.showPosters -> null
+                // Sports: the channel's logo, never a guessed poster.
+                com.nuvio.tv.livetv.data.LiveTvPosterResolver.isSports(hit.channel, hit.program) -> null
+                p != null -> viewModel.posterFor(p.title, p, hit.channel) ?: p.icon
+                // A 24/7 channel (no listing, or only the channel's own name all day): the
+                // show's poster by the channel's name, as the guide shows it.
+                else -> viewModel.channelPoster(hit.channel, hit.program)
+            }
         },
         viewModel = viewModel,
-        playlistNames = playlistNames
+        playlistNames = playlistNames,
+        previewKey = previewKey,
+        preview = { hit ->
+            if (viewModel.settings.value.searchPreview) {
+                viewModel.preview(hit.channel)
+                previewKey = hit.channel.key
+            }
+        }
     )
 }
 
 /**
- * A search-results row in Nuvio's style: title, then a horizontal list of cards.
+ * The Live TV row in Nuvio's search, drawn like the addon rows around it.
  * [entryFocusRequester] goes on the first card so the search screen can move focus into the row;
- * [upFocusRequester] is where D-pad up goes from the row (the search field).
+ * [upFocusRequester] is where D-pad up goes from the row.
+ *
+ * OK on a channel plays it behind the search (TiviMate style), to see that it loads and how it
+ * looks; OK on the one playing opens it full screen. (With the preview off in settings, OK
+ * opens it full screen straight away, as before.)
  */
 @Composable
 fun LiveTvSearchRow(
     results: LiveTvSearchResults,
     modifier: Modifier = Modifier,
     entryFocusRequester: FocusRequester? = null,
-    upFocusRequester: FocusRequester? = null
+    upFocusRequester: FocusRequester? = null,
+    posterCardStyle: com.nuvio.tv.ui.components.PosterCardStyle = com.nuvio.tv.ui.components.PosterCardDefaults.Style
 ) {
     if (results.hits.isEmpty()) return
     var menuFor by remember { mutableStateOf<LiveChannel?>(null) }
     menuFor?.let { ch ->
         results.viewModel?.let { vm -> ChannelQuickMenu(ch, vm, onDismiss = { menuFor = null }) }
     }
-    Column(modifier = modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        LiveText(
-            "Live TV",
-            modifier = Modifier.padding(start = 52.dp, bottom = 10.dp),
-            size = 20.sp,
-            weight = FontWeight.SemiBold
-        )
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 52.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            itemsIndexed(results.hits, key = { _, h -> h.channel.key }) { index, hit ->
-                LiveSearchCard(
-                    hit = hit,
-                    playlistName = results.playlistNames[hit.channel.sourceId],
-                    use24h = results.use24h,
-                    posterFor = results.posterFor,
-                    modifier = Modifier
-                        .then(if (index == 0 && entryFocusRequester != null) Modifier.focusRequester(entryFocusRequester) else Modifier)
-                        .focusProperties { if (upFocusRequester != null) up = upFocusRequester },
-                    onClick = { results.open(hit) },
-                    onLongClick = { menuFor = hit.channel }
-                )
-            }
+    val previewOn = results.viewModel?.settings?.collectAsStateWithLifecycle()?.value?.searchPreview ?: false
+    SearchResultsRow(title = "Live TV", modifier = modifier) {
+        itemsIndexed(results.hits, key = { _, h -> h.channel.key }) { index, hit ->
+            LiveSearchCard(
+                hit = hit,
+                playlistName = results.playlistNames[hit.channel.sourceId],
+                posterFor = results.posterFor,
+                posterCardStyle = posterCardStyle,
+                playing = hit.channel.key == results.previewKey,
+                modifier = Modifier
+                    .then(if (index == 0 && entryFocusRequester != null) Modifier.focusRequester(entryFocusRequester) else Modifier)
+                    .focusProperties { if (upFocusRequester != null) up = upFocusRequester },
+                onClick = {
+                    if (previewOn && hit.channel.key != results.previewKey) results.preview(hit) else results.open(hit)
+                },
+                onLongClick = { menuFor = hit.channel }
+            )
         }
     }
 }
 
 /**
- * A narrow poster card (about 6 fit across): poster with a LIVE / UPCOMING badge, then the show,
- * when it's on, the channel, and the playlist it comes from.
+ * The channel picked in search, playing full size behind the results under a dark veil so the
+ * results stay readable. Goes when search closes (unless it was opened full screen).
  */
-@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun LiveTvSearchPreview(results: LiveTvSearchResults, modifier: Modifier = Modifier) {
+    val vm = results.viewModel ?: return
+    if (results.previewKey == null) return
+    androidx.compose.runtime.DisposableEffect(vm) {
+        vm.playback.attach()
+        onDispose { vm.playback.detach() }
+    }
+    val playback by vm.playback.state.collectAsStateWithLifecycle()
+    // Back on search after a details page (the player was let go meanwhile): start it again.
+    LaunchedEffect(results.previewKey) {
+        val key = results.previewKey ?: return@LaunchedEffect
+        if (vm.playback.state.value.channelKey != key) {
+            results.hits.firstOrNull { it.channel.key == key }?.let { vm.preview(it.channel) }
+        }
+    }
+    Box(modifier = modifier) {
+        LivePlayerSurface(
+            player = vm.playback.player,
+            modifier = Modifier.fillMaxSize(),
+            useSurfaceView = false,
+            onAttached = { vm.playback.onSurfaceAttached() }
+        )
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.62f)))
+        playback.error?.let {
+            PlayerStatusMessage(
+                "Reconnecting…", it,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp),
+                compact = true
+            )
+        }
+    }
+}
+
+/**
+ * One Live TV result: the show's poster (or the channel's logo), with a LIVE / UPCOMING tag,
+ * then the show, "CH: channel" and the playlist, like Nuvio's addon results.
+ */
 @Composable
 private fun LiveSearchCard(
     hit: LiveSearchHit,
     playlistName: String?,
-    use24h: Boolean,
     posterFor: suspend (LiveSearchHit) -> String?,
+    posterCardStyle: com.nuvio.tv.ui.components.PosterCardStyle,
+    playing: Boolean,
     modifier: Modifier,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(liveCorner())
-    val colors = liveCellColors(focused = focused, idle = guideSurface())
     val now = System.currentTimeMillis()
     val p = hit.program
     val live = p != null && now >= p.startMs && now < p.stopMs
-    val poster by produceState<String?>(initialValue = p?.icon, p?.title) {
+    val upcoming = p != null && p.startMs > now
+    val sports = com.nuvio.tv.livetv.data.LiveTvPosterResolver.isSports(hit.channel, p)
+    val poster by produceState<String?>(initialValue = if (sports) null else p?.icon, p?.title, hit.channel.key) {
+        if (sports) return@produceState
         // Give Nuvio's own addon search a head start, so poster lookups never compete with it.
         kotlinx.coroutines.delay(2_500)
         posterFor(hit)?.let { value = it }
     }
-    val upcoming = p != null && p.startMs > now
-    val whenLine = when {
-        p == null -> null
-        live -> "${minutesLeftLabel(p.stopMs, now)} · ends ${formatClock(p.stopMs, use24h)}"
-        else -> "${formatDayClock(p.startMs, now, use24h)} · ${startsInLabel(p.startMs - now)}"
-    }
-    Column(
-        modifier = modifier
-            .width(150.dp)
-            .clip(shape)
-            .background(colors.background)
-            .border(2.dp, colors.border, shape)
-            .onFocusChanged { focused = it.isFocused }
-            .combinedClickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
-            .padding(6.dp)
-    ) {
-        // Poster as Nuvio's catalogs would show it; the channel logo when there's no match.
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(206.dp)
-                .clip(RoundedCornerShape(7.dp))
-                .background(guideSurfaceVariant()),
-            contentAlignment = Alignment.Center
-        ) {
-            if (!poster.isNullOrBlank()) {
-                AsyncImage(
-                    model = poster,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                ChannelLogo(hit.channel.logo, 48.dp)
+    val title = p?.title?.takeIf { !LiveTvRepository.isPlaceholderTitle(it) } ?: hit.channel.name
+    SearchResultCard(
+        title = title,
+        lines = listOfNotNull("CH: ${hit.channel.name}", playlistName),
+        poster = poster,
+        logo = hit.channel.logo,
+        posterCardStyle = posterCardStyle,
+        modifier = modifier,
+        onClick = onClick,
+        onLongClick = onLongClick,
+        badge = {
+            val tag = when {
+                playing -> "PLAYING"
+                live -> "LIVE"
+                upcoming -> "UPCOMING"
+                else -> null
             }
-            if (p != null && (live || upcoming)) {
+            tag?.let {
                 LiveText(
-                    if (live) "LIVE" else "UPCOMING",
+                    it,
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(5.dp)
+                        .padding(6.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .background(if (live) NuvioTheme.colors.Error else Color.Black.copy(alpha = 0.75f))
+                        .background(if (live || playing) NuvioTheme.colors.Error else Color.Black.copy(alpha = 0.75f))
                         .padding(horizontal = 5.dp, vertical = 1.dp),
                     color = Color.White,
                     size = 10.sp,
@@ -294,44 +327,7 @@ private fun LiveSearchCard(
                 ProgressBar(p!!.progress(now), Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(6.dp))
             }
         }
-        Spacer(Modifier.height(6.dp))
-        LiveText(
-            p?.title ?: hit.channel.name,
-            modifier = Modifier.fillMaxWidth(),
-            color = colors.text,
-            size = 14.sp,
-            weight = FontWeight.Bold,
-            marquee = focused
-        )
-        whenLine?.let {
-            LiveText(
-                it,
-                color = if (upcoming) NuvioTheme.colors.Secondary else focusedSecondaryTextColor(focused),
-                size = 11.sp,
-                weight = if (upcoming) FontWeight.SemiBold else FontWeight.Normal,
-                marquee = focused
-            )
-        }
-        Spacer(Modifier.height(3.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            ChannelLogo(hit.channel.logo, 14.dp)
-            Spacer(Modifier.width(4.dp))
-            LiveText(
-                "${hit.channel.number}  ${hit.channel.name}",
-                color = focusedSecondaryTextColor(focused),
-                size = 11.sp,
-                marquee = focused
-            )
-        }
-        playlistName?.let {
-            LiveText(
-                it,
-                color = if (focused) focusedSecondaryTextColor(true) else NuvioTheme.colors.TextTertiary,
-                size = 10.sp,
-                marquee = focused
-            )
-        }
-    }
+    )
 }
 
 private fun startsInLabel(ms: Long): String {
@@ -485,7 +481,22 @@ private fun ChannelQuickMenu(channel: LiveChannel, viewModel: LiveTvViewModel, o
 
 
 /** What a search shows: Live TV, Nuvio's movies and series, your provider's On Demand. */
-data class SearchScope(val live: Boolean, val catalog: Boolean, val onDemand: Boolean)
+data class SearchScope(
+    val live: Boolean,
+    val catalog: Boolean,
+    val onDemand: Boolean,
+    /** The order the result sections appear in: "live", "ondemand" and "catalog". */
+    val order: List<String> = SEARCH_SECTIONS
+)
+
+/** Nuvio's search sections, in their default order. */
+val SEARCH_SECTIONS = listOf("live", "ondemand", "catalog")
+
+/** A saved search order, with anything missing put back at the end (in the default order). */
+fun parseSearchOrder(raw: String?): List<String> {
+    val saved = raw.orEmpty().split(',').map { it.trim() }.filter { it in SEARCH_SECTIONS }.distinct()
+    return saved + SEARCH_SECTIONS.filter { it !in saved }
+}
 
 /**
  * What this search shows, by where it was opened from: from the guide or On Demand, what's set
@@ -508,4 +519,5 @@ fun rememberSearchScope(): SearchScope {
         LiveTvSearchBridge.ON_DEMAND -> SearchScope(s.onDemandSearchLive, s.onDemandSearchCatalog, s.onDemandSearchOnDemand)
         else -> SearchScope(live = true, catalog = true, onDemand = true)
     }.let { if (!it.live && !it.catalog && !it.onDemand) SearchScope(true, true, true) else it }
+        .copy(order = parseSearchOrder(s.searchOrder))
 }

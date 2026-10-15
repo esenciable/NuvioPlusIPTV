@@ -110,6 +110,8 @@ class RecordingsViewModel @Inject constructor(
         if (todo.isEmpty()) return
         viewModelScope.launch {
             for (r in todo) {
+                // Sports recordings: the channel's logo (game titles found random films).
+                if (com.nuvio.tv.livetv.data.LiveTvPosterResolver.isSportsRecording(r.channelName, r.title)) continue
                 val poster = runCatching { posterResolver.posterFor(r.title, null, com.nuvio.tv.livetv.data.LiveTvPosterResolver.Clues(), urgent = false) }.getOrNull()
                 if (poster != null) _posters.value = _posters.value + (r.id to poster)
             }
@@ -138,6 +140,8 @@ class RecordingsViewModel @Inject constructor(
         viewModelScope.launch {
             for (r in todo) {
                 if (r.id in saved) continue
+                // Sports: no guessed artwork (the card shows the channel's logo).
+                if (com.nuvio.tv.livetv.data.LiveTvPosterResolver.isSportsRecording(r.channelName, r.title)) continue
                 val found = runCatching { findArt(r.title) }.getOrNull() ?: continue
                 _art.value = _art.value + (r.id to found)
                 runCatching { artPrefs.edit().putString(r.id, (found.backdrop ?: "") + "\n" + (found.logo ?: "")).apply() }
@@ -209,6 +213,7 @@ fun RecordingsScreen(
     LaunchedEffect(recordings) { viewModel.loadPosters(recordings); viewModel.loadArt(recordings) }
     var menuFor by remember { mutableStateOf<LiveTvRecording?>(null) }
     var confirmDelete by remember { mutableStateOf<LiveTvRecording?>(null) }
+    var infoFor by remember { mutableStateOf<LiveTvRecording?>(null) }
     val first = remember { FocusRequester() }
     val colors = NuvioTheme.colors
 
@@ -403,9 +408,16 @@ fun RecordingsScreen(
                 if (resumeAt != null) add("Play from Beginning" to { menuFor = null; onPlay(viewModel.playUrl(rec), rec.title, posters[rec.id], rec.id, true) })
             }
             if (rec.isRecording) add("Stop Recording" to { menuFor = null; viewModel.stop(rec) })
+            add("Information" to { menuFor = null; infoFor = rec })
             add("Delete" to { menuFor = null; confirmDelete = rec })
         }
         RecordingActionDialog(title = rec.title, detail = rec.problem, actions = actions, onDismiss = { menuFor = null })
+    }
+    infoFor?.let { picked ->
+        // Live: a recording still going keeps its size and length up to date.
+        val rec = recordings.firstOrNull { it.id == picked.id } ?: picked
+        val context = androidx.compose.ui.platform.LocalContext.current
+        RecordingInfoDialog(rec, savedOnLabel(context, rec.dir), onDismiss = { infoFor = null })
     }
     confirmDelete?.let { rec ->
         RecordingActionDialog(
@@ -593,7 +605,9 @@ private fun RecordingNowCard(
             }
             val status = when {
                 rec.durationSec <= 0 -> "Starting…" + (rec.problem?.let { " ($it)" } ?: "")
-                else -> durationLabel(rec.durationSec) + " recorded" + (rec.problem?.let { " · $it" } ?: "")
+                else -> durationLabel(rec.durationSec) + " recorded" +
+                    (if (rec.sizeBytes > 0) " · " + sizeLabel(rec.sizeBytes) else "") +
+                    (rec.problem?.let { " · $it" } ?: "")
             }
             LiveText(
                 listOf(rec.channelName, time.format(Date(from)) + " – " + time.format(Date(to)), status).joinToString(" · "),
@@ -739,7 +753,8 @@ private fun RecordedCard(
             if (failed) rec.problem ?: "Couldn't be recorded"
             else listOfNotNull(
                 shortDayLabel(rec.programStartMs.takeIf { it > 0 } ?: rec.startedAtMs),
-                durationLabel(rec.durationSec).takeIf { rec.durationSec > 0 }
+                durationLabel(rec.durationSec).takeIf { rec.durationSec > 0 },
+                sizeLabel(rec.sizeBytes).takeIf { rec.sizeBytes > 0 }
             ).joinToString(" · ") + (rec.problem?.let { " · $it" } ?: ""),
             size = 13.sp,
             color = if (failed) colors.Error else colors.TextSecondary
@@ -775,6 +790,58 @@ private fun RecordingActionDialog(
             }
         }
     }
+}
+
+/** Hold OK → Information: what a recording is, how big it is and where it's kept. */
+@Composable
+private fun RecordingInfoDialog(rec: LiveTvRecording, savedOn: String, onDismiss: () -> Unit) {
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) { kotlinx.coroutines.delay(80); runCatching { first.requestFocus() } }
+    val day = SimpleDateFormat("EEE d MMM", Locale.getDefault())
+    val time = SimpleDateFormat("h:mm a", Locale.getDefault())
+    val aired = if (rec.programStartMs > 0 && rec.programStopMs > rec.programStartMs)
+        day.format(Date(rec.programStartMs)) + ", " + time.format(Date(rec.programStartMs)) + " – " + time.format(Date(rec.programStopMs))
+    else day.format(Date(rec.startedAtMs)) + ", " + time.format(Date(rec.startedAtMs))
+    val rows = buildList {
+        add("Channel" to rec.channelName)
+        rec.episode?.let { add("Episode" to it) }
+        add("Aired" to aired)
+        add("Length" to if (rec.durationSec > 0) durationLabel(rec.durationSec) + (if (rec.isRecording) " so far" else "") else "—")
+        add("Size" to if (rec.sizeBytes > 0) sizeLabel(rec.sizeBytes) + (if (rec.isRecording) " so far" else "") else "—")
+        add("Recorded" to when {
+            rec.isRecording && rec.fromCatchup -> "Saving from catch-up now"
+            rec.isRecording -> "Recording now"
+            rec.fromCatchup -> "From catch-up"
+            else -> "Live, as it aired"
+        })
+        add("Saved on" to savedOn)
+        rec.problem?.let { add("Note" to it) }
+    }
+    com.nuvio.tv.ui.components.NuvioDialog(onDismiss = onDismiss, title = rec.title, subtitle = null, width = 520.dp) {
+        Column(verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.xxs)) {
+            rows.forEach { (k, v) ->
+                Row(modifier = Modifier.padding(vertical = 3.dp)) {
+                    LiveText(k, color = NuvioTheme.colors.TextSecondary, size = 14.sp, modifier = Modifier.width(110.dp))
+                    LiveText(v, size = 14.sp, maxLines = 2, modifier = Modifier.weight(1f))
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            com.nuvio.tv.ui.screens.settings.SettingsActionRow(
+                title = "Close",
+                subtitle = null,
+                onClick = onDismiss,
+                modifier = Modifier.focusRequester(first)
+            )
+        }
+    }
+}
+
+/** "This Device" or the drive's name, for the folder a recording is in. */
+private fun savedOnLabel(context: android.content.Context, dir: String): String {
+    val choice = runCatching { RecordingStorage.choices(context) }.getOrDefault(emptyList())
+        .filter { dir.startsWith(it.dir.absolutePath) }
+        .maxByOrNull { it.dir.absolutePath.length }
+    return choice?.label ?: if (dir.startsWith("/storage/emulated") || dir.startsWith("/data/")) "This Device" else "A drive that isn't plugged in"
 }
 
 private fun dateLabel(ms: Long): String {

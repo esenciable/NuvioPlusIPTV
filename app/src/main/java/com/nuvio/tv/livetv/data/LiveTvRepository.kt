@@ -12,6 +12,7 @@ import com.nuvio.tv.livetv.model.LiveTvLoadReport as LIVE_REPORT
 import com.nuvio.tv.livetv.model.CatchupInfo
 import com.nuvio.tv.livetv.model.LiveTvSettings
 import com.nuvio.tv.livetv.model.PlaylistSource
+import com.nuvio.tv.livetv.model.PlaylistAccount
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -102,6 +103,11 @@ class LiveTvRepository @Inject constructor(
         scope.launch {
             // Saved channels and guide first: reading them only uses the device's storage.
             loadFromCache()
+            // A playlist running out within a week: say so (once per app start).
+            runCatching {
+                val names = prefs.currentPlaylists().associate { it.id to it.name }
+                prefs.playlistAccounts.first().forEach { (id, a) -> names[id]?.let { warnIfExpiring(id, it, a) } }
+            }
             // Groups hidden or shown since the guide was stored (and from now on).
             watchHidden()
             // Space left empty in the guide database by earlier versions or updates.
@@ -468,6 +474,8 @@ class LiveTvRepository @Inject constructor(
                         !unchanged
                     } else download(pl.resolvedUrl(), file, pl.userAgent, progressLabel = "Downloading playlist \"${pl.name}\"")
                 }
+                // M3U links from Xtream providers (get.php with a login): the account's details.
+                if (!pl.isXtream) refreshM3uAccount(pl)
                 val err = result.exceptionOrNull()?.let { e ->
                     when (e) {
                         is java.net.UnknownHostException -> "Couldn't find the provider's server (${e.message?.substringAfter("\"")?.substringBefore("\"") ?: "address"}). Check the address, your internet, or try again later."
@@ -1173,7 +1181,7 @@ class LiveTvRepository @Inject constructor(
                         val title = input.readUTF()
                         val desc = readOpt(input)
                         val category = readOpt(input)
-                        val episode = readOpt(input)
+                        val episode = XmltvParser.cleanEpisode(readOpt(input))
                         val icon = readOpt(input)
                         val year = input.readInt().takeIf { it > 0 }
                         val people = List(input.readInt()) { input.readUTF() }
@@ -1835,6 +1843,7 @@ class LiveTvRepository @Inject constructor(
                 }
             }
             info.optJSONObject("user_info")?.let { ui ->
+                accountOf(ui)?.let { saveAccount(pl, it) }
                 if (ui.optString("auth") == "0") throw XtreamLoginError("Login failed: check the username and password")
                 val status = ui.optString("status")
                 if (status.isNotBlank() && !status.equals("Active", ignoreCase = true)) {
@@ -1972,6 +1981,63 @@ class LiveTvRepository @Inject constructor(
         if (tz != null) prefs.updatePlaylists { list -> list.map { if (it.id == pl.id) it.copy(serverTimezone = tz) else it } }
         tz
     }
+
+    /** Xtream user_info → the account details worth showing. */
+    private fun accountOf(ui: JSONObject): PlaylistAccount? {
+        if (ui.optString("auth") == "0") return null
+        val exp = ui.optString("exp_date").toLongOrNull()?.takeIf { it > 0 }?.times(1000) ?: 0L
+        return PlaylistAccount(
+            expiresAtMs = exp,
+            status = ui.optString("status"),
+            maxConnections = ui.optString("max_connections").toIntOrNull() ?: 0,
+            activeConnections = ui.optString("active_cons").toIntOrNull() ?: 0,
+            checkedAtMs = System.currentTimeMillis()
+        )
+    }
+
+    private suspend fun saveAccount(pl: PlaylistSource, a: PlaylistAccount) {
+        prefs.setPlaylistAccount(pl.id, a)
+        a.expiryLabel()?.let { LIVE_REPORT.add("Account for \"${pl.name}\": expires $it") }
+        warnIfExpiring(pl.id, pl.name, a)
+    }
+
+    private val expiryWarned = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    private fun warnIfExpiring(id: String, name: String, a: PlaylistAccount) {
+        if (!a.expiringSoon() || !expiryWarned.add(id)) return
+        val days = a.daysLeft() ?: return
+        com.nuvio.tv.livetv.record.LiveTvNotice.show(
+            when {
+                a.expiresAtMs <= System.currentTimeMillis() -> "\"$name\" has expired"
+                days == 0L -> "\"$name\" expires today"
+                days == 1L -> "\"$name\" expires tomorrow"
+                else -> "\"$name\" expires in $days days"
+            }
+        )
+    }
+
+    /**
+     * An M3U link from an Xtream provider (…/get.php?username=…&password=…): the same server's
+     * player_api.php has the account's expiry date and connections.
+     */
+    private suspend fun refreshM3uAccount(pl: PlaylistSource) = withContext(Dispatchers.IO) {
+        val api = m3uAccountUrl(pl.url) ?: return@withContext
+        runCatching {
+            val ui = JSONObject(getText(api, pl.userAgent.ifBlank { DEFAULT_UA })).optJSONObject("user_info")
+                ?: return@runCatching
+            accountOf(ui)?.let { saveAccount(pl, it) }
+        }
+    }
+
+    private fun m3uAccountUrl(url: String): String? = runCatching {
+        val u = java.net.URI(url.trim())
+        if (u.path?.endsWith("get.php", ignoreCase = true) != true) return@runCatching null
+        val q = (u.rawQuery ?: return@runCatching null).split('&')
+            .associate { it.substringBefore('=').lowercase() to it.substringAfter('=', "") }
+        val user = q["username"]?.takeIf { it.isNotBlank() } ?: return@runCatching null
+        val pass = q["password"] ?: return@runCatching null
+        "${u.scheme}://${u.rawAuthority}/player_api.php?username=$user&password=$pass"
+    }.getOrNull()
 
     private fun getText(url: String, userAgent: String): String {
         val request = Request.Builder().url(url).header("User-Agent", userAgent.ifBlank { DEFAULT_UA }).build()

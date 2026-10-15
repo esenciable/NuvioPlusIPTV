@@ -35,6 +35,9 @@ class LiveTvSettingsViewModel @Inject constructor(
     val userState: StateFlow<LiveUserState> =
         prefs.userState.stateIn(viewModelScope, SharingStarted.Eagerly, LiveUserState())
     val status: StateFlow<LiveTvStatus> = repository.status
+    /** Expiry and connections per playlist, when the provider gives them. */
+    val accounts: StateFlow<Map<String, com.nuvio.tv.livetv.model.PlaylistAccount>> =
+        prefs.playlistAccounts.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     init {
         repository.ensureLoaded()

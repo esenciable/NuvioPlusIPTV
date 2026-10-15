@@ -1057,10 +1057,26 @@ fun LiveTvGuideScreen(
                                         event.key == Key.DirectionLeft -> pendingHidden = channels.map { it.key }.toSet()
                                         event.key == Key.DirectionRight -> pendingHidden = emptySet()
                                         event.key == Key.Back -> {
-                                            val current = channels.getOrNull(row)
-                                            viewModel.saveVisibility(visibilityChannels, pendingHidden)
+                                            // Back to the group without the hidden channels, the cursor on
+                                            // the same channel (or the nearest one still shown) at the same
+                                            // spot on screen, so you can carry on from where you were.
+                                            val all = visibilityChannels
+                                            val shown = all.filter { it.key !in pendingHidden }
+                                            val keep = all.getOrNull(row)?.takeIf { it.key !in pendingHidden }
+                                                ?: all.drop(row + 1).firstOrNull { it.key !in pendingHidden }
+                                                ?: all.take(row).lastOrNull { it.key !in pendingHidden }
+                                            val slot = (row - listState.firstVisibleItemIndex).coerceAtLeast(0)
+                                            val slotOffset = listState.firstVisibleItemScrollOffset
+                                            viewModel.saveVisibility(all, pendingHidden)
+                                            // Shown straight away, until the group reloads the same way.
+                                            savedOrder = shown
+                                            savedMovedKey = keep?.key
                                             visibilityMode = false
-                                            current?.takeIf { it.key !in pendingHidden }?.let { highlightKey = it.key }
+                                            row = shown.indexOfFirst { it.key == keep?.key }.coerceAtLeast(0)
+                                            scope.launch {
+                                                delay(40)
+                                                listState.scrollToItem((row - slot).coerceAtLeast(0), if (row - slot >= 0) slotOffset else 0)
+                                            }
                                         }
                                     }
                                     return@onPreviewKeyEvent true
@@ -1277,12 +1293,15 @@ fun LiveTvGuideScreen(
         // Full screen: black behind the picture, so channels that don't fill the screen (other
         // shapes, 4:3) show black bars instead of the guide underneath.
         if (fullscreen) Box(Modifier.fillMaxSize().background(Color.Black))
+        val shapes by viewModel.pictureShapes.collectAsStateWithLifecycle()
+        val pictureShapeNow = com.nuvio.tv.livetv.player.PictureShape.of(playback.channelKey?.let { shapes[it] })
         LivePlayerSurface(
             player = viewModel.playback.player,
             useSurfaceView = true,
             modifier = videoModifier,
             onAttached = { viewModel.playback.onSurfaceAttached() },
-            aspectMode = if (fullscreen) aspectModeOf(settings.aspectMode) else null
+            aspectMode = if (fullscreen) aspectModeOf(settings.aspectMode) else null,
+            pictureShape = pictureShapeNow
         )
         // Rounded corners for the preview. The video surface can't be clipped to a rounded
         // shape on most TVs, so its four corners are painted over in exactly what's behind
@@ -1550,12 +1569,22 @@ fun LiveTvGuideScreen(
                 onManageVisibility = {
                     menuTarget = null
                     val list = viewModel.channelsWithHidden()
+                    // Where the channel sits on screen now, so it stays right there once the
+                    // hidden channels are back in the list. (The list used to jump: hidden
+                    // channels above it pushed everything down, off what you'd picked.)
+                    val oldIdx = channels.indexOfFirst { it.key == target.channel.key }.takeIf { it >= 0 } ?: row
+                    val slot = (oldIdx - listState.firstVisibleItemIndex).coerceAtLeast(0)
+                    val slotOffset = listState.firstVisibleItemScrollOffset
                     visibilityChannels = list
                     pendingHidden = user.hiddenChannels intersect list.map { it.key }.toSet()
                     visibilityMode = true
                     row = list.indexOfFirst { it.key == target.channel.key }.coerceAtLeast(0)
-                    ensureRowVisible(row)
-                    scope.launch { delay(60); runCatching { gridFocus.requestFocus() } }
+                    scope.launch {
+                        delay(40) // once the longer list is in place
+                        listState.scrollToItem((row - slot).coerceAtLeast(0), if (row - slot >= 0) slotOffset else 0)
+                        delay(20)
+                        runCatching { gridFocus.requestFocus() }
+                    }
                 },
                 onHideGroup = {
                     viewModel.hideGroup(target.channel.groupId)
@@ -1574,6 +1603,7 @@ fun LiveTvGuideScreen(
                 target = target,
                 now = now,
                 use24h = settings.use24HourClock,
+                showEpisode = settings.showEpisodeNumbers,
                 onDismiss = { infoTarget = null },
                 onFind = { p -> infoTarget = null; findInNuvio(p) },
                 onWatch = { infoTarget = null; playChannel(target.channel) },
@@ -1883,7 +1913,7 @@ private fun GuideHeader(
                     val meta = buildList {
                         add(formatDayClock(block.startMs, now, settings.use24HourClock) + " – " + formatClock(block.stopMs, settings.use24HourClock))
                         if (now in block.startMs until block.stopMs) add(minutesLeftLabel(block.stopMs, now))
-                        p?.episode?.let { add(it) }
+                        p?.episode?.takeIf { settings.showEpisodeNumbers }?.let { add(it) }
                         p?.category?.let { add(it) }
                         // The standard panel shows catch-up as a tag; the small one has no room for it.
                         if (small && channel.catchup != null) add("Catch-up")
@@ -2226,7 +2256,7 @@ private fun GuideRow(
                     continuesLeft = p.startMs < windowStart,
                     liveTag = marks.live && !past,
                     newTag = marks.isNew,
-                    episode = p.episode?.takeIf { it.length <= 12 },
+                    episode = p.episode?.takeIf { settings.showEpisodeNumbers && it.length <= 12 },
                     reminder = p.startMs in reminderStarts,
                     recording = (recordingSpan != null && p.stopMs > recordingSpan.first && p.startMs < recordingSpan.second) ||
                         p.startMs in scheduledStarts,
@@ -3342,6 +3372,7 @@ private fun ProgramInfoDialog(
     target: MenuTarget,
     now: Long,
     use24h: Boolean,
+    showEpisode: Boolean = true,
     onDismiss: () -> Unit,
     onFind: (EpgProgram) -> Unit,
     onWatch: () -> Unit,
@@ -3363,7 +3394,7 @@ private fun ProgramInfoDialog(
             val meta = listOfNotNull(
                 "${target.channel.number}  ${target.channel.name}",
                 formatDayClock(block.startMs, now, use24h) + " – " + formatClock(block.stopMs, use24h),
-                p?.episode, p?.category
+                p?.episode?.takeIf { showEpisode }, p?.category
             ).joinToString("  ·  ")
             LiveText(meta, color = NuvioTheme.colors.TextSecondary, size = 14.sp, maxLines = 2)
         }

@@ -393,6 +393,30 @@ fun SearchScreen(
     val visibleCatalogRows = remember(uiState.catalogRows, searchScope.catalog) {
         if (!searchScope.catalog) emptyList() else uiState.catalogRows.filter { it.items.isNotEmpty() }
     }
+    // Live TV fork: the sections in the order set in Live TV settings (Search & Streams), only
+    // the ones with results. Down from the field goes to the first; Up from each to the one above.
+    val presentSections = searchScope.order.filter { kind ->
+        when (kind) {
+            "live" -> hasLiveTvResults
+            "ondemand" -> hasOnDemandResults
+            else -> visibleCatalogRows.isNotEmpty()
+        }
+    }
+    fun sectionEntry(kind: String): FocusRequester? = when (kind) {
+        "live" -> liveTvRowFocusRequester
+        "ondemand" -> onDemandRowFocusRequester
+        else -> null // the addon rows: their own focus handling
+    }
+    /** What Up from a section's first row goes to: the section above it, or the search field. */
+    fun sectionUp(kind: String): FocusRequester? {
+        val i = presentSections.indexOf(kind)
+        if (i <= 0) return searchFocusRequester
+        // Below the addon rows: plain Up reaches their last row.
+        return sectionEntry(presentSections[i - 1])
+    }
+    val catalogIndexInOrder = searchScope.order.indexOf("catalog").coerceAtLeast(0)
+    val forkBeforeCatalog = searchScope.order.take(catalogIndexInOrder)
+    val forkAfterCatalog = searchScope.order.drop(catalogIndexInOrder + 1)
     LaunchedEffect(visibleRowKeys) {
         searchRowStates.keys.retainAll(visibleRowKeys)
         searchRowFocusRequesters.keys.retainAll(visibleRowKeys)
@@ -614,6 +638,8 @@ fun SearchScreen(
             .background(NuvioTheme.colors.Background),
         contentAlignment = Alignment.TopCenter
     ) {
+        // Live TV fork: a channel picked in the results plays behind them (TiviMate style).
+        com.nuvio.tv.livetv.ui.LiveTvSearchPreview(liveTvResults, Modifier.matchParentSize())
         val listState = rememberLazyListState()
 
         // Step back within Search before falling through to the root handler.
@@ -693,8 +719,10 @@ fun SearchScreen(
                         // D-pad down from the text field is the user's confirmation that the
                         // live-search results are useful, even before a particular card opens.
                         viewModel.onEvent(SearchEvent.RememberSearchFromTextInput)
-                        // Live TV fork: the Live TV and On Demand rows sit above the addon rows, so go there first.
-                        if (hasForkResults && runCatching { forkEntryFocusRequester.requestFocus() }.isSuccess) {
+                        // Live TV fork: to the first section in the set order (Live TV or On Demand
+                        // when they come first; otherwise the addon rows, as usual).
+                        val firstEntry = presentSections.firstOrNull()?.let { sectionEntry(it) }
+                        if (firstEntry != null && runCatching { firstEntry.requestFocus() }.isSuccess) {
                             focusResults = false
                         } else {
                             focusResults = true
@@ -746,26 +774,35 @@ fun SearchScreen(
                 // instruction is wrong, and it was re-appearing on every keystroke. Neither the
                 // mobile nor the desktop client shows an equivalent message.
 
-                if (hasLiveTvResults) {
-                    item(key = "live_tv_results") {
-                        com.nuvio.tv.livetv.ui.LiveTvSearchRow(
-                            results = liveTvResults,
-                            entryFocusRequester = liveTvRowFocusRequester,
-                            upFocusRequester = searchFocusRequester
-                        )
+                // Live TV fork: the Live TV and On Demand rows, above or below the addon rows as
+                // set in Live TV settings (Search & Streams).
+                fun androidx.compose.foundation.lazy.LazyListScope.forkSection(kind: String) {
+                    when (kind) {
+                        "live" -> if (hasLiveTvResults) {
+                            item(key = "live_tv_results") {
+                                com.nuvio.tv.livetv.ui.LiveTvSearchRow(
+                                    results = liveTvResults,
+                                    entryFocusRequester = liveTvRowFocusRequester,
+                                    upFocusRequester = sectionUp("live"),
+                                    posterCardStyle = posterCardStyle
+                                )
+                            }
+                        }
+                        "ondemand" -> if (hasOnDemandResults) {
+                            item(key = "on_demand_results") {
+                                com.nuvio.tv.livetv.ondemand.OnDemandSearchRow(
+                                    results = onDemandResults,
+                                    entryFocusRequester = onDemandRowFocusRequester,
+                                    upFocusRequester = sectionUp("ondemand"),
+                                    onOpenDetail = onOpenOnDemand,
+                                    onPlay = onPlayOnDemand,
+                                    posterCardStyle = posterCardStyle
+                                )
+                            }
+                        }
                     }
                 }
-                if (hasOnDemandResults) {
-                    item(key = "on_demand_results") {
-                        com.nuvio.tv.livetv.ondemand.OnDemandSearchRow(
-                            results = onDemandResults,
-                            entryFocusRequester = onDemandRowFocusRequester,
-                            upFocusRequester = if (hasLiveTvResults) liveTvRowFocusRequester else searchFocusRequester,
-                            onOpenDetail = onOpenOnDemand,
-                            onPlay = onPlayOnDemand
-                        )
-                    }
-                }
+                forkBeforeCatalog.forEach { forkSection(it) }
 
                 when {
                     trimmedSubmittedQuery.length < MIN_SEARCH_QUERY_LENGTH && !hasPendingUnsubmittedQuery -> {
@@ -899,10 +936,7 @@ fun SearchScreen(
                                 rowFocusRequester = rowFocusRequester,
                                 entryFocusRequester = entryFocusRequester,
                                 // Anchor Up to the field; geometric focus varies with the card.
-                                upFocusRequester = if (index == 0) {
-                                    if (hasOnDemandResults) onDemandRowFocusRequester
-                                    else if (hasLiveTvResults) liveTvRowFocusRequester else searchFocusRequester
-                                } else null,
+                                upFocusRequester = if (index == 0) sectionUp("catalog") else null,
                                 listState = listState,
                                 restorerFocusedIndex = if (restoringSearchFocus.value && catalogKey == viewModel.savedFocusRowKey) {
                                     viewModel.savedFocusItemIndex
@@ -1010,6 +1044,8 @@ fun SearchScreen(
                         }
                     }
                 }
+                // Live TV fork: sections set to come after the addon rows.
+                forkAfterCatalog.forEach { forkSection(it) }
             }
         }
     }

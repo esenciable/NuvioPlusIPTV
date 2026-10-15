@@ -181,7 +181,7 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
                         startMs = c.getLong(1),
                         stopMs = c.getLong(2),
                         title = c.getString(3),
-                        episode = if (c.isNull(4)) null else c.getString(4),
+                        episode = if (c.isNull(4)) null else XmltvParser.cleanEpisode(c.getString(4)),
                         icon = if (c.isNull(5)) null else c.getString(5)
                     ) else EpgProgram(
                         startMs = c.getLong(1),
@@ -189,7 +189,7 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
                         title = c.getString(3),
                         description = if (c.isNull(4)) null else c.getString(4),
                         category = if (c.isNull(5)) null else c.getString(5),
-                        episode = if (c.isNull(6)) null else c.getString(6),
+                        episode = if (c.isNull(6)) null else XmltvParser.cleanEpisode(c.getString(6)),
                         icon = if (c.isNull(7)) null else c.getString(7),
                         year = if (c.isNull(8)) null else c.getInt(8),
                         people = if (c.isNull(9)) emptyList() else c.getString(9).split('\u001F')

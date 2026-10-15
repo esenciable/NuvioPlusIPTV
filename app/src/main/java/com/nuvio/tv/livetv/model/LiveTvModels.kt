@@ -164,6 +164,36 @@ data class CustomGroup(
     val channelKeys: List<String> = emptyList()
 )
 
+/** A provider account's details (Xtream user_info), when the provider gives them. */
+data class PlaylistAccount(
+    /** When the account runs out (0: never, or not given). */
+    val expiresAtMs: Long = 0L,
+    val status: String = "",
+    val maxConnections: Int = 0,
+    val activeConnections: Int = 0,
+    val checkedAtMs: Long = 0L
+) {
+    /** Whole days left (0 on the last day), or null with no expiry date. */
+    fun daysLeft(now: Long = System.currentTimeMillis()): Long? =
+        if (expiresAtMs > 0) ((expiresAtMs - now) / 86_400_000L).coerceAtLeast(0) else null
+
+    /** Seven days or less to go. */
+    fun expiringSoon(now: Long = System.currentTimeMillis()): Boolean = (daysLeft(now) ?: Long.MAX_VALUE) <= 7
+
+    /** "12 Mar 2027 (148 days)", "20 Oct 2026 (today)", or null. */
+    fun expiryLabel(now: Long = System.currentTimeMillis()): String? {
+        val days = daysLeft(now) ?: return null
+        val date = java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale.getDefault()).format(java.util.Date(expiresAtMs))
+        val left = when {
+            expiresAtMs <= now -> "expired"
+            days == 0L -> "today"
+            days == 1L -> "1 day"
+            else -> "$days days"
+        }
+        return "$date ($left)"
+    }
+}
+
 data class LiveTvSettings(
     val showInSidebar: Boolean = true,
     val showChannelNames: Boolean = true,
@@ -176,6 +206,8 @@ data class LiveTvSettings(
     val compactRows: Boolean = false,
     /** Each show's start and end time under its title in the guide (taller rows). */
     val showProgramTimes: Boolean = false,
+    /** Episode numbers ("S2 E5") in the guide, show info and the player's banner. */
+    val showEpisodeNumbers: Boolean = true,
     /** Guide Size: COMPACT, STANDARD, LARGE or XLARGE (blank = from the old Slimmer Rows switch). */
     val guideSize: String = "",
     /** Diagonal stripes on channels (and stretches of time) the guide has nothing for. Off: plain, like a show. */
@@ -227,6 +259,12 @@ data class LiveTvSettings(
     val startPage: String = "",
     /** Xtream catch-up: ask for HLS (.m3u8) first, which gives replays a length for seeking. */
     val catchupPreferHls: Boolean = true,
+    /**
+     * Moves the time asked for in catch-up (and catch-up saves) later (+) or earlier (−), for
+     * providers whose archive runs on a different clock than their guide: replays that start
+     * the show before (or after) the one picked.
+     */
+    val catchupShiftMinutes: Int = 0,
     /** Parental controls: a 4-digit PIN; empty = parental controls off. */
     val parentalPin: String = "",
     /** With a PIN set, lock adult groups and categories automatically. */
@@ -241,6 +279,14 @@ data class LiveTvSettings(
     val recordingsInSidebar: Boolean = true,
     /** Offer "Watch On Demand" in Nuvio's stream list for movies and episodes. */
     val onDemandInStreams: Boolean = true,
+    /** Where the On Demand tab sits in the stream list: FIRST, AFTER_FIRST (the first addon) or LAST. */
+    val onDemandStreamsPosition: String = "LAST",
+    /** Auto-play may pick your provider's copy (only when its tab is first). */
+    val onDemandAutoPlay: Boolean = false,
+    /** The order of Nuvio's search results: "live", "ondemand" and "catalog", comma separated. */
+    val searchOrder: String = "live,ondemand,catalog",
+    /** OK on a channel in search plays it behind the results first (OK again: full screen). */
+    val searchPreview: Boolean = true,
     /** On Demand posters from your own addons (off = the provider's images only). */
     val onDemandAddonPosters: Boolean = true,
     /** Several playlists: list each playlist's groups under a foldable heading. */
@@ -267,6 +313,9 @@ data class LiveTvSettings(
     val recordingStorage: String = "",
     /** Recordings: when storage runs low, "STOP" (stop recording) or "DELETE_OLDEST". */
     val recordingSpaceRule: String = "STOP",
+    /** Recordings start this many minutes before the show and keep going this many after. */
+    val recordPreMinutes: Int = 2,
+    val recordPostMinutes: Int = 5,
     // ---- Live TV row on Nuvio's home screen
     /** Show the Live TV row on the home screen at all. */
     val homeRowEnabled: Boolean = true,
@@ -301,7 +350,17 @@ data class LiveTvSettings(
     /** Rewind anytime: a rolling buffer of the channel you watch full screen (not only after pausing). */
     val rewindAlways: Boolean = false,
     /** Turn closed captions on automatically when a channel has them. */
-    val captionsByDefault: Boolean = false
+    val captionsByDefault: Boolean = false,
+    /** On-screen clock while watching: "always", "panel" (only with the info panel) or "never". */
+    val clockMode: String = "panel",
+    /** Corner for the always-on clock: "top_left", "top_right", "bottom_left", "bottom_right". */
+    val clockPosition: String = "top_right",
+    /** "small", "medium" or "large". */
+    val clockSize: String = "medium",
+    /** How solid the always-on clock is, in percent. */
+    val clockOpacity: Int = 70,
+    /** A soft dark pill behind the always-on clock. */
+    val clockBackground: Boolean = true
 )
 
 data class LiveUserState(

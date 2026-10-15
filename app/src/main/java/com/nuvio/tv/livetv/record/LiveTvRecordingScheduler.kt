@@ -94,13 +94,20 @@ data class RecordingSchedule(
     val seriesId: String? = null,
     val attempts: Int = 0,
     /** Next time to try (catch-up downloads retry a few times). */
-    val nextTryMs: Long = 0L
+    val nextTryMs: Long = 0L,
+    /** Extra time before and after, from the settings when it was set (-1: the old 2 and 5 min). */
+    val preMs: Long = -1L,
+    val postMs: Long = -1L
 ) {
+    val pre: Long get() = if (preMs >= 0) preMs else LiveTvRecordingScheduler.PRE_MS
+    val post: Long get() = if (postMs >= 0) postMs else LiveTvRecordingScheduler.POST_MS
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id); put("channel", channel.toJson()); put("title", title)
         put("episode", episode ?: ""); put("description", description ?: "")
         put("startMs", startMs); put("stopMs", stopMs); put("useCatchup", useCatchup)
         put("seriesId", seriesId ?: ""); put("attempts", attempts); put("nextTryMs", nextTryMs)
+        put("preMs", preMs); put("postMs", postMs)
     }
 
     companion object {
@@ -115,7 +122,9 @@ data class RecordingSchedule(
             useCatchup = o.optBoolean("useCatchup"),
             seriesId = o.optString("seriesId").ifBlank { null },
             attempts = o.optInt("attempts"),
-            nextTryMs = o.optLong("nextTryMs")
+            nextTryMs = o.optLong("nextTryMs"),
+            preMs = o.optLong("preMs", -1L),
+            postMs = o.optLong("postMs", -1L)
         )
     }
 }
@@ -165,12 +174,21 @@ class LiveTvRecordingScheduler @Inject constructor(
     val series: StateFlow<List<SeriesRule>> = _series.asStateFlow()
 
     @Volatile private var started = false
+    /** Extra time before and after recordings (Settings → Live TV → Recordings), kept up to date. */
+    @Volatile private var padPreMs = PRE_MS
+    @Volatile private var padPostMs = POST_MS
 
     /** Loads the schedules and sets their alarms (called when the app starts, or by an alarm). */
     @OptIn(FlowPreview::class)
     fun start() {
         if (started) return
         started = true
+        scope.launch {
+            prefs.settings.collect { st ->
+                padPreMs = st.recordPreMinutes.coerceAtLeast(0) * 60_000L
+                padPostMs = st.recordPostMinutes.coerceAtLeast(0) * 60_000L
+            }
+        }
         scope.launch {
             load()
             armAll()
@@ -203,7 +221,7 @@ class LiveTvRecordingScheduler @Inject constructor(
             // On now, no catch-up: record from now.
             if (recorder.activeFor(channel.key) == null) {
                 recorder.start(channel, channel.url, title, program.episode, program.description,
-                    program.startMs, program.stopMs, program.stopMs + POST_MS)
+                    program.startMs, program.stopMs, program.stopMs + padPostMs)
             }
             return "Recording \"$title\" now"
         }
@@ -217,7 +235,9 @@ class LiveTvRecordingScheduler @Inject constructor(
             startMs = program.startMs,
             stopMs = program.stopMs,
             useCatchup = useCatchup,
-            seriesId = seriesId
+            seriesId = seriesId,
+            preMs = padPreMs,
+            postMs = padPostMs
         )
         scope.launch {
             mutex.withLock {
@@ -344,7 +364,7 @@ class LiveTvRecordingScheduler @Inject constructor(
     private fun fireTime(s: RecordingSchedule): Long =
         if (s.nextTryMs > 0) s.nextTryMs
         else if (s.useCatchup) s.stopMs + CATCHUP_DELAY_MS
-        else s.startMs - PRE_MS
+        else s.startMs - s.pre
 
     private fun armAll() {
         val now = System.currentTimeMillis()
@@ -402,9 +422,9 @@ class LiveTvRecordingScheduler @Inject constructor(
             if (!s.useCatchup) {
                 if (now >= s.stopMs) { drop(s, "\"${s.title}\" was missed"); return@launch }
                 // Too early (the alarm came early): set it again.
-                if (now < s.startMs - PRE_MS - 60_000L) { arm(s); recorder.stopServiceIfIdle(); return@launch }
+                if (now < s.startMs - s.pre - 60_000L) { arm(s); recorder.stopServiceIfIdle(); return@launch }
                 val channel = freshChannel(s.channel)
-                recorder.start(channel, channel.url, s.title, s.episode, s.description, s.startMs, s.stopMs, s.stopMs + POST_MS,
+                recorder.start(channel, channel.url, s.title, s.episode, s.description, s.startMs, s.stopMs, s.stopMs + s.post,
                     onFinished = { rec -> s.seriesId?.let { keepOnlyNewest(it) } }, seriesId = s.seriesId)
                 remove(s)
                 LiveTvNotice.show("Recording \"${s.title}\" on ${channel.name}")
@@ -415,9 +435,10 @@ class LiveTvRecordingScheduler @Inject constructor(
             val catchup = channel.catchup ?: s.channel.catchup
             val settings = prefs.currentSettings()
             val zone = prefs.currentPlaylists().firstOrNull { it.id == channel.sourceId }?.serverTimezone
-            val shift = settings.epgOffsetMinutes * 60_000L
+            // As when watching catch-up: the guide's shift off, the catch-up shift on.
+            val shift = settings.epgOffsetMinutes * 60_000L - settings.catchupShiftMinutes * 60_000L
             val url = catchup?.let {
-                CatchupUrlBuilder.build(channel.url, it, s.startMs - PRE_MS - shift, s.stopMs + POST_MS - shift, now,
+                CatchupUrlBuilder.build(channel.url, it, s.startMs - s.pre - shift, s.stopMs + s.post - shift, now,
                     preferHls = false, serverTimezone = zone)
             }
             if (url == null) {
@@ -436,8 +457,8 @@ class LiveTvRecordingScheduler @Inject constructor(
                 // (catch-up links often go by the minute, so a few seconds may repeat).
                 resumeFrom = { doneMs ->
                     catchup?.let {
-                        val from = s.startMs - PRE_MS - shift + doneMs - 30_000L
-                        CatchupUrlBuilder.build(channel.url, it, from, s.stopMs + POST_MS - shift, System.currentTimeMillis(),
+                        val from = s.startMs - s.pre - shift + doneMs - 30_000L
+                        CatchupUrlBuilder.build(channel.url, it, from, s.stopMs + s.post - shift, System.currentTimeMillis(),
                             preferHls = false, serverTimezone = zone)
                     }
                 },

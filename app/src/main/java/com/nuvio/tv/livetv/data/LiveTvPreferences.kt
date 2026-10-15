@@ -66,6 +66,7 @@ class LiveTvPreferences @Inject constructor(
         val showRecentGroup = booleanPreferencesKey("show_recent_group")
         val compactRows = booleanPreferencesKey("compact_rows")
         val showProgramTimes = booleanPreferencesKey("show_program_times")
+        val showEpisodeNumbers = booleanPreferencesKey("show_episode_numbers")
         val guideSize = stringPreferencesKey("guide_size")
         val stripeMissingGuide = booleanPreferencesKey("stripe_missing_guide")
         val epgOffset = intPreferencesKey("epg_offset_minutes")
@@ -100,6 +101,7 @@ class LiveTvPreferences @Inject constructor(
         val startOnLiveTv = booleanPreferencesKey("start_on_live_tv")
         val startPage = stringPreferencesKey("start_page")
         val catchupPreferHls = booleanPreferencesKey("catchup_prefer_hls")
+        val catchupShift = intPreferencesKey("catchup_shift_minutes")
         val parentalPin = stringPreferencesKey("parental_pin")
         val lockAdultContent = booleanPreferencesKey("lock_adult_content")
         val showQualityBadges = booleanPreferencesKey("show_quality_badges")
@@ -107,6 +109,10 @@ class LiveTvPreferences @Inject constructor(
         val onDemandInSidebar = booleanPreferencesKey("on_demand_in_sidebar")
         val recordingsInSidebar = booleanPreferencesKey("recordings_in_sidebar")
         val onDemandInStreams = booleanPreferencesKey("on_demand_in_streams")
+        val onDemandStreamsPosition = stringPreferencesKey("on_demand_streams_position")
+        val onDemandAutoPlay = booleanPreferencesKey("on_demand_auto_play")
+        val searchOrder = stringPreferencesKey("search_order")
+        val searchPreview = booleanPreferencesKey("search_preview")
         val onDemandAddonPosters = booleanPreferencesKey("on_demand_addon_posters")
         val groupPlaylistHeadings = booleanPreferencesKey("group_playlist_headings")
         val nameRemovals = stringPreferencesKey("name_removals")
@@ -120,6 +126,8 @@ class LiveTvPreferences @Inject constructor(
         val vodDefaultSort = stringPreferencesKey("vod_default_sort")
         val recordingStorage = stringPreferencesKey("recording_storage")
         val recordingSpaceRule = stringPreferencesKey("recording_space_rule")
+        val recordPre = intPreferencesKey("record_pre_minutes")
+        val recordPost = intPreferencesKey("record_post_minutes")
         val vodSorts = stringPreferencesKey("vod_sorts")
         val homeRowEnabled = booleanPreferencesKey("home_row_enabled")
         val homeRowHiddenProfiles = stringSetPreferencesKey("home_row_hidden_profiles")
@@ -138,6 +146,12 @@ class LiveTvPreferences @Inject constructor(
         val timeshiftMinutes = intPreferencesKey("timeshift_minutes")
         val rewindAlways = booleanPreferencesKey("rewind_always")
         val captionsByDefault = booleanPreferencesKey("captions_by_default")
+        val clockMode = stringPreferencesKey("clock_mode")
+        val playlistAccounts = stringPreferencesKey("playlist_accounts")
+        val clockPosition = stringPreferencesKey("clock_position")
+        val clockSize = stringPreferencesKey("clock_size")
+        val clockOpacity = intPreferencesKey("clock_opacity")
+        val clockBackground = booleanPreferencesKey("clock_background")
         val lockedGroups = stringSetPreferencesKey("locked_groups")
         val reminders = stringPreferencesKey("reminders")
         val channelQuality = stringPreferencesKey("channel_quality")
@@ -161,6 +175,8 @@ class LiveTvPreferences @Inject constructor(
         val groupOrder = stringPreferencesKey("group_order")
         val customGroups = stringPreferencesKey("custom_groups")
         val epgOverrides = stringPreferencesKey("epg_overrides")
+        /** Channel key → PictureShape name, for channels set away from Auto. */
+        val pictureShapes = stringPreferencesKey("picture_shapes")
     }
 
     // ---------- Nuvio profiles ----------
@@ -252,6 +268,7 @@ class LiveTvPreferences @Inject constructor(
             showRecentGroup = p[Keys.showRecentGroup] ?: d.showRecentGroup,
             compactRows = p[Keys.compactRows] ?: d.compactRows,
             showProgramTimes = p[Keys.showProgramTimes] ?: d.showProgramTimes,
+            showEpisodeNumbers = p[Keys.showEpisodeNumbers] ?: d.showEpisodeNumbers,
             guideSize = p[Keys.guideSize] ?: d.guideSize,
             stripeMissingGuide = p[Keys.stripeMissingGuide] ?: d.stripeMissingGuide,
             epgOffsetMinutes = p[Keys.epgOffset] ?: d.epgOffsetMinutes,
@@ -286,6 +303,7 @@ class LiveTvPreferences @Inject constructor(
             startOnLiveTv = p[Keys.startOnLiveTv] ?: d.startOnLiveTv,
             startPage = p[Keys.startPage] ?: d.startPage,
             catchupPreferHls = p[Keys.catchupPreferHls] ?: d.catchupPreferHls,
+            catchupShiftMinutes = p[Keys.catchupShift] ?: d.catchupShiftMinutes,
             parentalPin = p[Keys.parentalPin] ?: d.parentalPin,
             lockAdultContent = p[Keys.lockAdultContent] ?: d.lockAdultContent,
             showQualityBadges = p[Keys.showQualityBadges] ?: d.showQualityBadges,
@@ -293,6 +311,10 @@ class LiveTvPreferences @Inject constructor(
             onDemandInSidebar = p[Keys.onDemandInSidebar] ?: d.onDemandInSidebar,
             recordingsInSidebar = p[Keys.recordingsInSidebar] ?: d.recordingsInSidebar,
             onDemandInStreams = p[Keys.onDemandInStreams] ?: d.onDemandInStreams,
+            onDemandStreamsPosition = p[Keys.onDemandStreamsPosition] ?: d.onDemandStreamsPosition,
+            onDemandAutoPlay = p[Keys.onDemandAutoPlay] ?: d.onDemandAutoPlay,
+            searchOrder = p[Keys.searchOrder] ?: d.searchOrder,
+            searchPreview = p[Keys.searchPreview] ?: d.searchPreview,
             onDemandAddonPosters = p[Keys.onDemandAddonPosters] ?: d.onDemandAddonPosters,
             groupPlaylistHeadings = p[Keys.groupPlaylistHeadings] ?: d.groupPlaylistHeadings,
             nameRemovals = p[Keys.nameRemovals] ?: d.nameRemovals,
@@ -306,6 +328,8 @@ class LiveTvPreferences @Inject constructor(
             vodDefaultSort = p[Keys.vodDefaultSort] ?: d.vodDefaultSort,
             recordingStorage = p[Keys.recordingStorage] ?: d.recordingStorage,
             recordingSpaceRule = p[Keys.recordingSpaceRule] ?: d.recordingSpaceRule,
+            recordPreMinutes = p[Keys.recordPre] ?: d.recordPreMinutes,
+            recordPostMinutes = p[Keys.recordPost] ?: d.recordPostMinutes,
             // The row used to be on/off for the whole app. Turned off before (with no per-profile
             // choice saved yet): that was done from the main profile, so it stays off there only.
             homeRowEnabled = true,
@@ -325,7 +349,12 @@ class LiveTvPreferences @Inject constructor(
             timeshiftEnabled = p[Keys.timeshiftEnabled] ?: d.timeshiftEnabled,
             timeshiftMinutes = p[Keys.timeshiftMinutes] ?: d.timeshiftMinutes,
             rewindAlways = p[Keys.rewindAlways] ?: d.rewindAlways,
-            captionsByDefault = p[Keys.captionsByDefault] ?: d.captionsByDefault
+            captionsByDefault = p[Keys.captionsByDefault] ?: d.captionsByDefault,
+            clockMode = p[Keys.clockMode] ?: d.clockMode,
+            clockPosition = p[Keys.clockPosition] ?: d.clockPosition,
+            clockSize = p[Keys.clockSize] ?: d.clockSize,
+            clockOpacity = p[Keys.clockOpacity] ?: d.clockOpacity,
+            clockBackground = p[Keys.clockBackground] ?: d.clockBackground
         )
     }.distinctUntilChanged()
 
@@ -410,6 +439,7 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.showRecentGroup] = s.showRecentGroup
         p[Keys.compactRows] = s.compactRows
         p[Keys.showProgramTimes] = s.showProgramTimes
+        p[Keys.showEpisodeNumbers] = s.showEpisodeNumbers
         p[Keys.guideSize] = s.guideSize
         p[Keys.stripeMissingGuide] = s.stripeMissingGuide
         p[Keys.epgOffset] = s.epgOffsetMinutes
@@ -444,6 +474,7 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.startOnLiveTv] = s.startOnLiveTv
         p[Keys.startPage] = s.startPage
         p[Keys.catchupPreferHls] = s.catchupPreferHls
+        p[Keys.catchupShift] = s.catchupShiftMinutes
         p[Keys.parentalPin] = s.parentalPin
         p[Keys.lockAdultContent] = s.lockAdultContent
         p[Keys.showQualityBadges] = s.showQualityBadges
@@ -451,6 +482,10 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.onDemandInSidebar] = s.onDemandInSidebar
         p[Keys.recordingsInSidebar] = s.recordingsInSidebar
         p[Keys.onDemandInStreams] = s.onDemandInStreams
+        p[Keys.onDemandStreamsPosition] = s.onDemandStreamsPosition
+        p[Keys.onDemandAutoPlay] = s.onDemandAutoPlay
+        p[Keys.searchOrder] = s.searchOrder
+        p[Keys.searchPreview] = s.searchPreview
         p[Keys.onDemandAddonPosters] = s.onDemandAddonPosters
         p[Keys.groupPlaylistHeadings] = s.groupPlaylistHeadings
         p[Keys.nameRemovals] = s.nameRemovals
@@ -464,6 +499,8 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.vodDefaultSort] = s.vodDefaultSort
         p[Keys.recordingStorage] = s.recordingStorage
         p[Keys.recordingSpaceRule] = s.recordingSpaceRule
+        p[Keys.recordPre] = s.recordPreMinutes
+        p[Keys.recordPost] = s.recordPostMinutes
         p[Keys.homeRowEnabled] = s.homeRowEnabled
         p[Keys.homeRowHiddenProfiles] = s.homeRowHiddenProfiles.map { it.toString() }.toSet()
         p[Keys.homeRowAboveContinueWatching] = s.homeRowAboveContinueWatching
@@ -481,6 +518,11 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.timeshiftMinutes] = s.timeshiftMinutes
         p[Keys.rewindAlways] = s.rewindAlways
         p[Keys.captionsByDefault] = s.captionsByDefault
+        p[Keys.clockMode] = s.clockMode
+        p[Keys.clockPosition] = s.clockPosition
+        p[Keys.clockSize] = s.clockSize
+        p[Keys.clockOpacity] = s.clockOpacity
+        p[Keys.clockBackground] = s.clockBackground
     }
 
     // ---------- channel management ----------
@@ -556,6 +598,17 @@ class LiveTvPreferences @Inject constructor(
             val m = decodeStringMap(p[Keys.epgOverrides]).toMutableMap()
             if (assignment == null) m.remove(key) else m[key] = assignment.sourceId + EPG_SEP + assignment.xmltvId
             p[Keys.epgOverrides] = encodeStringMap(m)
+        }
+    }
+
+    /** Picture shape chosen per channel (channels left on Auto aren't listed). */
+    val pictureShapes: Flow<Map<String, String>> = store.data.map { decodeStringMap(it[Keys.pictureShapes]) }
+
+    suspend fun setPictureShape(key: String, shape: com.nuvio.tv.livetv.player.PictureShape) {
+        store.edit { p ->
+            val m = decodeStringMap(p[Keys.pictureShapes]).toMutableMap()
+            if (shape == com.nuvio.tv.livetv.player.PictureShape.AUTO) m.remove(key) else m[key] = shape.name
+            p[Keys.pictureShapes] = encodeStringMap(m)
         }
     }
 
@@ -635,6 +688,35 @@ class LiveTvPreferences @Inject constructor(
         store.edit { p ->
             val cur = p[my(Keys.vodHiddenCategories)] ?: emptySet()
             p[my(Keys.vodHiddenCategories)] = (cur - show) + hide
+        }
+    }
+
+    /** Account details per playlist (expiry, connections), as the provider last reported them. */
+    val playlistAccounts: Flow<Map<String, com.nuvio.tv.livetv.model.PlaylistAccount>> = deviceStore.data.map { p ->
+        val out = HashMap<String, com.nuvio.tv.livetv.model.PlaylistAccount>()
+        runCatching {
+            val o = JSONObject(p[Keys.playlistAccounts] ?: "{}")
+            o.keys().forEach { id ->
+                val a = o.optJSONObject(id) ?: return@forEach
+                out[id] = com.nuvio.tv.livetv.model.PlaylistAccount(
+                    expiresAtMs = a.optLong("exp"),
+                    status = a.optString("status"),
+                    maxConnections = a.optInt("max"),
+                    activeConnections = a.optInt("active"),
+                    checkedAtMs = a.optLong("checked")
+                )
+            }
+        }
+        out
+    }.distinctUntilChanged()
+
+    suspend fun setPlaylistAccount(playlistId: String, a: com.nuvio.tv.livetv.model.PlaylistAccount?) {
+        deviceStore.edit { p ->
+            val o = runCatching { JSONObject(p[Keys.playlistAccounts] ?: "{}") }.getOrDefault(JSONObject())
+            if (a == null) o.remove(playlistId)
+            else o.put(playlistId, JSONObject().put("exp", a.expiresAtMs).put("status", a.status)
+                .put("max", a.maxConnections).put("active", a.activeConnections).put("checked", a.checkedAtMs))
+            p[Keys.playlistAccounts] = o.toString()
         }
     }
 

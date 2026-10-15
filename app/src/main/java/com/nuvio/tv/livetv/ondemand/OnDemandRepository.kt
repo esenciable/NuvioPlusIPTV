@@ -145,6 +145,10 @@ class OnDemandRepository @Inject constructor(
                 .collect { OnDemandStreams.offeredInStreams = it }
         }
         scope.launch {
+            // Auto-play may pick your provider's copy only when that's on and its tab is first.
+            prefs.settings.collect { s -> OnDemandStreams.autoPlayAllowed = s.onDemandAutoPlay && s.onDemandStreamsPosition == "FIRST" }
+        }
+        scope.launch {
             // A failed check (database busy) keeps the current answer instead of hiding On Demand.
             _hasContent.value = runCatching { db.hasAny() }.getOrDefault(_hasContent.value)
             // The heavier work below waits a little, so it never competes with Nuvio's own

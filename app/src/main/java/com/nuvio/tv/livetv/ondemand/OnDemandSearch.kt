@@ -78,46 +78,37 @@ fun OnDemandSearchRow(
     upFocusRequester: FocusRequester?,
     onOpenDetail: (itemId: String, itemType: String, addonBaseUrl: String?, onDemandUid: String) -> Unit,
     onPlay: (url: String, title: String, type: String, poster: String?) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    posterCardStyle: com.nuvio.tv.ui.components.PosterCardStyle = com.nuvio.tv.ui.components.PosterCardDefaults.Style
 ) {
     val viewModel = results.viewModel ?: return
     if (results.items.isEmpty()) return
     val scope = rememberCoroutineScope()
     var providerItem by remember { mutableStateOf<VodItem?>(null) }
     var opening by remember { mutableStateOf(false) }
-    Column(modifier = modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        LiveText(
-            "On Demand",
-            modifier = Modifier.padding(start = 52.dp, bottom = 10.dp),
-            size = 20.sp,
-            weight = FontWeight.SemiBold
-        )
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 52.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            itemsIndexed(results.items, key = { _, it -> it.uid }) { index, item ->
-                OnDemandSearchCard(
-                    item = item,
-                    viewModel = viewModel,
-                    modifier = Modifier
-                        .then(if (index == 0 && entryFocusRequester != null) Modifier.focusRequester(entryFocusRequester) else Modifier)
-                        .focusProperties { if (upFocusRequester != null) up = upFocusRequester },
-                    onClick = {
-                        if (!opening) {
-                            opening = true
-                            scope.launch {
-                                try {
-                                    when (val t = viewModel.targetFor(item)) {
-                                        is OnDemandTarget.Details -> onOpenDetail(t.itemId, t.itemType, t.addonBaseUrl, t.uid)
-                                        is OnDemandTarget.Provider -> providerItem = item
-                                    }
-                                } finally { opening = false }
-                            }
+    com.nuvio.tv.livetv.ui.SearchResultsRow(title = "On Demand", modifier = modifier) {
+        itemsIndexed(results.items, key = { _, it -> it.uid }) { index, item ->
+            OnDemandSearchCard(
+                item = item,
+                viewModel = viewModel,
+                posterCardStyle = posterCardStyle,
+                modifier = Modifier
+                    .then(if (index == 0 && entryFocusRequester != null) Modifier.focusRequester(entryFocusRequester) else Modifier)
+                    .focusProperties { if (upFocusRequester != null) up = upFocusRequester },
+                onClick = {
+                    if (!opening) {
+                        opening = true
+                        scope.launch {
+                            try {
+                                when (val t = viewModel.targetFor(item)) {
+                                    is OnDemandTarget.Details -> onOpenDetail(t.itemId, t.itemType, t.addonBaseUrl, t.uid)
+                                    is OnDemandTarget.Provider -> providerItem = item
+                                }
+                            } finally { opening = false }
                         }
                     }
-                )
-            }
+                }
+            )
         }
     }
     providerItem?.let { item ->
@@ -133,76 +124,29 @@ fun OnDemandSearchRow(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+/** One On Demand result, drawn like Nuvio's addon results: poster, title, "Movie · 2024". */
 @Composable
 private fun OnDemandSearchCard(
     item: VodItem,
     viewModel: OnDemandViewModel,
+    posterCardStyle: com.nuvio.tv.ui.components.PosterCardStyle,
     modifier: Modifier,
     onClick: () -> Unit
 ) {
-    var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(liveCorner())
-    val colors = liveCellColors(focused = focused, idle = guideSurface())
     val poster by produceState<String?>(initialValue = item.icon, item.uid) {
         // Give Nuvio's own addon search a head start, so poster lookups never compete with it.
         delay(2_000)
         runCatching { viewModel.posterFor(item) }.getOrNull()?.let { value = it }
     }
-    Column(
-        modifier = modifier
-            .width(150.dp)
-            .clip(shape)
-            .background(colors.background)
-            .border(2.dp, colors.border, shape)
-            .onFocusChanged { focused = it.isFocused }
-            .combinedClickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick
-            )
-            .padding(6.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(206.dp)
-                .clip(RoundedCornerShape(7.dp))
-                .background(guideSurfaceVariant()),
-            contentAlignment = Alignment.Center
-        ) {
-            if (!poster.isNullOrBlank()) {
-                AsyncImage(
-                    model = poster,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                LiveText(
-                    OnDemandDatabase.displayTitle(item.name),
-                    size = 14.sp,
-                    color = NuvioTheme.colors.TextSecondary,
-                    maxLines = 3,
-                    modifier = Modifier.padding(10.dp)
-                )
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-        LiveText(
-            OnDemandDatabase.displayTitle(item.name),
-            size = 14.sp,
-            weight = FontWeight.SemiBold,
-            color = colors.text,
-            marquee = focused
-        )
-        LiveText(
-            listOfNotNull(
-                if (item.kind == VodKind.SERIES) "Series" else "Movie",
-                item.year?.toString()
-            ).joinToString(" · "),
-            size = 12.sp,
-            color = NuvioTheme.colors.TextSecondary
-        )
-    }
+    com.nuvio.tv.livetv.ui.SearchResultCard(
+        title = OnDemandDatabase.displayTitle(item.name),
+        lines = listOf(
+            listOfNotNull(if (item.kind == VodKind.SERIES) "Series" else "Movie", item.year?.toString()).joinToString(" · ")
+        ),
+        poster = poster,
+        logo = null,
+        posterCardStyle = posterCardStyle,
+        modifier = modifier,
+        onClick = onClick
+    )
 }

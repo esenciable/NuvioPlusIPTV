@@ -66,7 +66,7 @@ import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private enum class PlayerDialog { NONE, OPTIONS, AUDIO, SUBTITLES, SCREEN_SIZE, STREAM_INFO, SLEEP }
+private enum class PlayerDialog { NONE, OPTIONS, AUDIO, SUBTITLES, SCREEN_SIZE, PICTURE_SHAPE, STREAM_INFO, SLEEP }
 
 /** The picture size saved in settings, as one of Nuvio's own player modes. */
 internal fun aspectModeOf(name: String): com.nuvio.tv.ui.screens.player.AspectMode =
@@ -89,6 +89,8 @@ fun LiveTvPlayerScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val playback by viewModel.playbackState.collectAsStateWithLifecycle()
     val user by viewModel.userState.collectAsStateWithLifecycle()
+    val pictureShapes by viewModel.pictureShapes.collectAsStateWithLifecycle()
+    val pictureShape = com.nuvio.tv.livetv.player.PictureShape.of(playback.channelKey?.let { pictureShapes[it] })
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val programs by viewModel.programs.collectAsStateWithLifecycle()
     val recordings by viewModel.recordings.collectAsStateWithLifecycle()
@@ -414,7 +416,8 @@ fun LiveTvPlayerScreen(
             modifier = Modifier.fillMaxSize(),
             useSurfaceView = true,
             onAttached = { viewModel.playback.onSurfaceAttached() },
-            aspectMode = aspectModeOf(settings.aspectMode)
+            aspectMode = aspectModeOf(settings.aspectMode),
+            pictureShape = pictureShape
         )
 
         // Status in the middle of the screen. "Loading…" only for channels that are actually
@@ -455,6 +458,13 @@ fun LiveTvPlayerScreen(
         LaunchedEffect(bannerToken, panelFull, pausedNow) {
             if (panelFull && !pausedNow) { delay(10_000); closeFull(); bannerVisible = false }
         }
+        // The always-on corner clock, out of the way while the panel, channel list or a menu is
+        // up (the panel shows the time itself).
+        OnScreenClock(
+            settings = settings,
+            visible = current != null && !(bannerVisible || panelFull || pausedNow) && !listVisible &&
+                dialog == PlayerDialog.NONE
+        )
         AnimatedVisibility(
             visible = (bannerVisible || panelFull || pausedNow) && current != null,
             enter = slideInVertically { it } + fadeIn(),
@@ -538,7 +548,7 @@ fun LiveTvPlayerScreen(
                     full = panelFull || pausedNow,
                     title = watchingTitle ?: ch.name,
                     meta = listOfNotNull(
-                        showProgram?.episode,
+                        showProgram?.episode?.takeIf { settings.showEpisodeNumbers },
                         showProgram?.category,
                         about?.let { aboutLine(it) }?.takeIf { it.isNotBlank() }
                     ).joinToString("  ·  "),
@@ -554,7 +564,7 @@ fun LiveTvPlayerScreen(
                     // The same words as the Screen size list (Fit, Crop, Cinema Zoom…).
                     sizeLabel = context.getString(aspectModeOf(settings.aspectMode).labelResId),
                     sleepLabel = sleepAt?.let { at -> "Sleep " + ((at - tick).coerceAtLeast(0) / 60_000 + 1) + "m" },
-                    clock = formatClock(tick, use24h),
+                    clock = if (settings.clockMode == "never") "" else formatClock(tick, use24h),
                     resolution = if (playback.videoHeight > 0) "${playback.videoHeight}p" else null,
                     showNumber = settings.showChannelNumbers,
                     nextTitle = nextUp?.title?.let { titleMarks(it).title },
@@ -624,6 +634,8 @@ fun LiveTvPlayerScreen(
                 channel = ch,
                 isFavorite = ch.key in user.favorites,
                 aspectLabel = context.getString(aspectModeOf(settings.aspectMode).labelResId),
+                shapeLabel = viewModel.pictureShapeOf(ch.key).label,
+                onShape = { dialog = PlayerDialog.PICTURE_SHAPE },
                 archive = playback.catchupTitle != null,
                 canRestart = playback.catchupTitle == null && viewModel.canWatchFromStart(ch),
                 onRestart = { dialog = PlayerDialog.NONE; viewModel.watchFromStart(ch); showBanner() },
@@ -678,6 +690,7 @@ fun LiveTvPlayerScreen(
             StreamInfoDialog(
                 player = viewModel.playback.player,
                 channel = current,
+                shape = viewModel.pictureShapeOf(current.key),
                 onDismiss = { dialog = PlayerDialog.NONE; scope.launch { delay(60); runCatching { rootFocus.requestFocus() } } }
             )
         }
@@ -702,6 +715,19 @@ fun LiveTvPlayerScreen(
             },
             onDismiss = { dialog = PlayerDialog.NONE }
         )
+        PlayerDialog.PICTURE_SHAPE -> current?.let { ch ->
+            PictureShapeDialog(
+                selected = viewModel.pictureShapeOf(ch.key),
+                onPick = { shape ->
+                    // Remembered for this channel only.
+                    viewModel.setPictureShape(ch.key, shape)
+                    toast = "Picture shape: ${shape.label}"
+                    dialog = PlayerDialog.NONE
+                    scope.launch { delay(60); runCatching { rootFocus.requestFocus() } }
+                },
+                onDismiss = { dialog = PlayerDialog.NONE }
+            )
+        } ?: run { dialog = PlayerDialog.NONE }
         PlayerDialog.NONE -> Unit
     }
     }
@@ -770,7 +796,7 @@ private fun InfoBanner(
                     )
                     Spacer(Modifier.width(20.dp))
                     resolution?.let { LiveText(it, color = NuvioTheme.colors.TextSecondary, size = 14.sp, modifier = Modifier.padding(end = 14.dp)) }
-                    LiveText(clock, size = 20.sp, weight = FontWeight.SemiBold)
+                    if (clock.isNotEmpty()) LiveText(clock, size = 20.sp, weight = FontWeight.SemiBold)
                 }
                 if (meta.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
@@ -808,6 +834,8 @@ private fun PlayerOptionsDialog(
     channel: LiveChannel,
     isFavorite: Boolean,
     aspectLabel: String,
+    shapeLabel: String,
+    onShape: () -> Unit,
     archive: Boolean,
     canRestart: Boolean,
     onRestart: () -> Unit,
@@ -846,6 +874,7 @@ private fun PlayerOptionsDialog(
             currentTitle?.let { t -> MenuItem("Find & stream \"$t\" in Nuvio", onClick = { onFind(t) }) }
             MenuItem("Subtitles", onClick = onSubtitles)
             MenuItem("Screen size: $aspectLabel", onClick = onAspect)
+            MenuItem("Picture shape: $shapeLabel", onClick = onShape)
             MenuItem(if (isFavorite) "Remove from favorites" else "Add to favorites", onClick = onFavorite)
             MenuItem("Previous channel", onClick = onPrevious)
             MenuItem("Stream info", onClick = onStreamInfo)
@@ -923,6 +952,45 @@ private fun ScreenSizeDialog(
     LaunchedEffect(Unit) { delay(60); runCatching { first.requestFocus() } }
 }
 
+/**
+ * Picture shape for this channel: fixes movies that come out tall and squashed because the
+ * stream says its pixels are narrower than they are.
+ */
+@Composable
+private fun PictureShapeDialog(
+    selected: com.nuvio.tv.livetv.player.PictureShape,
+    onPick: (com.nuvio.tv.livetv.player.PictureShape) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val first = remember { FocusRequester() }
+    val notes = mapOf(
+        com.nuvio.tv.livetv.player.PictureShape.AUTO to "Fixes HD channels that look stretched tall",
+        com.nuvio.tv.livetv.player.PictureShape.REAL to "Always use the picture's real size",
+        com.nuvio.tv.livetv.player.PictureShape.STREAM to "Always do what the stream says"
+    )
+    LiveDialog(onDismiss = onDismiss, width = 460.dp) {
+        LiveText("Picture shape", size = 20.sp, weight = FontWeight.Bold)
+        LiveText("Remembered for this channel", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
+        Spacer(Modifier.height(12.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            com.nuvio.tv.livetv.player.PictureShape.entries.forEach { shape ->
+                val isSelected = shape == selected
+                LiveFocusRow(
+                    modifier = Modifier.fillMaxWidth().then(if (isSelected) Modifier.focusRequester(first) else Modifier),
+                    selected = isSelected,
+                    onClick = { onPick(shape) }
+                ) { f ->
+                    Column {
+                        LiveText((if (isSelected) "✓  " else "") + shape.label, color = focusedTextColor(f))
+                        notes[shape]?.let { LiveText(it, color = focusedTextColor(f).copy(alpha = 0.7f), size = 12.sp) }
+                    }
+                }
+            }
+        }
+    }
+    LaunchedEffect(Unit) { delay(60); runCatching { first.requestFocus() } }
+}
+
 /** Where you are in a catch-up program: time into it, a bar you can scrub, and the end time. */
 @Composable
 private fun CatchupSeekBar(
@@ -986,7 +1054,12 @@ private fun formatDuration(ms: Long): String {
 
 /** Resolution, frame rate, codecs and bitrate of what's playing. */
 @Composable
-private fun StreamInfoDialog(player: androidx.media3.common.Player?, channel: LiveChannel, onDismiss: () -> Unit) {
+private fun StreamInfoDialog(
+    player: androidx.media3.common.Player?,
+    channel: LiveChannel,
+    shape: com.nuvio.tv.livetv.player.PictureShape = com.nuvio.tv.livetv.player.PictureShape.AUTO,
+    onDismiss: () -> Unit
+) {
     val exo = player as? androidx.media3.exoplayer.ExoPlayer
     val v = exo?.videoFormat
     val a = exo?.audioFormat
@@ -994,6 +1067,19 @@ private fun StreamInfoDialog(player: androidx.media3.common.Player?, channel: Li
         add("Channel" to "${channel.number}  ${channel.name}")
         v?.let { f ->
             if (f.width > 0) add("Resolution" to "${f.width} × ${f.height}" + qualityName(f.height)?.let { "  ($it)" }.orEmpty())
+            val size = exo?.videoSize ?: androidx.media3.common.VideoSize.UNKNOWN
+            val par = if (size.width > 0) size.pixelWidthHeightRatio else f.pixelWidthHeightRatio
+            val w = if (size.width > 0) size.width else f.width
+            val h = if (size.height > 0) size.height else f.height
+            com.nuvio.tv.livetv.player.LivePictureShape.aspect(w, h, par, shape)?.let { aspect ->
+                val pic = com.nuvio.tv.livetv.player.LivePictureShape
+                val note = when {
+                    pic.ignoresFlag(w, par, shape) -> "  (stream's shape ignored: it says ${pic.ratioText(w * par / h)})"
+                    pic.hasFlag(par) -> "  (stream's shape)"
+                    else -> ""
+                }
+                add("Shape" to "${pic.ratioText(aspect)}$note")
+            }
             if (f.frameRate > 0f) add("Frame rate" to "%.2f fps".format(f.frameRate).replace(".00", ""))
             add("Video" to listOfNotNull(f.sampleMimeType?.substringAfter('/'), f.codecs).joinToString(" · ").ifBlank { "Unknown" })
             val br = if (f.bitrate > 0) f.bitrate else f.averageBitrate

@@ -2,7 +2,7 @@
 
 # Nuvio + IPTV
 
-**Everything in Nuvio, plus everything IPTV: a TiviMate-style Live TV guide, catch-up, and your provider's movies and series, all in one app for Google TV, Android TV and Fire TV.**
+**Everything in Nuvio, plus everything IPTV: a TiviMate-style Live TV guide, catch-up, recordings, and your provider's movies and series, all in one app for Google TV, Android TV and Fire TV.**
 
 [![Latest release](https://img.shields.io/github/v/release/homelessbrian/NuvioTV?include_prereleases&label=latest&style=for-the-badge)](https://github.com/homelessbrian/NuvioTV/releases)
 [![Downloads](https://img.shields.io/github/downloads/homelessbrian/NuvioTV/total?style=for-the-badge)](https://github.com/homelessbrian/NuvioTV/releases)
@@ -15,38 +15,27 @@
 
 ---
 
-## 📛 New name: Nuvio + IPTV
-
-**Nuvio w/ Live TV is now Nuvio + IPTV.** The app has grown well beyond Live TV, with On Demand, catch-up, reminders and much more, so it now has a name that says what it does: **Nuvio, plus IPTV**.
-
-**Nothing changes for you.** It's the same app, updated the usual way inside the app. Your playlists, favorites, settings and Google Drive sync all stay exactly as they are. You'll just see the new name under the app icon and on the loading screen.
-
----
-
 ## 🆕 What's new
 
-**Now based on Nuvio 1.1.0-beta.4.**
+**Now based on Nuvio 1.1.0-beta.6.**
 
-- **Live TV row on the home screen:**
-  - **What it shows:** your favorite channels with what's on now, in a slim row next to Continue watching.
-  - **Make it your own:** put it above or below Continue watching, pick what it shows, rename it, change its order and size, or hide it completely.
-- **Instant start:**
-  - **Live TV opens straight away,** with your channels and Favorites.
-  - **The TV guide is stored on the device like TiviMate's,** so it appears instantly however large it is, and uses much less memory.
-- **On Demand:**
-  - **Browse by genre** (filled in automatically from TMDB).
-  - **A Sort by menu.**
-  - **Duplicates merged:** with **a version picker** (4K, HD and so on) when you press Play.
-  - **Cleaner titles and better posters:** provider tags like "EN - " or "4K-D+ - " are removed.
+- **Search, your way:**
+  - **Choose the order** of Live TV, On Demand and addon results in **Settings → Live TV → Search & Streams**.
+  - **One look everywhere:** Live TV and On Demand results now look just like addon results.
+  - **Preview behind search:** pick a live channel and it plays in the background while you keep searching.
+- **On Demand in the streams list:** put the On Demand tab first, after your first addon, or last, and let auto-play choose it if you want.
+- **On-screen clock:** always shown, only with the player controls, or never, with your choice of corner, size and opacity.
+- **Picture shape:** 24/7 movie channels that looked stretched tall now show at their real shape with black bars. You can also set the shape yourself for each channel.
+- **Recordings:**
+  - **Choose how early recordings start and how long they run after the show.**
+  - **See how much space each recording takes**, and hold OK on a recording for its full details.
+  - **Skip through recordings that are still recording.**
 - **Catch-up:**
-  - **It keeps playing into the next show,** so shows that run over aren't cut off.
-  - **Watch from the beginning** works from the guide.
-  - **Fixed replays starting an hour off** on some providers.
-- **Fixes and polish:**
-  - **"Playback unavailable"** on titles only your provider has
-  - **A frozen picture** when going full screen
-  - **Easier Assign EPG**
-  - **Hold Back** works on all remotes
+  - **Catch-up Time Shift** for providers whose catch-up is an hour or more off.
+  - **More ways to load a show** when the first one fails, and a clear message instead of endless loading.
+- **Playlist expiry:** see when each account runs out, with a warning when it's a week or less away.
+- **Guide Size now applies to overlay mode too,** and episode numbers can be hidden.
+- **Better posters:** sports games show the channel logo instead of random movie posters, and more shows get posters.
 
 ---
 
@@ -54,12 +43,13 @@
 
 ### 📺 A proper TV guide
 - **TiviMate-style guide:** channels down the side, a timeline across, and a line marking "now" (which you can hide). It fits **8 or more channels** on screen.
+- **Guide Size:** Compact, Standard, Large or Extra Large. It sets the size of overlay mode too.
 - **Group list:**
   - **Opening it:** it slides out with a tap of Left.
   - **Grouping:** optionally grouped by playlist.
   - **Browse by channel name** (satellite-box style).
 - **Info panel** with the show's poster (or just the channel logo, if you prefer), time left, description, the playlist it comes from, and a live preview window.
-- **Make room for more channels:** compact rows, a smaller info panel, and hiding numbers, logos or names.
+- **Make room for more channels:** a smaller info panel, and hiding numbers, logos, names or episode numbers.
 - **Badges:** catch-up icons on channels that support it, and 4K / FHD / HD / SD badges on channels you've watched.
 
 ### 🎬 Overlay mode (while watching)
@@ -71,40 +61,54 @@
 - **Xtream Codes logins:**
   - **Pick what to include:** TV channels, movies & series, or both.
   - **Stream format:** Auto, TS or HLS.
+  - **Account details:** expiry date, status and connections in use, with a warning before it runs out.
 - **Smart guide matching:** real listings always beat "Programming" placeholders. Fine-tune any channel with **Assign EPG**.
 - **Catch-up:**
   - **Watch past shows** with a seek bar, or **restart what's on now**.
   - **Follow-on playback:** carries straight on into the next show.
+  - **Guide time shift** and **Catch-up time shift** for providers that are off by an hour or more.
 - **Channel name editor** (like TiviMate): strip "USA:", "HD", "24/7" and similar from channel names.
+
+### ⏺️ Recordings
+- **Record a show, or a whole series,** from the guide. Shows on catch-up channels are saved from catch-up after they end, which is the most reliable way.
+- **Save to this device or a USB drive.** Choose what happens when space runs low: stop recording, or delete the oldest.
+- **Choose the padding:** how early recordings start and how long they keep going after the show.
+- **Recordings carry on with the app closed or the box in standby**, and catch-up saves wait for the connection to come back.
+- **Watch while it records,** with skipping back and forward.
+- **Size and details** for every recording: channel, air time, length, size and where it's saved.
 
 ### 🗂️ Channel management
 - **Manage visibility** and **reorder** for channels *and* groups.
 - **Copy, rename and renumber** channels, **create your own groups,** and **number channels 1, 2, 3…** in each group.
+- **Channel numbers from your playlist** are used when it has them.
 - **Favorites** and **Recently watched,** with sorting that works everywhere.
 
 ### 🎞️ On Demand
 - **What it is:** movies and series from your Xtream providers, with **categories or genres**, **Recently added**, **Search** and **Sort by**.
-- **Your posters, not the provider's:** posters and details come from your own addons. Matched titles open on Nuvio's normal details page.
-- **📡 On Demand** in Nuvio's stream list, with quality, codec and audio badges. Play on a title opened from On Demand plays your provider's copy straight away; long-press Play for every stream.
+- **Your posters, not the provider's:** posters and details come from your own addons. Matched titles open on Nuvio's normal details page, with watched marks and the usual long-press menu.
+- **📡 On Demand** in Nuvio's stream list, with quality, codec and audio badges. Choose where its tab goes, and whether auto-play may pick it.
 - **Each title once:** duplicates are merged, and a picker lets you choose the version when there are several.
 
 ### 🔔 Watching
 - **Zap** with Up/Down, type a channel number, or jump to the **last channel**.
+- **Pause and rewind live TV**, even on channels without catch-up.
 - **Reminders:** "Remind me" on any upcoming show, with a pop-up and a Watch button.
-- **Player menu:** audio, **closed captions**, screen size, stream info, **sleep timer**, find & stream, and watch from the beginning.
+- **Player menu:** audio, **closed captions**, screen size, **picture shape**, stream info, **sleep timer**, record, find & stream, and watch from the beginning.
+- **On-screen clock** in any corner, if you want one.
 - **Smooth playback:**
   - **Match frame rate** and **audio passthrough** settings.
-  - **Auto-reconnect,** plus automatic recovery from frozen or stuck streams.
+  - **Auto-reconnect,** plus automatic recovery from frozen or stuck streams, with the reason shown when a stream fails.
 
 ### 🔒 Parental controls
 - **PIN locks:** a PIN that locks any group or category. Adult content locks automatically.
 
 ### 🔎 Part of Nuvio, not bolted on
-- **In the side menu:** Live TV and On Demand sit in Nuvio's side menu, with their settings inside Nuvio's own Settings.
+- **In the side menu:** Live TV, On Demand and Recordings sit in Nuvio's side menu, with their settings inside Nuvio's own Settings.
 - **Start page:** open the app on Home, Live TV, On Demand and more.
+- **Home screen row:** your favorite channels and what's on now, next to Continue watching.
 - **Live TV in Nuvio search:**
-  - **From the menu:** search shows everything.
-  - **From Live TV:** search shows only Live TV.
+  - **Your order:** choose which results come first.
+  - **Preview behind search:** live channels play in the background while you search.
 - **Find & stream in Nuvio:** see a movie in the guide, and stream it through your own addons and debrid.
 - **Google Drive sync:** your setup on every TV, combined correctly when you use more than one.
 
@@ -132,12 +136,13 @@ Requires **Android 7.0 or newer** (Fire OS 6 or later). It installs **alongside*
 ## 🚀 Getting started
 
 1. Open **Settings → Live TV**.
-2. Choose **Add M3U playlist** or **Add Xtream Codes login**. For Xtream, pick **Include TV channels** and/or **Include movies & series**.
-3. Optionally **Add EPG source** for an extra TV guide.
+2. Choose **Add M3U Playlist** or **Add Xtream Codes Login**. For Xtream, pick **Include TV channels** and/or **Include movies & series**.
+3. Optionally **Add EPG Source** for an extra TV guide.
 4. Open **Live TV** or **On Demand** from the side menu. The first load can take a minute on big providers; a small progress bubble shows what's happening.
 5. Optional, all in **Settings → Live TV**:
    - set a **Start page**
    - turn on the **home screen row**
+   - choose where recordings are saved under **Recordings**
    - set a parental **PIN**
    - turn on **Google Drive sync**
 
@@ -149,13 +154,13 @@ Requires **Android 7.0 or newer** (Fire OS 6 or later). It installs **alongside*
 | Button | Action |
 |---|---|
 | **OK** on what's on now | Play in the preview · again for full screen |
-| **OK** on a later show | Show info · **Remind me** |
+| **OK** on a later show | Show info · **Remind me** · **Record** |
 | **OK** on an earlier show | Play from catch-up |
 | **◀** (tap) on what's on now | Open the groups |
 | **◀** (hold) | Scroll back through earlier shows (catch-up channels) |
 | **▲ / ▼** · **CH+ / CH−** | Channels · page up / down |
 | **0–9** | Jump to a channel number |
-| **Long-press OK** | Channel menu: favorites, **Remind me**, **Watch from the beginning**, hide, **Manage visibility**, **Reorder**, **Copy**, rename, renumber, **Assign EPG** |
+| **Long-press OK** | Channel menu: favorites, **Remind me**, **Record**, **Watch from the beginning**, hide, **Manage visibility**, **Reorder**, **Copy**, rename, renumber, **Assign EPG** |
 | **Hold Back** or **Play/Pause** | Back to full screen on what's playing |
 | **Back** | Back to "now" → the group list → the side menu |
 
@@ -163,10 +168,10 @@ Requires **Android 7.0 or newer** (Fire OS 6 or later). It installs **alongside*
 | Button | Action |
 |---|---|
 | **▲ / ▼**, **CH+ / CH−** | Next / previous channel |
-| **OK** | Info bar (catch-up: pause / play) |
+| **OK** | Info panel (catch-up: pause / play) |
 | **◀** | Overlay mode (catch-up: skip back) |
 | **▶** | Catch-up: skip forward (hold to skip faster) |
-| **Long-press OK** or **Menu** | Audio, subtitles, screen size, stream info, sleep timer, watch from the beginning, find & stream |
+| **Long-press OK** or **Menu** | Audio, subtitles, screen size, picture shape, stream info, sleep timer, record, watch from the beginning, find & stream |
 | **Back** | Back to the guide |
 
 ### On Demand
@@ -175,7 +180,14 @@ Requires **Android 7.0 or newer** (Fire OS 6 or later). It installs **alongside*
 | **▲ / ▼** in the categories | Browse; each category opens as you highlight it |
 | **▶** from the categories | Into the posters (the categories slide away) |
 | **◀** from the first column, or **Back** | Categories again |
+| **Long-press a poster** | Details, library and watched options |
 | **Long-press a category** | Manage visibility · Lock with PIN |
+
+### Recordings
+| Button | Action |
+|---|---|
+| **OK** | Play (or resume) |
+| **Long-press OK** | Play from the beginning, stop recording, **Information**, delete |
 
 ---
 
@@ -191,17 +203,13 @@ Please search [existing issues](https://github.com/homelessbrian/NuvioTV/issues)
 
 **If the app crashes,** scan the QR code on the crash screen with your phone and paste the text into your report.
 
+**If something doesn't load** (a playlist, the guide or catch-up), open **Settings → Live TV → Help → Start-Up Report** and include it in your report. Usernames and passwords are hidden in it.
+
 Problems with Nuvio's movies, shows, addons or accounts that also happen in the official app belong with [Nuvio](https://github.com/NuvioMedia/NuvioTV/issues).
 
 ---
 
 ## ❓ FAQ
-
-<details>
-<summary><b>Why the new name?</b></summary>
-
-The app started as Nuvio with Live TV added. It now also has On Demand, catch-up, reminders, parental controls and more, so "Nuvio + IPTV" describes it better. Nothing about how it works or updates has changed.
-</details>
 
 <details>
 <summary><b>Does this include any channels or movies?</b></summary>
@@ -222,15 +230,33 @@ Long-press the channel and choose **Assign EPG**. Press Left to search, or pick 
 </details>
 
 <details>
-<summary><b>Catch-up plays the wrong show (an hour off).</b></summary>
+<summary><b>Catch-up plays the wrong show (an hour or more off).</b></summary>
 
-Update to the latest version, then run **Update now** on that playlist once. Catch-up now uses your provider's time zone.
+Run **Update now** on that playlist once, so the app learns your provider's time zone. If it's still off, set **Catch-Up Time Shift** under **Settings → Live TV → Watching**.
+</details>
+
+<details>
+<summary><b>A channel looks stretched or squashed.</b></summary>
+
+Long-press OK while it's playing and choose **Picture shape**. Try **Use real size**; the app remembers it for that channel. **Screen size** in the same menu changes how the picture fills the screen on every channel.
+</details>
+
+<details>
+<summary><b>My USB drive doesn't show up for recordings.</b></summary>
+
+Open **Save Recordings To** under **Settings → Live TV → Recordings**. Drives the app can't use are listed with the reason, usually that the drive is formatted as NTFS (read-only on most TV boxes) or isn't set up as storage yet. **Drive Not Listed?** in the same list explains what to do.
+</details>
+
+<details>
+<summary><b>Will recordings work if I close the app or turn the TV off?</b></summary>
+
+Yes, as long as the box is in standby and not fully powered off or unplugged. Shows on catch-up channels are saved from catch-up after they end, and they're retried when the connection comes back.
 </details>
 
 <details>
 <summary><b>Sound cuts out or stops on Fire TV with Echo speakers.</b></summary>
 
-Turn off **Audio passthrough** under **Settings → Live TV → Playback**.
+Turn off **Audio passthrough** under **Settings → Live TV → Watching**.
 </details>
 
 <details>

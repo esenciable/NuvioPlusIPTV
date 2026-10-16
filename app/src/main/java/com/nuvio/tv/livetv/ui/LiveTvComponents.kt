@@ -181,73 +181,22 @@ internal fun focusedSecondaryTextColor(focused: Boolean): Color =
     if (focused && LocalLiveSolidHighlight.current) NuvioTheme.colors.OnSecondary.copy(alpha = 0.8f)
     else NuvioTheme.colors.TextSecondary
 
-/** Logos already checked (by address): true = mostly dark, so it gets a light backing. */
-private val darkLogos = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
-
-/**
- * True when a see-through logo is mostly dark (black or navy lettering), which would disappear
- * on the guide's dark background. Looks at a grid of points, counting only the visible ones.
- */
-private fun isMostlyDark(bitmap: android.graphics.Bitmap?): Boolean {
-    if (bitmap == null || bitmap.width < 2 || bitmap.height < 2) return false
-    val steps = 24
-    var seen = 0
-    var lum = 0.0
-    var transparent = 0
-    for (yi in 0 until steps) for (xi in 0 until steps) {
-        val px = bitmap.getPixel(xi * (bitmap.width - 1) / (steps - 1), yi * (bitmap.height - 1) / (steps - 1))
-        val a = android.graphics.Color.alpha(px)
-        if (a < 64) { transparent++; continue }
-        seen++
-        lum += (0.2126 * android.graphics.Color.red(px) + 0.7152 * android.graphics.Color.green(px) + 0.0722 * android.graphics.Color.blue(px)) / 255.0
-    }
-    // Logos on their own solid background (no see-through parts) already show fine.
-    if (seen < 12 || transparent < steps) return false
-    return lum / seen < 0.30
-}
-
 /**
  * A channel logo, fitted (not cropped) into a wide box: logos are usually see-through pictures
- * of any shape. Dark ones get a soft light backing so they stay visible.
+ * of any shape. Shown as they are, with nothing behind them.
  */
 @Composable
 internal fun ChannelLogo(url: String?, size: Dp, modifier: Modifier = Modifier) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var dark by remember(url) { mutableStateOf(url?.let { darkLogos[it] } ?: false) }
     Box(
         modifier = modifier.size(width = size * 1.6f, height = size),
         contentAlignment = Alignment.Center
     ) {
         if (!url.isNullOrBlank()) {
-            // A plain (not hardware) picture only the first time, so its colors can be checked
-            // once. After that the normal (hardware) kind: plain pictures for every logo filled
-            // the app's memory as you scrolled, and the clean-ups that followed made the video
-            // stutter.
-            val known = darkLogos.containsKey(url)
-            val request = remember(url, known) {
-                coil3.request.ImageRequest.Builder(context).data(url).allowHardware(known).build()
-            }
             AsyncImage(
-                model = request,
+                model = url,
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
-                onSuccess = { state ->
-                    if (darkLogos[url] == null) {
-                        val isDark = runCatching { isMostlyDark((state.result.image as? coil3.BitmapImage)?.bitmap) }.getOrDefault(false)
-                        darkLogos[url] = isDark
-                        dark = isDark
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(
-                        if (dark) Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(Color.White.copy(alpha = 0.9f))
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                        else Modifier
-                    )
-                    .padding(2.dp)
+                modifier = Modifier.fillMaxSize().padding(2.dp)
             )
         }
     }

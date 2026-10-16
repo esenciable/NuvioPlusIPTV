@@ -59,6 +59,7 @@ class LiveTvRepository @Inject constructor(
     private val guideDb: EpgDatabase
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private val mutex = Mutex()
 
     private val http: OkHttpClient = OkHttpClient.Builder()

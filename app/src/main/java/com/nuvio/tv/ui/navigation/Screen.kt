@@ -146,6 +146,9 @@ sealed class Screen(val route: String) {
     /** Live TV fork: recorded shows. */
     data object Recordings : Screen("recordings")
     data object Tracking : Screen("trakt")
+    data object WatchParty : Screen("watch_party?code={code}") {
+        fun createRoute(code: String = ""): String = "watch_party?code=$code"
+    }
     data object TmdbSettings : Screen("tmdb_settings")
     data object ThemeSettings : Screen("theme_settings")
     data object PlaybackSettings : Screen("playback_settings")

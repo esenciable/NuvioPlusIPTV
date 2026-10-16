@@ -134,9 +134,32 @@ fun LiveTvPlayerScreen(
 
     // The bottom panel's controls (Down while it's showing): which one is highlighted.
     var controlFocus by remember { mutableStateOf<PanelControl?>(null) }
+    /** The highlighted tile in the full panel's Recent row (0 TV Guide, 1… channels, then Clear), or null. */
+    var recentFocus by remember { mutableStateOf<Int?>(null) }
     // The full panel (OK): timeline, buttons and options. Changing channels shows the compact one.
     var panelFull by remember { mutableStateOf(false) }
-    fun closeFull() { panelFull = false; controlFocus = null }
+    fun closeFull() { panelFull = false; controlFocus = null; recentFocus = null }
+
+    // Channel surfing (Settings → Live TV → Watching): the channel being looked at on the info
+    // bar while the one playing carries on, or null when not browsing.
+    var browseKey by remember { mutableStateOf<String?>(null) }
+    var lastBrowseStepAt by remember { mutableStateOf(0L) }
+    // OK picked a channel: its release mustn't also open the full panel.
+    var swallowOkUp by remember { mutableStateOf(false) }
+    LaunchedEffect(bannerVisible) { if (!bannerVisible) browseKey = null }
+    LaunchedEffect(playback.channelKey) { browseKey = null }
+    /** One step while browsing; held, at a steady pace (4 a second, then 8 after 2 seconds). */
+    fun browseStep(direction: Int, e: androidx.compose.ui.input.key.KeyEvent) {
+        val n = e.nativeKeyEvent
+        if (n.repeatCount > 0) {
+            val held = n.eventTime - n.downTime
+            val gap = if (held < 2_000) 250L else 125L
+            if (n.eventTime - lastBrowseStepAt < gap) return
+        }
+        lastBrowseStepAt = n.eventTime
+        viewModel.zap(browseKey ?: playback.channelKey, direction)?.let { browseKey = it.key }
+        showBanner()
+    }
     val shiftStartedAt by viewModel.playback.shiftStartedAt.collectAsStateWithLifecycle()
     var captionsOn by remember { mutableStateOf(false) }
     LaunchedEffect(playback.channelKey, bannerVisible) { captionsOn = viewModel.playback.captionsOn() }
@@ -255,8 +278,65 @@ fun LiveTvPlayerScreen(
             .onPreviewKeyEvent { e ->
                 if (listVisible || dialog != PlayerDialog.NONE) return@onPreviewKeyEvent false
                 val isOk = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
+                // ---- channel surfing: OK watches the channel on the bar, Back stays put
+                if (swallowOkUp && isOk) {
+                    if (e.type == KeyEventType.KeyUp) swallowOkUp = false
+                    return@onPreviewKeyEvent true
+                }
+                val bk = browseKey
+                if (bk != null && controlFocus == null && e.type == KeyEventType.KeyDown) {
+                    if (isOk && e.nativeKeyEvent.repeatCount == 0) {
+                        browseKey = null
+                        swallowOkUp = true
+                        viewModel.channelByKey(bk)?.takeIf { it.key != playback.channelKey }?.let { viewModel.preview(it) }
+                        showBanner()
+                        return@onPreviewKeyEvent true
+                    }
+                    if (e.key == Key.Back) {
+                        (context as? com.nuvio.tv.MainActivity)?.longPressBackHeld?.value = true
+                        browseKey = null
+                        bannerVisible = false
+                        return@onPreviewKeyEvent true
+                    }
+                }
                 val archive = playback.catchupTitle != null
                 val shifting = shiftStartedAt != null
+                // ---- the Recent row (Down from the panel's buttons)
+                val rf = recentFocus
+                if (rf != null && controlFocus != null) {
+                    if (e.type == KeyEventType.KeyUp) return@onPreviewKeyEvent isOk || e.key == Key.Back
+                    showBanner()
+                    val recentList = viewModel.panelRowChannels(playback.channelKey)
+                    // Clear is only in Recent (favorites are cleared in the guide).
+                    val hasClear = settings.panelRow == "RECENT"
+                    val lastTile = recentList.size + if (hasClear) 1 else 0
+                    when {
+                        e.key == Key.DirectionLeft -> recentFocus = (rf - 1).coerceAtLeast(0)
+                        e.key == Key.DirectionRight -> recentFocus = (rf + 1).coerceAtMost(lastTile)
+                        e.key == Key.DirectionUp -> recentFocus = null
+                        e.key == Key.DirectionDown -> Unit
+                        e.key == Key.Back -> {
+                            (context as? com.nuvio.tv.MainActivity)?.longPressBackHeld?.value = true
+                            closeFull(); bannerVisible = false
+                        }
+                        isOk && e.nativeKeyEvent.repeatCount == 0 -> when {
+                            // TV Guide: back to the guide.
+                            rf == 0 -> { closeFull(); onBack() }
+                            hasClear && rf >= lastTile -> {
+                                viewModel.clearRecent()
+                                recentFocus = 0
+                                toast = "Recently watched cleared"
+                            }
+                            else -> recentList.getOrNull(rf - 1)?.let { ch ->
+                                closeFull()
+                                viewModel.preview(ch)
+                                showBanner()
+                            }
+                        }
+                        else -> Unit
+                    }
+                    return@onPreviewKeyEvent true
+                }
                 // ---- the panel's controls (entered with Down while the panel shows)
                 val cf = controlFocus
                 if (cf != null) {
@@ -298,7 +378,13 @@ fun LiveTvPlayerScreen(
                             (context as? com.nuvio.tv.MainActivity)?.longPressBackHeld?.value = true
                             closeFull(); bannerVisible = false; return@onPreviewKeyEvent true
                         }
-                        e.key == Key.DirectionDown -> return@onPreviewKeyEvent true
+                        e.key == Key.DirectionDown -> {
+                            // Down from the buttons: into the Recent row (first channel, else TV Guide).
+                            if (settings.panelRow != "OFF" && panelFull) {
+                                recentFocus = if (viewModel.panelRowChannels(playback.channelKey).isNotEmpty()) 1 else 0
+                            }
+                            return@onPreviewKeyEvent true
+                        }
                         isOk -> {
                             if (e.nativeKeyEvent.repeatCount > 0) return@onPreviewKeyEvent true
                             when (buttons.getOrNull(i)) {
@@ -361,8 +447,12 @@ fun LiveTvPlayerScreen(
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 val code = e.nativeKeyEvent.keyCode
                 when {
-                    e.key == Key.DirectionUp || e.key == Key.ChannelUp -> { zap(1); true }
-                    e.key == Key.DirectionDown || e.key == Key.ChannelDown -> { zap(-1); true }
+                    e.key == Key.DirectionUp || e.key == Key.ChannelUp -> {
+                        if (settings.channelSurf && current != null) browseStep(1, e) else zap(1); true
+                    }
+                    e.key == Key.DirectionDown || e.key == Key.ChannelDown -> {
+                        if (settings.channelSurf && current != null) browseStep(-1, e) else zap(-1); true
+                    }
                     e.key == Key.DirectionLeft -> {
                         when {
                             archive -> scrub(forward = false, repeat = e.nativeKeyEvent.repeatCount)
@@ -465,8 +555,95 @@ fun LiveTvPlayerScreen(
             visible = current != null && !(bannerVisible || panelFull || pausedNow) && !listVisible &&
                 dialog == PlayerDialog.NONE
         )
+        // ---- channel surfing: the bar for the channel being looked at
+        val browseChannel = browseKey?.let { viewModel.channelByKey(it) }
+        // Details (poster, description) once you stop on a channel, not for every step.
+        var settledBrowseKey by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(browseKey) {
+            settledBrowseKey = null
+            if (browseKey != null) { delay(450); settledBrowseKey = browseKey }
+        }
+        val browseProgram = browseChannel?.let { c -> programs[c.key]?.firstOrNull { now >= it.startMs && now < it.stopMs } }
+        val browseSettled = browseChannel != null && settledBrowseKey == browseChannel.key
+        val browseDetails = rememberShowDetails(
+            if (browseSettled) browseChannel?.key else null,
+            if (browseSettled) browseProgram else null
+        )
+        val browsePoster by androidx.compose.runtime.produceState<String?>(initialValue = null, settledBrowseKey, browseProgram?.title) {
+            value = null
+            val c = browseChannel?.takeIf { settledBrowseKey == it.key } ?: return@produceState
+            value = browseProgram?.title?.let { viewModel.posterFor(it, browseProgram, c) }
+                ?: viewModel.channelPoster(c, browseProgram)
+                ?: browseProgram?.takeIf { !LiveTvRepository.isPlaceholderTitle(it.title) }?.icon
+        }
+        if (browseChannel != null && bannerVisible) {
+            // What's actually playing, top right.
+            current?.let { playingCh ->
+                LiveText(
+                    "●  Now watching: " + (if (settings.showChannelNumbers) "${playingCh.number} · " else "") + playingCh.name,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 24.dp, end = 32.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                    size = 13.sp
+                )
+            }
+        }
         AnimatedVisibility(
-            visible = (bannerVisible || panelFull || pausedNow) && current != null,
+            visible = browseChannel != null && bannerVisible && !panelFull,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            browseChannel?.let { b ->
+                val use24h = settings.use24HourClock
+                var tick by remember { mutableStateOf(System.currentTimeMillis()) }
+                LaunchedEffect(Unit) { while (true) { delay(1_000); tick = System.currentTimeMillis() } }
+                val shown = if (browseSettled) browseDetails ?: browseProgram else browseProgram
+                val next = viewModel.nextProgram(b.key, browseProgram?.stopMs ?: tick)
+                LiveTvPlayerPanel(
+                    channel = b,
+                    mode = PanelMode.LIVE,
+                    full = false,
+                    title = browseProgram?.title?.let { titleMarks(it).title } ?: b.name,
+                    meta = listOfNotNull(
+                        shown?.episode?.takeIf { settings.showEpisodeNumbers },
+                        shown?.category
+                    ).joinToString("  ·  "),
+                    description = if (browseSettled) shown?.description else null,
+                    poster = browsePoster,
+                    showPosters = settings.showPosters,
+                    timeline = browseProgram?.let { p ->
+                        PanelTimeline(
+                            startMs = p.startMs,
+                            endMs = p.stopMs,
+                            positionMs = tick.coerceIn(p.startMs, p.stopMs),
+                            leftLabel = formatClock(p.startMs, use24h),
+                            rightLabel = formatClock(p.stopMs, use24h),
+                            status = minutesLeftLabel(p.stopMs, tick)
+                        )
+                    },
+                    paused = false,
+                    controls = emptyList(),
+                    focused = null,
+                    captionsOn = false,
+                    audioLabel = "",
+                    sizeLabel = "",
+                    sleepLabel = null,
+                    clock = if (settings.clockMode == "never") "" else formatClock(tick, use24h),
+                    resolution = null,
+                    showNumber = true,
+                    nextTitle = next?.title?.let { titleMarks(it).title },
+                    nextTime = next?.let { formatRange(it.startMs, it.stopMs, use24h) },
+                    catchupAvailable = b.catchup != null,
+                    browsing = true
+                )
+            }
+        }
+        AnimatedVisibility(
+            visible = (bannerVisible || panelFull || pausedNow) && current != null && (browseKey == null || panelFull),
             enter = slideInVertically { it } + fadeIn(),
             exit = slideOutVertically { it } + fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter)
@@ -569,7 +746,22 @@ fun LiveTvPlayerScreen(
                     showNumber = settings.showChannelNumbers,
                     nextTitle = nextUp?.title?.let { titleMarks(it).title },
                     nextTime = nextUp?.let { formatRange(it.startMs, it.stopMs, use24h) },
-                    catchupAvailable = ch.catchup != null
+                    catchupAvailable = ch.catchup != null,
+                    recentTitle = if (settings.panelRow == "FAVORITES") "FAVORITES" else "RECENT",
+                    recentClear = settings.panelRow == "RECENT",
+                    recent = if (settings.panelRow != "OFF" && (panelFull || pausedNow)) {
+                        remember(playback.channelKey, user.recent, user.favorites, settings.panelRow, programs, tick / 60_000) {
+                            viewModel.panelRowChannels(playback.channelKey).map { r ->
+                                val p = programs[r.key]?.firstOrNull { tick >= it.startMs && tick < it.stopMs }
+                                PanelRecent(
+                                    channel = r,
+                                    title = p?.title?.let { titleMarks(it).title },
+                                    progress = p?.progress(tick)
+                                )
+                            }
+                        }
+                    } else null,
+                    recentFocus = recentFocus
                 )
             }
         }

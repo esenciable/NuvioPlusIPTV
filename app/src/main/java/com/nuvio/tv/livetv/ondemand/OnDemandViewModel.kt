@@ -128,6 +128,14 @@ class OnDemandViewModel @Inject constructor(
         .map { l -> l.associate { it.id to it.name } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
+    /** The playlist of the title last highlighted on the On Demand page. */
+    private val focusedPlaylist = MutableStateFlow<String?>(null)
+
+    /** The grid layout's header: "On Demand - <playlist>", for the title you're on. */
+    val homeHeader: StateFlow<String> = kotlinx.coroutines.flow.combine(focusedPlaylist, playlistNames) { id, names ->
+        id?.let { names[it] }?.takeIf { it.isNotBlank() }?.let { "On Demand - $it" } ?: "On Demand"
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, "On Demand")
+
     private var loadJob: Job? = null
     /** Hidden and locked categories as of the last reload (the settings flow can lag behind). */
     @Volatile private var excludedNow: Set<String> = emptySet()
@@ -377,6 +385,8 @@ class OnDemandViewModel @Inject constructor(
                     !ParentalControls.isLocked("vod:${c.uid}", c.name, settings.value, user.lockedGroups)
             }
             homeGroups = visible.map { it to (user.vodGroupNames[it.uid]?.takeIf { n -> n.isNotBlank() } ?: it.name) }
+            // Before anything is highlighted, the header names the first group's playlist.
+            if (focusedPlaylist.value == null) focusedPlaylist.value = homeGroups.firstOrNull()?.first?.playlistId
             homeItems.clear(); homeEnded.clear(); homeRead.clear()
             homeSorts = user.vodSorts
             // The first page of every group (each a quick read from the device's catalog).
@@ -634,6 +644,7 @@ class OnDemandViewModel @Inject constructor(
     /** A card was highlighted: its details right away (the hero), if not found yet. */
     fun focusHome(metaId: String) {
         val uid = VodHomeIds.uidOf(metaId) ?: return
+        uid.split(':').getOrNull(1)?.let { focusedPlaylist.value = it }
         if (uid in homeDetailed) return
         val item = homeItems.values.asSequence().flatten().firstOrNull { it.uid == uid } ?: return
         homeTried += uid

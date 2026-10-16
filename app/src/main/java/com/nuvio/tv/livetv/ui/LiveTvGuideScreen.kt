@@ -268,6 +268,8 @@ fun LiveTvGuideScreen(
     var highlightKey by remember { mutableStateOf<String?>(null) }
     val groupsListState = rememberLazyListState()
     var menuTarget by remember { mutableStateOf<MenuTarget?>(null) }
+    /** Schedule a Recording (long-press menu): the channel it's for. */
+    var manualRecordingFor by remember { mutableStateOf<LiveChannel?>(null) }
     var infoTarget by remember { mutableStateOf<MenuTarget?>(null) }
     var searchOpen by remember { mutableStateOf(false) }
     var textPrompt by remember { mutableStateOf<TextPrompt?>(null) }
@@ -620,8 +622,11 @@ fun LiveTvGuideScreen(
             val info = listState.layoutInfo
             val visible = info.visibleItemsInfo
             if (visible.isEmpty()) return@launch
-            val first = visible.first().index
-            val fullyVisible = visible.count { it.offset >= 0 && it.offset + it.size <= info.viewportEndOffset }
+            // The first row wholly on screen: at the bottom of a list that's a little taller than
+            // the screen, the top row is partly hidden behind the timeline. Going back up to it
+            // (or wrapping round from the bottom) used to leave it there, cut off.
+            val first = visible.firstOrNull { it.offset >= info.viewportStartOffset }?.index ?: visible.first().index
+            val fullyVisible = visible.count { it.offset >= info.viewportStartOffset && it.offset + it.size <= info.viewportEndOffset }
             val last = first + (fullyVisible - 1).coerceAtLeast(0)
             when {
                 target < first -> listState.scrollToItem(target)
@@ -1495,6 +1500,21 @@ fun LiveTvGuideScreen(
         }
 
         // ---------------------------------------------------------------- dialogs
+        manualRecordingFor?.let { ch ->
+            com.nuvio.tv.livetv.record.ManualRecordingDialog(
+                channel = ch,
+                use24h = settings.use24HourClock,
+                onSchedule = { title, start, stop ->
+                    manualRecordingFor = null
+                    com.nuvio.tv.livetv.record.LiveTvNotice.show(viewModel.scheduler.addManual(ch, title, start, stop))
+                    scope.launch { delay(60); runCatching { gridFocus.requestFocus() } }
+                },
+                onDismiss = {
+                    manualRecordingFor = null
+                    scope.launch { delay(60); runCatching { gridFocus.requestFocus() } }
+                }
+            )
+        }
         menuTarget?.let { target ->
             ChannelContextMenu(
                 target = target,
@@ -1504,6 +1524,7 @@ fun LiveTvGuideScreen(
                 onRecord = { p -> menuTarget = null; doRecord(target.channel, p) },
                 seriesLabel = seriesLabel(target.channel, target.block?.program),
                 onSeries = { p -> menuTarget = null; doSeries(target.channel, p) },
+                onScheduleRecording = { menuTarget = null; manualRecordingFor = target.channel },
                 canRestart = viewModel.canWatchFromStart(target.channel),
                 onRestart = {
                     menuTarget = null
@@ -2749,6 +2770,8 @@ private fun ChannelContextMenu(
     /** The show on now can be restarted (catch-up channel). */
     canRestart: Boolean = false,
     onRestart: () -> Unit = {},
+    /** Record a time you pick (channels with no listings: PPV events…). */
+    onScheduleRecording: () -> Unit = {},
     onSearch: () -> Unit,
     onRefresh: () -> Unit,
     onSettings: () -> Unit
@@ -2777,6 +2800,7 @@ private fun ChannelContextMenu(
             }
             if (program != null && recordLabel != null) item { MenuItem(recordLabel, onClick = { onRecord(program) }) }
             if (program != null && seriesLabel != null) item { MenuItem(seriesLabel, onClick = { onSeries(program) }) }
+            item { MenuItem("Schedule a recording…", onClick = onScheduleRecording) }
             if (program != null) item { MenuItem("Program info", onClick = onProgramInfo) }
             item { MenuItem(if (isFavorite) "Remove from favorites" else "Add to favorites", onClick = onToggleFavorite) }
             if (isFavorite && inFavoritesGroup) {

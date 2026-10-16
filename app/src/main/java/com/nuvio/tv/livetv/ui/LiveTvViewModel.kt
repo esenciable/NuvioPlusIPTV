@@ -158,6 +158,8 @@ class LiveTvViewModel @Inject constructor(
 
     init {
         repository.ensureLoaded()
+        // Coming back to Live TV after hours in the background: anything due is updated now.
+        repository.refreshIfStale()
         viewModelScope.launch {
             while (true) {
                 // Nothing to keep up to date while a movie or episode plays in Nuvio's player.
@@ -397,9 +399,53 @@ class LiveTvViewModel @Inject constructor(
         val group = session.currentGroupId.value?.takeIf { it != ChannelGroup.SEARCH }
             ?: uiState.value.selectedGroupId
         viewModelScope.launch {
-            prefs.recordWatched(channel.key)
+            prefs.recordWatched(channel.key, addToRecent = !isAdultChannel(channel))
             prefs.setLastGroup(group)
         }
+    }
+
+    /** Adult channels never show in Recently watched (by their name or their group's name). */
+    fun isAdultChannel(ch: LiveChannel): Boolean =
+        com.nuvio.tv.livetv.parental.ParentalControls.isAdult(ch.group) ||
+            com.nuvio.tv.livetv.parental.ParentalControls.isAdult(ch.name)
+
+    /**
+     * The info panel's Recent row: channels watched before [currentKey], most recent first.
+     * Never adult channels or ones in a group that's locked right now.
+     */
+    fun recentForPanel(currentKey: String?, limit: Int = 20): List<LiveChannel> {
+        val user = userState.value
+        val s = settings.value
+        return user.recent.asSequence()
+            .filter { it != currentKey }
+            .mapNotNull { channelByKey(it) }
+            .filter { ch ->
+                !isAdultChannel(ch) &&
+                    !com.nuvio.tv.livetv.parental.ParentalControls.isLocked(ch.groupId, ch.group, s, user.lockedGroups)
+            }
+            .take(limit)
+            .toList()
+    }
+
+    fun clearRecent() { viewModelScope.launch { prefs.clearRecent() } }
+
+    /**
+     * The channels in the info panel's row, as set in Settings: recently watched, or your
+     * favorites (in your favorites order). Never the channel playing, or a locked group's.
+     */
+    fun panelRowChannels(currentKey: String?): List<LiveChannel> = when (settings.value.panelRow) {
+        "FAVORITES" -> {
+            val user = userState.value
+            val s = settings.value
+            user.favorites.asSequence()
+                .filter { it != currentKey }
+                .mapNotNull { channelByKey(it) }
+                .filter { ch -> !com.nuvio.tv.livetv.parental.ParentalControls.isLocked(ch.groupId, ch.group, s, user.lockedGroups) }
+                .take(60)
+                .toList()
+        }
+        "OFF" -> emptyList()
+        else -> recentForPanel(currentKey)
     }
 
     /** Every channel in the current group, hidden ones included, for Manage visibility. */
@@ -529,7 +575,11 @@ class LiveTvViewModel @Inject constructor(
         ) ?: return false
         playback.play(
             channel, overrideUrl = url, catchupTitle = program.title,
-            fallbacks = CatchupUrlBuilder.alternatives(url, zone, showMinutes = (program.stopMs - start) / 60_000),
+            fallbacks = CatchupUrlBuilder.alternatives(
+                url, zone,
+                showMinutes = (program.stopMs - start) / 60_000,
+                airedMinutes = if (now < program.stopMs) (now - start) / 60_000 else null
+            ),
             catchupStartMs = start
         )
         _catchup.value = CatchupSession(channel, program, offsetMs.coerceAtLeast(0))

@@ -22,6 +22,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.ClosedCaptionDisabled
 import androidx.compose.material.icons.filled.Forward30
@@ -31,6 +33,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay30
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -109,25 +113,37 @@ internal fun LiveTvPlayerPanel(
     nextTime: String? = null,
     /** The channel offers catch-up (a tag beside the channel). */
     catchupAvailable: Boolean = false,
+    /** The full panel's Recent row (channels watched before), or null for none. */
+    recent: List<PanelRecent>? = null,
+    /** The highlighted tile in the Recent row: 0 TV Guide, 1… the channels, then Clear. */
+    recentFocus: Int? = null,
+    /** The row's heading: "RECENT" or "FAVORITES". */
+    recentTitle: String = "RECENT",
+    /** A Clear tile at the end of the row (Recent only). */
+    recentClear: Boolean = true,
+    /** Channel surfing: this is a channel you're looking at, not the one playing. */
+    browsing: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    // With the Recent row, the rest is a little smaller so the panel stays about as tall.
+    val withRecent = full && recent != null
     val colors = NuvioTheme.colors
     val accent = colors.Secondary
-    val posterW = if (full) 116.dp else 110.dp
-    val posterH = if (full) 174.dp else 165.dp
+    val posterW = if (withRecent) 88.dp else if (full) 116.dp else 110.dp
+    val posterH = if (withRecent) 132.dp else if (full) 174.dp else 165.dp
     // Fades up from the bottom over the picture, in the theme's background color.
     val scrim = androidx.compose.ui.graphics.Brush.verticalGradient(
         0f to Color.Transparent,
         0.38f to colors.Background.copy(alpha = 0.86f),
         1f to colors.Background.copy(alpha = 0.97f)
     )
-    Row(
+    Column(
         modifier = modifier
             .fillMaxWidth()
             .background(scrim)
-            .padding(start = 48.dp, end = 48.dp, top = 64.dp, bottom = if (full) 18.dp else 24.dp),
-        verticalAlignment = Alignment.Bottom
+            .padding(start = 48.dp, end = 48.dp, top = if (withRecent) 48.dp else 64.dp, bottom = if (withRecent) 14.dp else if (full) 18.dp else 24.dp)
     ) {
+    Row(verticalAlignment = Alignment.Bottom) {
         // Poster (or the channel logo when posters are off or there isn't one).
         val posterShape = RoundedCornerShape(liveCorner())
         Box(
@@ -152,6 +168,17 @@ internal fun LiveTvPlayerPanel(
         }
         Spacer(Modifier.width(24.dp))
         Column(modifier = Modifier.weight(1f)) {
+            if (browsing) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LiveTag("BROWSING", accent, colors.OnSecondary)
+                    Spacer(Modifier.width(10.dp))
+                    LiveText(
+                        "OK to watch  ·  ▲ ▼ more channels (hold to go faster)  ·  Back to stay",
+                        size = 12.sp, color = colors.TextSecondary
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
             // Channel line: logo, number and name, tags, and the clock on the right.
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (!channel.logo.isNullOrBlank()) {
@@ -186,14 +213,14 @@ internal fun LiveTvPlayerPanel(
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.Bottom) {
                 Column(Modifier.weight(1f)) {
-                    LiveText(title, size = 30.sp, weight = FontWeight.ExtraBold, maxLines = 1, marquee = true, color = colors.TextPrimary)
+                    LiveText(title, size = if (withRecent) 26.sp else 30.sp, weight = FontWeight.ExtraBold, maxLines = 1, marquee = true, color = colors.TextPrimary)
                     if (meta.isNotBlank()) {
                         Spacer(Modifier.height(2.dp))
                         LiveText(meta, size = 14.sp, color = colors.TextSecondary, maxLines = 1)
                     }
                     description?.takeIf { it.isNotBlank() }?.let {
                         Spacer(Modifier.height(4.dp))
-                        LiveText(it, size = 14.sp, color = colors.TextSecondary, maxLines = if (full) 2 else 1)
+                        LiveText(it, size = 14.sp, color = colors.TextSecondary, maxLines = if (full && !withRecent) 2 else 1)
                     }
                 }
                 // What's on next, on the right.
@@ -215,10 +242,118 @@ internal fun LiveTvPlayerPanel(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     controls.filter { it != PanelControl.TIMELINE }.forEach { c ->
                         if (c == PanelControl.CC) Spacer(Modifier.weight(1f))
-                        PanelButton(c, focused == c, paused, captionsOn, audioLabel, sizeLabel, sleepLabel, mode)
+                        PanelButton(c, focused == c && recentFocus == null, paused, captionsOn, audioLabel, sizeLabel, sleepLabel, mode)
                     }
                 }
             }
+        }
+    }
+    if (withRecent) {
+        Spacer(Modifier.height(12.dp))
+        RecentRow(recent.orEmpty(), recentFocus, recentTitle, recentClear)
+    }
+    }
+}
+
+/** A channel in the info panel's Recent row: what's on now and how far into it. */
+internal data class PanelRecent(
+    val channel: LiveChannel,
+    val title: String?,
+    val progress: Float?
+)
+
+/** Tiles in the Recent row: TV Guide, the channels, then Clear. */
+internal fun recentTileCount(recent: List<PanelRecent>): Int = recent.size + 2
+
+/** "RECENT", then TV Guide · the channels · Clear, scrolling to keep the highlight on screen. */
+@Composable
+private fun RecentRow(recent: List<PanelRecent>, focus: Int?, title: String, showClear: Boolean) {
+    val colors = NuvioTheme.colors
+    val state = androidx.compose.foundation.lazy.rememberLazyListState()
+    LaunchedEffect(focus) {
+        val f = focus ?: return@LaunchedEffect
+        val info = state.layoutInfo
+        val fully = info.visibleItemsInfo.filter { it.offset >= info.viewportStartOffset && it.offset + it.size <= info.viewportEndOffset }
+        val first = fully.firstOrNull()?.index ?: 0
+        val last = fully.lastOrNull()?.index ?: 0
+        when {
+            f < first -> state.animateScrollToItem(f)
+            f > last -> state.animateScrollToItem((f - (fully.size - 1).coerceAtLeast(0)).coerceAtLeast(0))
+        }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        LiveText(title, size = 10.sp, weight = FontWeight.Bold, color = colors.TextTertiary)
+        if (focus != null) {
+            Spacer(Modifier.width(10.dp))
+            LiveText("OK to switch · ◀ ▶ for more · ▲ back to the buttons", size = 10.sp, color = colors.TextTertiary)
+        } else {
+            Spacer(Modifier.width(10.dp))
+            LiveText("▼ from the buttons", size = 10.sp, color = colors.TextTertiary)
+        }
+    }
+    Spacer(Modifier.height(6.dp))
+    androidx.compose.foundation.lazy.LazyRow(
+        state = state,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 4.dp),
+        userScrollEnabled = false
+    ) {
+        item(key = "guide") {
+            RecentTile(focused = focus == 0, width = 80.dp) {
+                Icon(Icons.Default.GridView, contentDescription = null, tint = colors.TextPrimary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.height(4.dp))
+                LiveText("TV Guide", size = 11.sp, weight = FontWeight.SemiBold, color = colors.TextPrimary)
+            }
+        }
+        recent.forEachIndexed { i, r ->
+            item(key = "ch:" + r.channel.key) {
+                RecentTile(focused = focus == i + 1, width = 112.dp, progress = r.progress) {
+                    if (!r.channel.logo.isNullOrBlank()) ChannelLogo(r.channel.logo, 22.dp)
+                    else LiveText(r.channel.name, size = 13.sp, weight = FontWeight.Bold, color = colors.TextPrimary, maxLines = 1)
+                    Spacer(Modifier.height(4.dp))
+                    LiveText(r.title ?: r.channel.name, size = 10.sp, color = colors.TextSecondary, maxLines = 1)
+                }
+            }
+        }
+        if (showClear) item(key = "clear") {
+            RecentTile(focused = focus == recent.size + 1, width = 80.dp) {
+                Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = colors.TextSecondary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.height(4.dp))
+                LiveText("Clear", size = 11.sp, weight = FontWeight.SemiBold, color = colors.TextSecondary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentTile(
+    focused: Boolean,
+    width: androidx.compose.ui.unit.Dp,
+    progress: Float? = null,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
+) {
+    val colors = NuvioTheme.colors
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        modifier = Modifier
+            .graphicsLayer { val s = if (focused) 1.06f else 1f; scaleX = s; scaleY = s }
+            .width(width)
+            .height(62.dp)
+            .clip(shape)
+            .background(Color.White.copy(alpha = if (focused) 0.16f else 0.08f))
+            .border(if (focused) 2.dp else 1.dp, if (focused) colors.FocusRing else Color.White.copy(alpha = 0.08f), shape)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            content = content
+        )
+        progress?.let { p ->
+            Box(
+                Modifier.align(Alignment.BottomStart).fillMaxWidth(p.coerceIn(0f, 1f)).height(3.dp)
+                    .background(colors.Secondary)
+            )
         }
     }
 }

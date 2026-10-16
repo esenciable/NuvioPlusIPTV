@@ -81,7 +81,7 @@ class LiveTvPlaybackController @Inject constructor(
 
     private val timeshift = LiveTvTimeshift(context)
     var timeshiftEnabled: Boolean = true
-    var timeshiftMinutes: Int = 30
+    var timeshiftMinutes: Int = 10
     /** Rewind anytime: full-screen channels play through a rolling buffer (see [startAlwaysBuffer]). */
     var rewindAlways: Boolean = false
     @Volatile private var bufferStorageId: String? = null

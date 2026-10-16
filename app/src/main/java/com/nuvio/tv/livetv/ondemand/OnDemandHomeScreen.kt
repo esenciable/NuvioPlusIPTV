@@ -242,6 +242,8 @@ fun OnDemandHomeScreen(
     }
     val onNavigateToDetail: (String, String, String) -> Unit = { id, _, _ -> open(id) }
     val onItemFocus: (MetaPreview) -> Unit = { viewModel.focusHome(it.id) }
+    // Grid layout: "On Demand - <playlist>" at the top, for the title you're on.
+    val homeHeader by viewModel.homeHeader.collectAsStateWithLifecycle()
     val loadMore: (String, String, String) -> Unit = { catalogId, _, _ -> viewModel.loadMoreHome(catalogId) }
     // The watched mark, as on Home. A stable lambda that reads the latest watched lists, so
     // a change only redraws the cards (not the whole page).
@@ -378,6 +380,7 @@ fun OnDemandHomeScreen(
                     posterCardStyle = posterCardStyle,
                     onItemFocus = onItemFocus,
                     catalogSeeAllLabel = "See all",
+                    stickyTitle = homeHeader,
                     onSaveGridFocusState = { vi, vo, _ ->
                         gridFocusState = gridFocusState.copy(verticalScrollIndex = vi, verticalScrollOffset = vo, hasSavedFocus = true)
                     },

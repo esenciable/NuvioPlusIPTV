@@ -99,7 +99,12 @@ object CatchupUrlBuilder {
         url: String,
         serverTimezone: String?,
         /** The show's own length in minutes: some panels refuse a window longer than that. */
-        showMinutes: Long? = null
+        showMinutes: Long? = null,
+        /**
+         * A show still on air (watch from the beginning): how many minutes of it have aired.
+         * Some panels refuse a window that reaches into the future.
+         */
+        airedMinutes: Long? = null
     ): List<String> {
         val path = url.substringBefore('?')
         val query = url.substring(path.length)
@@ -111,6 +116,14 @@ object CatchupUrlBuilder {
         if (ext.equals(".m3u8", true)) out += "$host/timeshift/$user/$pass/$minutes/$stamp/$id.ts$query"
         // TS answered with something that isn't video: many panels only replay as HLS.
         else out += "$host/timeshift/$user/$pass/$minutes/$stamp/$id.m3u8$query"
+        // A show still on air: only the part that has aired so far (in both forms). Tried before
+        // the other forms below, so a refusal doesn't end with the "other clock" link, which
+        // plays an earlier show when the server's time zone was right all along.
+        val aired = airedMinutes?.coerceAtLeast(1)?.takeIf { it < (minutes.toLongOrNull() ?: 0) }
+        if (aired != null) {
+            out += "$host/timeshift/$user/$pass/$aired/$stamp/$id${ext.ifEmpty { ".ts" }}$query"
+            out += "$host/timeshift/$user/$pass/$aired/$stamp/$id${if (ext.equals(".m3u8", true)) ".ts" else ".m3u8"}$query"
+        }
         // Just the show, without the extra time after it (in both forms).
         val short = showMinutes?.coerceAtLeast(1)?.takeIf { it < (minutes.toLongOrNull() ?: 0) }
         if (short != null) {

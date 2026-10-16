@@ -116,7 +116,12 @@ fun GridHomeContent(
     catalogSeeAllLabel: String? = null,
     onSaveGridFocusState: (Int, Int, String?) -> Unit,
     onFocusedRowKeyChanged: (String?) -> Unit = {},
-    scrollToTopTrigger: Int = 0
+    scrollToTopTrigger: Int = 0,
+    /**
+     * Live TV fork: a fixed title for the header at the top (On Demand shows "On Demand - the
+     * playlist" there) instead of the name of the group scrolled to.
+     */
+    stickyTitle: String? = null
 ) {
     // Live TV fork: where the Live TV row goes (null = hidden).
     val liveTvRowAbove = com.nuvio.tv.livetv.home.rememberLiveTvHomeRowPosition()
@@ -862,7 +867,8 @@ fun GridHomeContent(
         GridStickyHeader(
             gridState = gridState,
             sectionMapping = sectionMapping,
-            isScrolledPastHeroState = isScrolledPastHeroState
+            isScrolledPastHeroState = isScrolledPastHeroState,
+            fixedTitle = stickyTitle
         )
     }
 }
@@ -871,13 +877,15 @@ fun GridHomeContent(
 private fun GridStickyHeader(
     gridState: androidx.compose.foundation.lazy.grid.LazyGridState,
     sectionMapping: SectionMapping,
-    isScrolledPastHeroState: androidx.compose.runtime.State<Boolean>
+    isScrolledPastHeroState: androidx.compose.runtime.State<Boolean>,
+    fixedTitle: String? = null
 ) {
-    val currentSectionName by remember(gridState, sectionMapping) {
+    val sectionName by remember(gridState, sectionMapping) {
         derivedStateOf {
             sectionMapping.findSectionForIndex(gridState.firstVisibleItemIndex)?.catalogName
         }
     }
+    val currentSectionName = fixedTitle ?: sectionName
 
     AnimatedVisibility(
         visible = isScrolledPastHeroState.value && currentSectionName != null,

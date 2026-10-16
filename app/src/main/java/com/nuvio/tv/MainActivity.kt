@@ -1340,9 +1340,15 @@ open class MainActivity : ComponentActivity() {
                             val liveTvPlaying by com.nuvio.tv.livetv.player.LiveWatching.active.collectAsState()
                             // Watching counts as activity: the idle wait starts over when it stops.
                             LaunchedEffect(liveTvPlaying) { ambientIdleController.onInteraction() }
+                            val isTrailerPlaying by trailerPlayerPool.isTrailerPlaying.collectAsState()
+                            LaunchedEffect(isTrailerPlaying) {
+                                if (!isTrailerPlaying) ambientIdleController.onInteraction()
+                            }
                             AmbientModeHost(
                                 controller = ambientIdleController,
-                                allowed = currentRoute?.startsWith("player/") != true && autoNextOverlay == null &&
+                                allowed = currentRoute?.startsWith("player/") != true &&
+                                    autoNextOverlay == null &&
+                                    !isTrailerPlaying &&
                                     liveTvPlaying == null,
                                 onShown = { trailerPlayerPool.stop() }
                             )
@@ -1787,6 +1793,14 @@ private fun LegacySidebarScaffold(
                                     modifier = Modifier.focusRequester(
                                         drawerItemFocusRequesters.getValue(item.route)
                                     )
+                                        // Live TV fork: Up / Down go to the item above / below,
+                                        // across the gap above Settings too (with fewer pages in
+                                        // the menu, Down from the last one landed on the page).
+                                        .focusProperties {
+                                            val i = drawerItems.indexOfFirst { it.route == item.route }
+                                            drawerItems.getOrNull(i + 1)?.let { n -> drawerItemFocusRequesters[n.route]?.let { down = it } }
+                                            if (i > 0) drawerItems.getOrNull(i - 1)?.let { p -> drawerItemFocusRequesters[p.route]?.let { up = it } }
+                                        }
                                         .width(itemWidth)
                                         .offset(x = NuvioTheme.spacing.md)
                                 )
@@ -2393,6 +2407,15 @@ private fun ModernSidebarScaffold(
                             Key.DirectionUp -> {
                                 if (focusedDrawerIndex == sidebarTopBoundaryIndex) {
                                     true
+                                } else if (focusedDrawerIndex in 1..drawerItems.lastIndex) {
+                                    // Live TV fork: straight to the item above (across the gap
+                                    // above Settings, too).
+                                    val prev = drawerItems[focusedDrawerIndex - 1].route
+                                    val requester = drawerItemFocusRequesters[prev]
+                                    if (requester == null || runCatching { requester.requestFocus() }.isFailure) {
+                                        focusManager.moveFocus(FocusDirection.Up)
+                                    }
+                                    true
                                 } else {
                                     // Move focus within the sidebar; consume unconditionally
                                     // so focus never escapes into the content behind.
@@ -2411,6 +2434,17 @@ private fun ModernSidebarScaffold(
                                     // request the first drawer item directly.
                                     drawerItems.firstOrNull()?.route?.let { route ->
                                         drawerItemFocusRequesters[route]?.requestFocus()
+                                    }
+                                    true
+                                } else if (focusedDrawerIndex in 0 until drawerItems.lastIndex) {
+                                    // Live TV fork: straight to the next item. Settings sits at
+                                    // the bottom after a gap; with fewer pages in the menu (no On
+                                    // Demand or Recordings) the gap is big enough that moving
+                                    // focus "down" landed on the page behind instead.
+                                    val next = drawerItems[focusedDrawerIndex + 1].route
+                                    val requester = drawerItemFocusRequesters[next]
+                                    if (requester == null || runCatching { requester.requestFocus() }.isFailure) {
+                                        focusManager.moveFocus(FocusDirection.Down)
                                     }
                                     true
                                 } else {

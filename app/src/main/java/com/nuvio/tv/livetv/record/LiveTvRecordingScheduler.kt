@@ -210,6 +210,13 @@ class LiveTvRecordingScheduler @Inject constructor(
     }
 
     /**
+     * A recording set by hand (Schedule a Recording): [title] from [startMs] to [stopMs] on
+     * [channel], for channels with no listings. Recorded like a show from the guide.
+     */
+    fun addManual(channel: LiveChannel, title: String, startMs: Long, stopMs: Long): String =
+        add(channel, EpgProgram(startMs = startMs, stopMs = stopMs, title = title))
+
+    /**
      * Sets [program] on [channel] to record. A show on now on a channel without catch-up starts
      * recording straight away. Returns a message to show.
      */

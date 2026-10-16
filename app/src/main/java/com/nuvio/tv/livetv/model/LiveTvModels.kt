@@ -346,7 +346,7 @@ data class LiveTvSettings(
     /** Pause and rewind live TV (channels without catch-up): record while paused. */
     val timeshiftEnabled: Boolean = true,
     /** How much to keep, in minutes. */
-    val timeshiftMinutes: Int = 30,
+    val timeshiftMinutes: Int = 10,
     /** Rewind anytime: a rolling buffer of the channel you watch full screen (not only after pausing). */
     val rewindAlways: Boolean = false,
     /** Turn closed captions on automatically when a channel has them. */
@@ -360,7 +360,13 @@ data class LiveTvSettings(
     /** How solid the always-on clock is, in percent. */
     val clockOpacity: Int = 70,
     /** A soft dark pill behind the always-on clock. */
-    val clockBackground: Boolean = true
+    val clockBackground: Boolean = true,
+    /** The row of recently watched channels at the bottom of the full info panel (OK). */
+    val recentInPanel: Boolean = true,
+    /** The row at the bottom of the full info panel: "RECENT", "FAVORITES" or "OFF". */
+    val panelRow: String = "RECENT",
+    /** Channel surfing: Up / Down show other channels on the info bar; OK switches. */
+    val channelSurf: Boolean = false
 )
 
 data class LiveUserState(

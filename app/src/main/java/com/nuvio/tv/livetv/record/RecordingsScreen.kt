@@ -54,6 +54,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import coil3.compose.AsyncImage
 import com.nuvio.tv.livetv.ui.LIVE_RED
 import com.nuvio.tv.livetv.ui.LiveText
@@ -78,9 +80,26 @@ class RecordingsViewModel @Inject constructor(
     val scheduler: LiveTvRecordingScheduler,
     private val posterResolver: com.nuvio.tv.livetv.data.LiveTvPosterResolver,
     private val tmdbService: com.nuvio.tv.core.tmdb.TmdbService,
-    private val tmdbMetadataService: com.nuvio.tv.core.tmdb.TmdbMetadataService
+    private val tmdbMetadataService: com.nuvio.tv.core.tmdb.TmdbMetadataService,
+    private val liveRepository: com.nuvio.tv.livetv.data.LiveTvRepository,
+    private val livePrefs: com.nuvio.tv.livetv.data.LiveTvPreferences
 ) : ViewModel() {
     val recordings = recorder.recordings
+
+    /** New Recording's channel list: favorites, then channels watched recently. */
+    val pickerChannels: kotlinx.coroutines.flow.StateFlow<List<com.nuvio.tv.livetv.model.LiveChannel>> =
+        kotlinx.coroutines.flow.combine(liveRepository.channels, livePrefs.userState) { all, user ->
+            val byKey = all.associateBy { it.key }
+            (user.favorites + user.recent).distinct().mapNotNull { byKey[it] }.take(80)
+        }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val use24h: kotlinx.coroutines.flow.StateFlow<Boolean> = livePrefs.settings
+        .map { it.use24HourClock }
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, false)
+
+    fun scheduleManual(channel: com.nuvio.tv.livetv.model.LiveChannel, title: String, startMs: Long, stopMs: Long) {
+        LiveTvNotice.show(scheduler.addManual(channel, title, startMs, stopMs))
+    }
     val schedules = scheduler.schedules
     val series = scheduler.series
 
@@ -214,6 +233,12 @@ fun RecordingsScreen(
     var menuFor by remember { mutableStateOf<LiveTvRecording?>(null) }
     var confirmDelete by remember { mutableStateOf<LiveTvRecording?>(null) }
     var infoFor by remember { mutableStateOf<LiveTvRecording?>(null) }
+    // New Recording: picking the channel, then the time.
+    var pickingChannel by remember { mutableStateOf(false) }
+    var manualFor by remember { mutableStateOf<com.nuvio.tv.livetv.model.LiveChannel?>(null) }
+    val pickerChannels by viewModel.pickerChannels.collectAsStateWithLifecycle()
+    val use24h by viewModel.use24h.collectAsStateWithLifecycle()
+    val newButton = remember { FocusRequester() }
     val first = remember { FocusRequester() }
     val colors = NuvioTheme.colors
 
@@ -251,6 +276,12 @@ fun RecordingsScreen(
                     size = 15.sp,
                     color = colors.TextSecondary
                 )
+                Spacer(Modifier.width(18.dp))
+                // Record a time you pick, on a channel with no listings (PPV events…).
+                com.nuvio.tv.livetv.ui.LiveFocusRow(
+                    modifier = Modifier.focusRequester(newButton),
+                    onClick = { pickingChannel = true }
+                ) { f -> LiveText("+ New Recording", color = com.nuvio.tv.livetv.ui.focusedTextColor(f), size = 15.sp, weight = FontWeight.SemiBold) }
             }
             Spacer(Modifier.height(20.dp))
             if (recordings.isEmpty() && schedules.isEmpty() && seriesRules.isEmpty()) {
@@ -259,8 +290,8 @@ fun RecordingsScreen(
                         LiveText("No recordings yet", size = 20.sp, weight = FontWeight.SemiBold)
                         Spacer(Modifier.height(8.dp))
                         LiveText(
-                            "In the Live TV guide, long-press a show and choose Record or Record series. While watching, open the menu and choose Record this show.",
-                            size = 14.sp, color = colors.TextSecondary, maxLines = 2
+                            "In the Live TV guide, long-press a show and choose Record or Record series. While watching, open the menu and choose Record this show. For a channel with no listings, use + New Recording.",
+                            size = 14.sp, color = colors.TextSecondary, maxLines = 3
                         )
                     }
                 }
@@ -361,7 +392,9 @@ fun RecordingsScreen(
     }
     val anything = recordings.isNotEmpty() || schedules.isNotEmpty() || seriesRules.isNotEmpty()
     LaunchedEffect(anything) {
-        if (anything) { kotlinx.coroutines.delay(120); runCatching { first.requestFocus() } }
+        kotlinx.coroutines.delay(120)
+        // Nothing yet: start on New Recording.
+        runCatching { if (anything) first.requestFocus() else newButton.requestFocus() }
     }
     scheduleMenu?.let { s ->
         RecordingActionDialog(
@@ -412,6 +445,19 @@ fun RecordingsScreen(
             add("Delete" to { menuFor = null; confirmDelete = rec })
         }
         RecordingActionDialog(title = rec.title, detail = rec.problem, actions = actions, onDismiss = { menuFor = null })
+    }
+    if (pickingChannel) ManualRecordingChannelPicker(
+        channels = pickerChannels,
+        onPick = { ch -> pickingChannel = false; manualFor = ch },
+        onDismiss = { pickingChannel = false }
+    )
+    manualFor?.let { ch ->
+        ManualRecordingDialog(
+            channel = ch,
+            use24h = use24h,
+            onSchedule = { title, start, stop -> manualFor = null; viewModel.scheduleManual(ch, title, start, stop) },
+            onDismiss = { manualFor = null }
+        )
     }
     infoFor?.let { picked ->
         // Live: a recording still going keeps its size and length up to date.

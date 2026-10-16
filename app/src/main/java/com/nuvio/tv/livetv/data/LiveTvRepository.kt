@@ -95,6 +95,8 @@ class LiveTvRepository @Inject constructor(
     val status: StateFlow<LiveTvStatus> = _status.asStateFlow()
 
     private var initialized = false
+    /** The start-up update check has run (later checks may start). */
+    @Volatile private var firstCheckDone = false
 
     /** Loads cached data immediately, then refreshes anything older than the configured interval. */
     fun ensureLoaded(updateCheckDelayMs: Long = 0L) {
@@ -116,7 +118,24 @@ class LiveTvRepository @Inject constructor(
             // so when this starts with the app it waits a little, out of Nuvio's way.
             if (updateCheckDelayMs > 0) delay(updateCheckDelayMs)
             refreshStale()
+            firstCheckDone = true
+            // Then keep checking while the app stays open. TV boxes keep the app running for
+            // days (Home only sends it to the background), and the check used to happen only
+            // when the app started: the guide ran out after a day or two and never refreshed
+            // until the box restarted or someone pressed Update now.
+            while (true) {
+                delay(STALE_CHECK_MS)
+                runCatching { refreshStale() }.onFailure { Log.w(TAG, "Update check failed", it) }
+            }
         }
+    }
+
+    /** Opening Live TV: update anything past its update time (the playlist or guide interval). */
+    fun refreshIfStale() {
+        // Not before the start-up check (the saved channels may not be read yet).
+        if (!firstCheckDone) return
+        if (mutex.isLocked) return // an update is already running
+        scope.launch { runCatching { refreshStale() } }
     }
 
     fun refreshAll(force: Boolean = true) {
@@ -295,10 +314,7 @@ class LiveTvRepository @Inject constructor(
     private val sourceListsFile get() = File(baseDir, "epg_channel_lists.bin")
 
     /** Which guide files the saved lists came from (each file's size and contents stamp). */
-    private fun sourceListsStamp(targets: List<EpgTarget>): String = targets.joinToString(",") { t ->
-        val f = epgFile(t.fileId)
-        t.fileId + ":" + f.length() + ":" + contentStamp(f)
-    }
+    private fun sourceListsStamp(targets: List<EpgTarget>): String = targets.joinToString(",") { targetStamp(it) }
 
     private fun saveSourceLists(targets: List<EpgTarget>, lists: List<EpgSourceChannels>) {
         runCatching {
@@ -530,7 +546,9 @@ class LiveTvRepository @Inject constructor(
             }
         }
 
-        if (changed || _programs.value.isEmpty()) {
+        // A guide kept in the database fills in in the background (empty for a moment), so an
+        // empty list then doesn't mean there's no guide: only re-match if something changed.
+        if (changed || (_programs.value.isEmpty() && !guideInDb)) {
             outOfTheWay()
             setStatus(loading = true, message = "Matching guide data…")
             buildPrograms(settings, epgTargets)
@@ -563,8 +581,12 @@ class LiveTvRepository @Inject constructor(
         // fills in straight away instead of re-reading every guide file at each start.
         t0 = System.currentTimeMillis()
         if (!loadGuideFromDb(settings, targets, guidePreRead.await())) {
-            buildPrograms(settings, targets)
-            LIVE_REPORT.add("Guide re-read from guide files in ${System.currentTimeMillis() - t0} ms")
+            if (dropRemovedPlaylistsFromGuide(settings, targets)) {
+                LIVE_REPORT.add("Guide kept: turned-off playlists' channels taken out in ${System.currentTimeMillis() - t0} ms")
+            } else {
+                buildPrograms(settings, targets)
+                LIVE_REPORT.add("Guide re-read from guide files in ${System.currentTimeMillis() - t0} ms")
+            }
         } else {
             LIVE_REPORT.add("Stored guide used: ${_programs.value.size} channels with listings in ${System.currentTimeMillis() - t0} ms")
         }
@@ -1165,6 +1187,130 @@ class LiveTvRepository @Inject constructor(
         return sb.toString()
     }
 
+    /** One guide file as the fingerprint sees it (also the format of the Assign EPG lists' stamp). */
+    private fun targetStamp(t: EpgTarget): String {
+        val f = epgFile(t.fileId)
+        return t.fileId + ":" + f.length() + ":" + contentStamp(f)
+    }
+
+    /**
+     * The fingerprint's parts, stored next to it: settings and hand-picked guides ("base"), each
+     * guide file in order ("targets"), and each playlist's channels ("playlists"). With these, a
+     * playlist turned off or removed can be told apart from any other change (see
+     * [dropRemovedPlaylistsFromGuide]).
+     */
+    private suspend fun guideParts(settings: LiveTvSettings, targets: List<EpgTarget>, fingerprint: String): String {
+        val overrides = prefs.userState.first().epgOverrides
+        val playlists = JSONObject()
+        _channels.value.groupBy { it.sourceId }.forEach { (id, list) ->
+            playlists.put(id, "${list.size}:${list.sumOf { it.key.hashCode().toLong() }}")
+        }
+        return JSONObject()
+            .put("fp", fingerprint)
+            .put("base", "$GUIDE_CACHE_VERSION|${settings.epgPastHours}|${settings.epgFutureDays}|${overrides.hashCode()}")
+            .put("targets", org.json.JSONArray(targets.map { targetStamp(it) }))
+            .put("playlists", playlists)
+            .toString()
+    }
+
+    /**
+     * A playlist turned off or removed changes the guide's fingerprint, which used to mean reading
+     * every other guide file again from start to finish. But each channel's guide match only
+     * depends on that channel and the guides, so taking a playlist away changes nothing for the
+     * others: its channels' listings are simply deleted from the stored guide.
+     *
+     * Only when nothing else changed: same settings and hand-picked guides, every other playlist
+     * with exactly the channels it had, and the remaining guide files unchanged and in the same
+     * order (a playlist's built-in guide may go with it, as long as no remaining channel was
+     * matched to it). Otherwise (or for a guide stored by an older version) false: read it all.
+     */
+    private suspend fun dropRemovedPlaylistsFromGuide(settings: LiveTvSettings, targets: List<EpgTarget>): Boolean = withContext(Dispatchers.IO) {
+        val channels = _channels.value
+        if (channels.isEmpty()) return@withContext false
+        val stored = runCatching { guideDb.fingerprint() }.getOrNull() ?: return@withContext false
+        val old = runCatching { guideDb.parts()?.let { JSONObject(it) } }.getOrNull() ?: return@withContext false
+        if (old.optString("fp") != stored) return@withContext false
+        val fingerprint = guideFingerprint(settings, targets)
+        val partsText = guideParts(settings, targets, fingerprint)
+        val now = JSONObject(partsText)
+        if (old.optString("base") != now.optString("base")) return@withContext false
+
+        // Guide files: the remaining ones unchanged and in the same order, the rest only taken away.
+        fun list(o: JSONObject): List<String> {
+            val a = o.optJSONArray("targets") ?: return emptyList()
+            return List(a.length()) { a.getString(it) }
+        }
+        val oldTargets = list(old)
+        val newTargets = list(now)
+        var i = 0
+        for (t in oldTargets) if (i < newTargets.size && newTargets[i] == t) i++
+        if (i != newTargets.size) return@withContext false
+        val keptTargetIds = targets.mapTo(HashSet()) { it.fileId }
+        val removedTargets = oldTargets.map { it.substringBefore(':') }.filterTo(HashSet()) { it !in keptTargetIds }
+
+        // Playlists: every one still on has exactly the channels it had.
+        val oldPl = old.optJSONObject("playlists") ?: return@withContext false
+        val newPl = now.getJSONObject("playlists")
+        for (id in newPl.keys()) if (oldPl.optString(id) != newPl.getString(id)) return@withContext false
+        val removedPlaylists = oldPl.keys().asSequence().filterTo(HashSet()) { !newPl.has(it) }
+        if (removedPlaylists.isEmpty()) return@withContext false
+
+        val keys = channels.mapTo(HashSet()) { it.key }
+        // A remaining channel matched to a guide that went away would need another match: read it all.
+        val auto = runCatching { guideDb.autoMatches() }.getOrNull() ?: return@withContext false
+        if (auto.any { (key, a) -> key in keys && a.sourceId in removedTargets }) return@withContext false
+
+        // Hidden channels: group ids can change with the number of playlists ("playlist::group"
+        // with several, just "group" with one), so check what's hidden against the stored guide.
+        val hidden = prefs.currentHiddenEverywhere()
+        val nowHidden = channels.filter { hidden.hides(it.key, it.groupId) }.mapTo(HashSet()) { it.key }
+        val skipped = (loadSkipped() ?: emptySet()).filterTo(HashSet()) { it in keys }
+        if (keys.any { it in skipped && it !in nowHidden }) return@withContext false // shown again: needs listings
+        val newlyHidden = nowHidden - skipped
+        // Remaining channels hand-assigned to a guide that went away have no listings any more.
+        val overrides = prefs.userState.first().epgOverrides
+        val lostPinned = overrides.filter { (key, a) -> key in keys && a.sourceId in removedTargets }.keys
+
+        runCatching { guideDb.dropPlaylists(removedPlaylists, newlyHidden + lostPinned, fingerprint, partsText) }
+            .onFailure { Log.w(TAG, "Couldn't take turned-off playlists out of the guide", it); return@withContext false }
+        saveSkipped(skipped + newlyHidden)
+        val logos = _epgLogos.value.filterKeys { it in keys && it !in lostPinned }
+        if (logos.size != _epgLogos.value.size) { _epgLogos.value = logos; saveEpgLogos(logos) }
+        trimSourceLists(removedTargets, oldTargets, targets)
+        LIVE_REPORT.add("Guide: ${removedPlaylists.size} playlist(s) taken out without re-reading the guides")
+        scheduleCompact()
+        // The guide now matches its fingerprint: load it the usual way.
+        loadGuideFromDb(settings, targets, preReadGuide())
+    }
+
+    /**
+     * Guides that went with a turned-off playlist: taken out of Assign EPG's lists, in memory and
+     * in the saved copy (re-stamped for the remaining guides, so it isn't thrown away).
+     */
+    private fun trimSourceLists(removed: Set<String>, oldStamps: List<String>, targets: List<EpgTarget>) {
+        if (_epgSources.value.isNotEmpty()) {
+            _epgSources.value = _epgSources.value.filter { it.sourceId !in removed }
+        }
+        val f = sourceListsFile
+        if (!f.exists()) return
+        val lists = runCatching {
+            java.io.DataInputStream(java.io.BufferedInputStream(java.util.zip.GZIPInputStream(f.inputStream()))).use { input ->
+                if (input.readInt() != SOURCE_LISTS_VERSION) return@use null
+                if (input.readUTF() != oldStamps.joinToString(",")) return@use null
+                List(input.readInt()) {
+                    val sourceId = input.readUTF(); val name = input.readUTF(); val label = input.readUTF()
+                    val entries = List(input.readInt()) {
+                        val id = input.readUTF()
+                        val names = List(input.readInt()) { input.readUTF() }
+                        EpgChannelEntry(id, names, input.readUTF().ifBlank { null })
+                    }
+                    EpgSourceChannels(sourceId, name, label, entries)
+                }
+            }
+        }.getOrNull() ?: return
+        saveSourceLists(targets, lists.filter { it.sourceId !in removed })
+    }
+
     private suspend fun loadSavedGuide(settings: LiveTvSettings, targets: List<EpgTarget>): Boolean = withContext(Dispatchers.IO) {
         val file = savedGuideFile
         if (!file.exists() || _channels.value.isEmpty()) return@withContext false
@@ -1497,7 +1643,10 @@ class LiveTvRepository @Inject constructor(
         _programs.value = result
         epgDetailsPending = false
         // Store the whole guide in the database and keep only the hours around now in memory.
-        val stored = runCatching { guideDb.replaceAll(guideFingerprint(settings, targets), result, auto) }
+        val stored = runCatching {
+            val fp = guideFingerprint(settings, targets)
+            guideDb.replaceAll(fp, result, auto, guideParts(settings, targets, fp))
+        }
             .onFailure { Log.w(TAG, "Couldn't store the guide", it) }.isSuccess
         if (stored) {
             lightPrograms = false
@@ -1661,7 +1810,10 @@ class LiveTvRepository @Inject constructor(
 
         val changed = changes.keys
         // Stored guide first (when the guide is kept in the database), then what's on screen.
-        if (guideInDb) guideDb.replaceChannels(guideFingerprint(settings, targets), changed, newPrograms, newAuto)
+        if (guideInDb) {
+            val fp = guideFingerprint(settings, targets)
+            guideDb.replaceChannels(fp, changed, newPrograms, newAuto, guideParts(settings, targets, fp))
+        }
         _programs.value = HashMap(_programs.value).apply {
             changed.forEach { remove(it) }
             newPrograms.forEach { (k, l) ->
@@ -2116,6 +2268,8 @@ class LiveTvRepository @Inject constructor(
     companion object {
         private const val TAG = "LiveTvRepository"
         private const val HOUR = 60L * 60L * 1000L
+        /** How often to look for playlists and guides past their update time while the app is open. */
+        private const val STALE_CHECK_MS = 30L * 60L * 1000L
         /** Extra guide hours read ahead, so the window moves along a few times a day, not constantly. */
         /** The most channels of one group whose listings are loaded for every day ahead. */
         private const val MAX_FULL_RANGE_CHANNELS = 400

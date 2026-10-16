@@ -53,7 +53,13 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
     }
 
     /** Replaces the whole guide (after a guide update), in one transaction. */
-    fun replaceAll(fingerprint: String, programs: Map<String, List<EpgProgram>>, auto: Map<String, EpgAssignment>) {
+    fun replaceAll(
+        fingerprint: String,
+        programs: Map<String, List<EpgProgram>>,
+        auto: Map<String, EpgAssignment>,
+        /** What the guide was built from, in parts (see LiveTvRepository.guideParts). */
+        parts: String? = null
+    ) {
         val db = writableDatabase
         db.beginTransaction()
         try {
@@ -89,8 +95,7 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
             db.execSQL("CREATE INDEX IF NOT EXISTS programs_ch_start ON programs(ch, start)")
             db.execSQL("CREATE INDEX IF NOT EXISTS programs_stop ON programs(stop)")
             db.execSQL("CREATE INDEX IF NOT EXISTS programs_start ON programs(start)")
-            db.insertWithOnConflict("meta", null, ContentValues().apply { put("k", "fingerprint"); put("v", fingerprint) },
-                SQLiteDatabase.CONFLICT_REPLACE)
+            putFingerprint(db, fingerprint, parts)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -106,7 +111,8 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
         channels: Set<String>,
         programs: Map<String, List<EpgProgram>>,
         /** Automatic matches found for these channels (kept for next time). */
-        auto: Map<String, EpgAssignment> = emptyMap()
+        auto: Map<String, EpgAssignment> = emptyMap(),
+        parts: String? = null
     ) {
         val db = writableDatabase
         db.beginTransaction()
@@ -139,8 +145,56 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
                     put("ch", ch); put("source", a.sourceId); put("xmltv", a.xmltvId)
                 }, SQLiteDatabase.CONFLICT_REPLACE)
             }
-            db.insertWithOnConflict("meta", null, ContentValues().apply { put("k", "fingerprint"); put("v", fingerprint) },
+            putFingerprint(db, fingerprint, parts)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** Stores the fingerprint, and its parts (or clears stale parts), inside the caller's transaction. */
+    private fun putFingerprint(db: SQLiteDatabase, fingerprint: String, parts: String?) {
+        db.insertWithOnConflict("meta", null, ContentValues().apply { put("k", "fingerprint"); put("v", fingerprint) },
+            SQLiteDatabase.CONFLICT_REPLACE)
+        if (parts != null) {
+            db.insertWithOnConflict("meta", null, ContentValues().apply { put("k", "parts"); put("v", parts) },
                 SQLiteDatabase.CONFLICT_REPLACE)
+        } else {
+            db.delete("meta", "k = ?", arrayOf("parts"))
+        }
+    }
+
+    /** What the stored guide was built from, in parts, or null (stored by an older version). */
+    fun parts(): String? =
+        readableDatabase.rawQuery("SELECT v FROM meta WHERE k = 'parts'", null).use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+
+    /**
+     * A playlist turned off or removed: drops its channels' listings and matches (every channel
+     * key starts with its playlist's id and "|"), plus [channels], and stores the new fingerprint,
+     * in one go. Nothing else in the guide changes, so no guide has to be read again.
+     */
+    fun dropPlaylists(
+        playlistIds: Collection<String>,
+        channels: Collection<String>,
+        fingerprint: String,
+        parts: String
+    ) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            playlistIds.forEach { id ->
+                val prefix = "$id|"
+                val args = arrayOf(prefix.length.toString(), prefix)
+                db.delete("programs", "substr(ch, 1, ?) = ?", args)
+                db.delete("auto", "substr(ch, 1, ?) = ?", args)
+            }
+            channels.forEach { ch ->
+                db.delete("programs", "ch = ?", arrayOf(ch))
+                db.delete("auto", "ch = ?", arrayOf(ch))
+            }
+            putFingerprint(db, fingerprint, parts)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()

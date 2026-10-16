@@ -747,10 +747,26 @@ fun LiveTvSettingsContent(
                         onClick = { dialog = LiveDialog.ZapModeChoice }
                     )
                     SettingsToggleRow(
+                        "Channel Surfing (Browse Before Switching)",
+                        "Up / Down and CH+ / CH− show what's on other channels on the info bar without switching. What you're watching keeps playing until you press OK on the one you want. Back keeps you where you are.",
+                        s.channelSurf,
+                        { update { it.copy(channelSurf = !it.channelSurf) } }
+                    )
+                    SettingsToggleRow(
                         "Reverse Channel Up / Down",
                         "Up goes to the previous channel instead of the next one",
                         s.reverseZap,
                         { update { it.copy(reverseZap = !it.reverseZap) } }
+                    )
+                    SettingsActionRow(
+                        title = "Channel Row in the Info Panel",
+                        subtitle = "Pressing OK while watching shows a row of channels to jump to: the ones you watched recently (adult channels are never listed), or your favorites",
+                        value = when (s.panelRow) { "FAVORITES" -> "Favorites"; "OFF" -> "Off"; else -> "Recently Watched" },
+                        onClick = {
+                            update {
+                                it.copy(panelRow = when (it.panelRow) { "RECENT" -> "FAVORITES"; "FAVORITES" -> "OFF"; else -> "RECENT" })
+                            }
+                        }
                     )
                     SettingsActionRow(
                         title = "Info Bar Stays For",
@@ -826,7 +842,8 @@ fun LiveTvSettingsContent(
                     if (s.timeshiftEnabled) {
                         // Longer buffers when recordings go to a USB drive (far more room).
                         val onDrive = s.recordingStorage.isNotEmpty()
-                        val lengths = if (onDrive) listOf(15, 30, 60, 120, 240) else listOf(15, 30, 60, 120)
+                        // 10 minutes by default: Fire TV Sticks and similar have little free space.
+                        val lengths = if (onDrive) listOf(10, 15, 30, 60, 120, 240) else listOf(10, 15, 30, 60, 120)
                         SettingsActionRow(
                             title = "Keep Up To",
                             subtitle = "How far back you can go. Saved to the drive set in Recordings, and deleted when you change channel or leave Live TV.",

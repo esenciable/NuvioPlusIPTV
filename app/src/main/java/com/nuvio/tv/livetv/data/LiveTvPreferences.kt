@@ -152,6 +152,9 @@ class LiveTvPreferences @Inject constructor(
         val clockSize = stringPreferencesKey("clock_size")
         val clockOpacity = intPreferencesKey("clock_opacity")
         val clockBackground = booleanPreferencesKey("clock_background")
+        val recentInPanel = booleanPreferencesKey("recent_in_panel")
+        val panelRow = stringPreferencesKey("panel_row")
+        val channelSurf = booleanPreferencesKey("channel_surf")
         val lockedGroups = stringSetPreferencesKey("locked_groups")
         val reminders = stringPreferencesKey("reminders")
         val channelQuality = stringPreferencesKey("channel_quality")
@@ -354,7 +357,11 @@ class LiveTvPreferences @Inject constructor(
             clockPosition = p[Keys.clockPosition] ?: d.clockPosition,
             clockSize = p[Keys.clockSize] ?: d.clockSize,
             clockOpacity = p[Keys.clockOpacity] ?: d.clockOpacity,
-            clockBackground = p[Keys.clockBackground] ?: d.clockBackground
+            clockBackground = p[Keys.clockBackground] ?: d.clockBackground,
+            recentInPanel = p[Keys.recentInPanel] ?: d.recentInPanel,
+            // Before the choice existed it was an on / off switch for Recent.
+            panelRow = p[Keys.panelRow] ?: if (p[Keys.recentInPanel] == false) "OFF" else d.panelRow,
+            channelSurf = p[Keys.channelSurf] ?: d.channelSurf
         )
     }.distinctUntilChanged()
 
@@ -523,6 +530,9 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.clockSize] = s.clockSize
         p[Keys.clockOpacity] = s.clockOpacity
         p[Keys.clockBackground] = s.clockBackground
+        p[Keys.recentInPanel] = s.recentInPanel
+        p[Keys.panelRow] = s.panelRow
+        p[Keys.channelSurf] = s.channelSurf
     }
 
     // ---------- channel management ----------
@@ -892,13 +902,16 @@ class LiveTvPreferences @Inject constructor(
         store.edit { it[my(Keys.recent)] = encodeStringList(emptyList()) }
     }
 
-    suspend fun recordWatched(key: String) {
+    /** [addToRecent] false: adult channels, which never go in Recently watched. */
+    suspend fun recordWatched(key: String, addToRecent: Boolean = true) {
         store.edit { p ->
             val last = p[my(Keys.lastChannel)]
             if (last != null && last != key) p[my(Keys.previousChannel)] = last
             p[my(Keys.lastChannel)] = key
-            val recent = decodeStringList(p[my(Keys.recent)]).filter { it != key }
-            p[my(Keys.recent)] = encodeStringList((listOf(key) + recent).take(30))
+            if (addToRecent) {
+                val recent = decodeStringList(p[my(Keys.recent)]).filter { it != key }
+                p[my(Keys.recent)] = encodeStringList((listOf(key) + recent).take(30))
+            }
         }
     }
 

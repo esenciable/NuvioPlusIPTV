@@ -27,6 +27,12 @@ data class PlaylistSource(
     /** Xtream: the server's time zone (from its account info), used for catch-up times. */
     val serverTimezone: String = "",
     /**
+     * Xtream: when catch-up as HLS (.m3u8) last failed on this provider while TS worked (0: HLS
+     * fine). For a week after, catch-up asks for TS straight away (saves a failed try on every
+     * replay); then HLS is tried again, in case the provider has added it.
+     */
+    val catchupNoHlsSince: Long = 0L,
+    /**
      * Where channel logos come from: "playlist" (the playlist's own, the guide's when the
      * playlist has none) or "epg" (the guide's, the playlist's when the guide has none).
      */

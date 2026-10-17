@@ -83,7 +83,8 @@ internal fun panelControls(mode: PanelMode, paused: Boolean, canSkip: Boolean): 
     add(PanelControl.PLAY)
     if (transport && canSkip) add(PanelControl.FORWARD)
     if (mode != PanelMode.LIVE) add(PanelControl.LIVE)
-    add(PanelControl.CC); add(PanelControl.AUDIO); add(PanelControl.SIZE); add(PanelControl.SLEEP); add(PanelControl.MORE)
+    // Audio and Sleep are in the ••• menu, so the time bar gets their room.
+    add(PanelControl.CC); add(PanelControl.SIZE); add(PanelControl.MORE)
 }
 
 /**

@@ -2660,6 +2660,11 @@ private fun navigateToDrawerRoute(
     currentRoute: String?,
     targetRoute: String
 ) {
+    // Live TV fork: Search picked from the side menu always shows everything, even when the
+    // search screen on top was opened from the guide or On Demand (their limited scope).
+    if (targetRoute == Screen.Search.route) {
+        com.nuvio.tv.livetv.ui.LiveTvSearchBridge.origin.value = com.nuvio.tv.livetv.ui.LiveTvSearchBridge.HOME
+    }
     if (currentRoute == targetRoute) {
         if (targetRoute == Screen.Home.route) {
             // Scroll Home to top by clearing saved focus/scroll state on the ViewModel.

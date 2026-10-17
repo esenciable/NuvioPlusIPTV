@@ -157,6 +157,22 @@ class LiveTvViewModel @Inject constructor(
     }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Eagerly, LiveTvUiState())
 
     init {
+        // A provider whose catch-up only works as TS: ask for TS for a week (saves a failed
+        // HLS try, about a second, on every replay), then try HLS again; if that fails too,
+        // another week of TS, and so on.
+        playback.onCatchupHlsUnsupported = { sourceId ->
+            viewModelScope.launch {
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Catch-up: this provider doesn't do HLS replays; using TS for the next week")
+                val now = System.currentTimeMillis()
+                prefs.updatePlaylists { l -> l.map { if (it.id == sourceId) it.copy(catchupNoHlsSince = now) else it } }
+            }
+        }
+        playback.onCatchupHlsWorks = { sourceId ->
+            if ((playlistNoHls.value[sourceId] ?: 0L) > 0L) viewModelScope.launch {
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Catch-up: HLS replays work on this provider again")
+                prefs.updatePlaylists { l -> l.map { if (it.id == sourceId) it.copy(catchupNoHlsSince = 0L) else it } }
+            }
+        }
         repository.ensureLoaded()
         // Coming back to Live TV after hours in the background: anything due is updated now.
         repository.refreshIfStale()
@@ -570,7 +586,8 @@ class LiveTvViewModel @Inject constructor(
         val windowStop = maxOf(program.stopMs, minOf(now - 30_000, program.stopMs + CONTINUE_MS))
         val url = CatchupUrlBuilder.build(
             channel.url, catchup, start - shift, windowStop - shift, now,
-            preferHls = settings.value.catchupPreferHls,
+            preferHls = settings.value.catchupPreferHls &&
+                now - (playlistNoHls.value[channel.sourceId] ?: 0L) > HLS_RETRY_MS,
             serverTimezone = zone
         ) ?: return false
         playback.play(
@@ -587,6 +604,11 @@ class LiveTvViewModel @Inject constructor(
         repository.ensureChannelSchedule(channel.key)
         return true
     }
+
+    /** Playlist id -> when HLS catch-up last failed there (see [PlaylistSource.catchupNoHlsSince]). */
+    private val playlistNoHls: StateFlow<Map<String, Long>> = prefs.playlists
+        .map { l -> l.associate { it.id to it.catchupNoHlsSince } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     /** Playlist id -> Xtream server time zone (catch-up links are in server time). */
     private val playlistZones: StateFlow<Map<String, String>> = prefs.playlists
@@ -813,6 +835,8 @@ class LiveTvViewModel @Inject constructor(
     fun ensureGuideRange(fromMs: Long, toMs: Long) = repository.ensureRange(fromMs, toMs)
     /** The group on screen: its listings for every day the guide keeps (see the repository). */
     fun ensureGroupFullRange(channelKeys: List<String>) = repository.ensureFullRange(channelKeys)
+    /** Changes when the guide's days ahead need asking for again (see the repository). */
+    val guideGeneration: StateFlow<Int> = repository.guideGeneration
 
     /** A channel's full schedule (overlay mode's days, catch-up). */
     fun ensureChannelSchedule(channelKey: String) {
@@ -1245,3 +1269,6 @@ private fun com.nuvio.tv.livetv.data.LiveTv247Matcher.Match.toMeta() = com.nuvio
     imdbRating = rating,
     genres = emptyList()
 )
+
+/** How long catch-up sticks to TS on a provider whose HLS replays failed, before trying HLS again. */
+private const val HLS_RETRY_MS = 7L * 24 * 3_600_000L

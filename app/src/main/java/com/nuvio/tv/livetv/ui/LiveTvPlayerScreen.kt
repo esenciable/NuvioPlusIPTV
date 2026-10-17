@@ -136,6 +136,12 @@ fun LiveTvPlayerScreen(
     var controlFocus by remember { mutableStateOf<PanelControl?>(null) }
     /** The highlighted tile in the full panel's Recent row (0 TV Guide, 1… channels, then Clear), or null. */
     var recentFocus by remember { mutableStateOf<Int?>(null) }
+    // TV Guide tile: opened when OK is let go, so the key's release doesn't land on the guide
+    // (where it opened the channel full screen again, and the guide only flashed up).
+    var guideOnOkUp by remember { mutableStateOf(false) }
+    // Holding Right (live): back to the channel you were watching before.
+    var rightDownAt by remember { mutableStateOf(0L) }
+    var rightHoldDone by remember { mutableStateOf(false) }
     // The full panel (OK): timeline, buttons and options. Changing channels shows the compact one.
     var panelFull by remember { mutableStateOf(false) }
     fun closeFull() { panelFull = false; controlFocus = null; recentFocus = null }
@@ -304,7 +310,15 @@ fun LiveTvPlayerScreen(
                 // ---- the Recent row (Down from the panel's buttons)
                 val rf = recentFocus
                 if (rf != null && controlFocus != null) {
-                    if (e.type == KeyEventType.KeyUp) return@onPreviewKeyEvent isOk || e.key == Key.Back
+                    if (e.type == KeyEventType.KeyUp) {
+                        if (isOk && guideOnOkUp) {
+                            guideOnOkUp = false
+                            closeFull()
+                            onBack()
+                            return@onPreviewKeyEvent true
+                        }
+                        return@onPreviewKeyEvent isOk || e.key == Key.Back
+                    }
                     showBanner()
                     val recentList = viewModel.panelRowChannels(playback.channelKey)
                     // Clear is only in Recent (favorites are cleared in the guide).
@@ -321,7 +335,7 @@ fun LiveTvPlayerScreen(
                         }
                         isOk && e.nativeKeyEvent.repeatCount == 0 -> when {
                             // TV Guide: back to the guide.
-                            rf == 0 -> { closeFull(); onBack() }
+                            rf == 0 -> guideOnOkUp = true
                             hasClear && rf >= lastTile -> {
                                 viewModel.clearRecent()
                                 recentFocus = 0
@@ -472,7 +486,22 @@ fun LiveTvPlayerScreen(
                             shifting && viewModel.playback.shiftCanSeek() && viewModel.playback.shiftIsBehind() -> {
                                 viewModel.playback.shiftSeekBy(10_000L * (1 + minOf(e.nativeKeyEvent.repeatCount, 11))); showBanner()
                             }
-                            else -> showBanner()
+                            e.nativeKeyEvent.repeatCount == 0 -> {
+                                rightDownAt = System.currentTimeMillis()
+                                rightHoldDone = false
+                                showBanner()
+                            }
+                            // Held for over half a second: the previous channel (once per press).
+                            !rightHoldDone && System.currentTimeMillis() - rightDownAt >= 600 -> {
+                                rightHoldDone = true
+                                val prev = viewModel.previousChannel()?.takeIf { it.key != playback.channelKey }
+                                if (prev != null) {
+                                    browseKey = null
+                                    viewModel.preview(prev)
+                                    showBanner()
+                                } else toast = "No previous channel yet"
+                            }
+                            else -> Unit
                         }
                         true
                     }
@@ -875,7 +904,13 @@ fun LiveTvPlayerScreen(
             title = "Subtitles",
             options = viewModel.playback.subtitleTracks(),
             allowOff = true,
-            onPick = { viewModel.playback.selectTrack(C.TRACK_TYPE_TEXT, it); dialog = PlayerDialog.NONE },
+            more = viewModel.playback.moreCaptionTracks(),
+            note = viewModel.playback.captionsNote(),
+            onPick = {
+                viewModel.playback.pickSubtitle(it)
+                captionsOn = viewModel.playback.captionsOn()
+                dialog = PlayerDialog.NONE
+            },
             onDismiss = { dialog = PlayerDialog.NONE }
         )
         PlayerDialog.STREAM_INFO -> viewModel.channelByKey(playback.channelKey)?.let { current ->
@@ -883,6 +918,7 @@ fun LiveTvPlayerScreen(
                 player = viewModel.playback.player,
                 channel = current,
                 shape = viewModel.pictureShapeOf(current.key),
+                captions = viewModel.playback.captionsInfo(),
                 onDismiss = { dialog = PlayerDialog.NONE; scope.launch { delay(60); runCatching { rootFocus.requestFocus() } } }
             )
         }
@@ -1083,15 +1119,25 @@ private fun TrackDialog(
     title: String,
     options: List<LiveTrackOption>,
     allowOff: Boolean,
+    /** Extra caption tracks, behind "More caption tracks" (hidden when there are none). */
+    more: List<LiveTrackOption> = emptyList(),
+    /** Shown above the list when it has nothing to pick ("No captions on this channel"). */
+    note: String? = null,
     onPick: (LiveTrackOption?) -> Unit,
     onDismiss: () -> Unit
 ) {
     val first = remember { FocusRequester() }
+    // Opened already when one of the extra tracks is the one on.
+    var showMore by remember { mutableStateOf(more.any { it.selected }) }
     LiveDialog(onDismiss = onDismiss, width = 480.dp) {
         LiveText(title, size = 20.sp, weight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
         if (options.isEmpty() && !allowOff) {
             LiveText("No tracks available", color = NuvioTheme.colors.TextSecondary)
+        }
+        note?.let {
+            LiveText(it, color = NuvioTheme.colors.TextSecondary)
+            Spacer(Modifier.height(8.dp))
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (allowOff) {
@@ -1109,6 +1155,27 @@ private fun TrackDialog(
                     onClick = { onPick(o) }
                 ) { f ->
                     LiveText((if (o.selected) "✓  " else "") + o.label, color = focusedTextColor(f))
+                }
+            }
+            if (more.isNotEmpty()) {
+                item {
+                    LiveFocusRow(modifier = Modifier.fillMaxWidth(), onClick = { showMore = !showMore }) { f ->
+                        LiveText(
+                            (if (showMore) "▾  " else "▸  ") + "More caption tracks",
+                            color = focusedTextColor(f).copy(alpha = 0.85f)
+                        )
+                    }
+                }
+                if (showMore) {
+                    items(more) { o ->
+                        LiveFocusRow(
+                            modifier = Modifier.fillMaxWidth().padding(start = 18.dp),
+                            selected = o.selected,
+                            onClick = { onPick(o) }
+                        ) { f ->
+                            LiveText((if (o.selected) "✓  " else "") + o.label, color = focusedTextColor(f))
+                        }
+                    }
                 }
             }
         }
@@ -1250,6 +1317,7 @@ private fun StreamInfoDialog(
     player: androidx.media3.common.Player?,
     channel: LiveChannel,
     shape: com.nuvio.tv.livetv.player.PictureShape = com.nuvio.tv.livetv.player.PictureShape.AUTO,
+    captions: String? = null,
     onDismiss: () -> Unit
 ) {
     val exo = player as? androidx.media3.exoplayer.ExoPlayer
@@ -1287,6 +1355,7 @@ private fun StreamInfoDialog(
                 ).joinToString(" · ")
             )
         }
+        captions?.let { add("Captions" to it) }
         exo?.let { p -> add("Buffered" to "${p.totalBufferedDuration / 1000} s") }
         add("Source" to (runCatching { android.net.Uri.parse(channel.url).host }.getOrNull() ?: "—"))
     }

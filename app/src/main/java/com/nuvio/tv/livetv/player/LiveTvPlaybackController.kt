@@ -55,7 +55,9 @@ data class LiveTrackOption(
     val groupIndex: Int,
     val trackIndex: Int,
     val label: String,
-    val selected: Boolean
+    val selected: Boolean,
+    /** Closed captions inside the video: which kind ([LiveCaptions.CC1]…), or null for subtitles. */
+    val kind: String? = null
 )
 
 /**
@@ -491,13 +493,19 @@ class LiveTvPlaybackController @Inject constructor(
         if (_recordingPlayback.value != null) { _recordingPlayback.value = null; shiftJob?.cancel() }
         archiveStartWallMs = if (catchupTitle != null) catchupStartMs else null
         archiveWallMapped = false
-        if (currentChannel?.key != channel.key) { captionsHandled = false; resetFrameRate() }
+        if (currentChannel?.key != channel.key) {
+            captionsHandled = false
+            resetFrameRate()
+            LiveCaptions.reset()
+            captionWatch?.cancel()
+        }
         val url = overrideUrl ?: channel.url
         if (currentChannel?.key != channel.key || currentUrl != url) {
             forcedMime = null
             formatGuess = 0
         }
         fallbackUrls.clear()
+        hlsCatchupFailedOn = null
         archiveStarted = false
         fallback?.let { fallbackUrls += it }
         fallbacks.forEach { if (it !in fallbackUrls) fallbackUrls += it }
@@ -778,11 +786,93 @@ class LiveTvPlaybackController @Inject constructor(
     /** One press: captions off if on; otherwise on, with the first available track. */
     fun toggleCaptions(): Boolean {
         captionsHandled = true // your choice for this channel stands
-        val tracks = tracksOf(C.TRACK_TYPE_TEXT)
+        captionWatch?.cancel()
         return if (captionsOn()) { selectTrack(C.TRACK_TYPE_TEXT, null); false }
         else {
-            val pick = tracks.firstOrNull() ?: return false
-            selectTrack(C.TRACK_TYPE_TEXT, pick); true
+            val pick = subtitleTracks().firstOrNull() ?: return false
+            selectTrack(C.TRACK_TYPE_TEXT, pick)
+            if (pick.kind != null) watchCaptions()
+            true
+        }
+    }
+
+    /** Picked in the Subtitles menu: that track stays, no switching to the other copy. */
+    fun pickSubtitle(option: LiveTrackOption?) {
+        captionsHandled = true
+        captionWatch?.cancel()
+        selectTrack(C.TRACK_TYPE_TEXT, option)
+    }
+
+    private var captionWatch: Job? = null
+
+    /**
+     * Captions switched on: if the copy picked shows nothing for 10 s while the other copy of the
+     * same captions (the old kind or the digital kind) is carrying text, switch to that one.
+     */
+    private fun watchCaptions() {
+        captionWatch?.cancel()
+        captionWatch = scope.launch {
+            repeat(12) { step ->
+                delay(5_000)
+                if (!captionsOn()) return@launch
+                val all = tracksOf(C.TRACK_TYPE_TEXT)
+                val kind = all.firstOrNull { it.selected }?.kind ?: return@launch
+                val found = LiveCaptions.found.value
+                if (kind in found) return@launch // working
+                if (step < 1) return@repeat
+                val other = all.firstOrNull {
+                    it.kind != null && it.kind != kind &&
+                        it.kind in setOf(LiveCaptions.CC1, LiveCaptions.DIGITAL) && it.kind in found
+                }
+                if (other != null) {
+                    com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Captions: nothing on ${kind.uppercase()}, switched to ${other.kind?.uppercase()}")
+                    selectTrack(C.TRACK_TYPE_TEXT, other)
+                    return@launch
+                }
+            }
+        }
+    }
+
+    /**
+     * The closed-captions track to offer first: CC1, or the digital copy when only that one has
+     * text. Null when the channel has no captions inside the video.
+     */
+    private fun primaryCaption(all: List<LiveTrackOption>): LiveTrackOption? {
+        val cea = all.filter { it.kind != null }
+        if (cea.isEmpty()) return null
+        val found = LiveCaptions.found.value
+        return cea.firstOrNull { it.kind == LiveCaptions.CC1 && (found.isEmpty() || LiveCaptions.CC1 in found) }
+            ?: cea.firstOrNull { it.kind == LiveCaptions.DIGITAL && LiveCaptions.DIGITAL in found }
+            ?: cea.firstOrNull { it.kind in found }
+            ?: cea.firstOrNull { it.kind == LiveCaptions.CC1 }
+            ?: cea.first()
+    }
+
+    /** Other caption tracks this channel really carries (the CC menu's "More caption tracks"). */
+    fun moreCaptionTracks(): List<LiveTrackOption> {
+        val all = tracksOf(C.TRACK_TYPE_TEXT)
+        val primary = primaryCaption(all)
+        val found = LiveCaptions.found.value
+        return all.filter { it.kind != null && it != primary && (it.kind in found || it.selected) }
+    }
+
+    /** For an empty Subtitles menu: why. */
+    fun captionsNote(): String? = when {
+        subtitleTracks().isNotEmpty() || moreCaptionTracks().isNotEmpty() -> null
+        else -> "No captions on this channel"
+    }
+
+    /** Stream Info: which captions the channel carries. */
+    fun captionsInfo(): String {
+        val found = LiveCaptions.found.value
+        if (found.isNotEmpty()) return LiveCaptions.summary(found)
+        val subs = tracksOf(C.TRACK_TYPE_TEXT).filter { it.kind == null }
+        if (subs.isNotEmpty()) return subs.joinToString(", ") { it.label }
+        return when {
+            LiveCaptions.noneFound() -> "None found in this stream"
+            LiveCaptions.watching() -> "Checking…"
+            tracksOf(C.TRACK_TYPE_TEXT).isEmpty() -> "None"
+            else -> "Not checked for this stream type"
         }
     }
 
@@ -790,7 +880,16 @@ class LiveTvPlaybackController @Inject constructor(
     fun audioLabel(): String = tracksOf(C.TRACK_TYPE_AUDIO).firstOrNull { it.selected }?.label?.take(18) ?: "Audio"
 
     fun audioTracks(): List<LiveTrackOption> = tracksOf(C.TRACK_TYPE_AUDIO)
-    fun subtitleTracks(): List<LiveTrackOption> = tracksOf(C.TRACK_TYPE_TEXT)
+    /**
+     * The Subtitles menu: ordinary subtitle tracks, plus one closed-captions entry (the others
+     * are under "More caption tracks"). No captions entry once 20 s of watching found none.
+     */
+    fun subtitleTracks(): List<LiveTrackOption> {
+        val all = tracksOf(C.TRACK_TYPE_TEXT)
+        val primary = primaryCaption(all)
+        val showPrimary = primary != null && (!LiveCaptions.noneFound() || primary.selected)
+        return all.filter { it.kind == null || (showPrimary && it == primary) }
+    }
 
     fun selectTrack(type: Int, option: LiveTrackOption?) {
         val p = _player ?: return
@@ -813,18 +912,15 @@ class LiveTvPlaybackController @Inject constructor(
             for (ti in 0 until group.length) {
                 if (!group.isTrackSupported(ti)) continue
                 val f = group.getTrackFormat(ti)
-                val captions = when (f.sampleMimeType) {
-                    MimeTypes.APPLICATION_CEA608 -> "Closed captions"
-                    MimeTypes.APPLICATION_CEA708 -> "Closed captions (708)"
-                    else -> null
-                }
+                val kind = LiveCaptions.kindOf(f)
+                val captions = kind?.let { LiveCaptions.label(it) }
                 val parts = listOfNotNull(
                     captions ?: f.label,
                     f.language?.let { java.util.Locale.forLanguageTag(it).displayLanguage.ifBlank { it } },
                     f.sampleMimeType?.takeIf { captions == null }?.substringAfter('/')?.uppercase(),
                     if (f.channelCount > 0) "${f.channelCount}ch" else null
                 )
-                out += LiveTrackOption(gi, ti, parts.distinct().joinToString(" · ").ifBlank { "Track ${out.size + 1}" }, group.isTrackSelected(ti))
+                out += LiveTrackOption(gi, ti, parts.distinct().joinToString(" · ").ifBlank { "Track ${out.size + 1}" }, group.isTrackSelected(ti), kind)
             }
         }
         return out
@@ -954,11 +1050,24 @@ class LiveTvPlaybackController @Inject constructor(
             if (!captionsByDefault || captionsHandled) return
             if (tracks.groups.none { it.type == C.TRACK_TYPE_TEXT && it.length > 0 }) return
             captionsHandled = true
-            if (!captionsOn()) tracksOf(C.TRACK_TYPE_TEXT).firstOrNull()?.let { selectTrack(C.TRACK_TYPE_TEXT, it) }
+            if (!captionsOn()) subtitleTracks().firstOrNull()?.let {
+                selectTrack(C.TRACK_TYPE_TEXT, it)
+                if (it.kind != null) watchCaptions()
+            }
         }
 
         override fun onRenderedFirstFrame() {
             awaitingFrame = false
+            // HLS catch-up failed and the TS link plays: remember it for this provider.
+            hlsCatchupFailedOn?.let { source ->
+                hlsCatchupFailedOn = null
+                onCatchupHlsUnsupported?.invoke(source)
+            }
+            // HLS catch-up playing: this provider does offer it.
+            val url = currentUrl?.substringBefore('?')
+            if (_state.value.catchupTitle != null && url != null && url.contains("/timeshift/") && url.endsWith(".m3u8", true)) {
+                currentChannel?.sourceId?.let { onCatchupHlsWorks?.invoke(it) }
+            }
         }
 
         override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
@@ -1057,6 +1166,9 @@ class LiveTvPlaybackController @Inject constructor(
             val fb = fallbackUrls.removeFirstOrNull()
             if (fb != null && ch != null && p != null) {
                 com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Catch-up failed (${error.errorCodeName}); trying ${redact(fb)}")
+                val wasHls = currentUrl?.substringBefore('?')?.let { it.contains("/timeshift/") && it.endsWith(".m3u8", true) } == true
+                val toTs = fb.substringBefore('?').let { it.contains("/timeshift/") && it.endsWith(".ts", true) }
+                hlsCatchupFailedOn = if (wasHls && toTs) ch.sourceId else null
                 currentUrl = fb
                 archiveStartPending = _state.value.catchupTitle != null
                 p.setMediaSource(buildMediaSource(fb, ch.headers, isLive = _state.value.catchupTitle == null))
@@ -1089,6 +1201,13 @@ class LiveTvPlaybackController @Inject constructor(
             scheduleReconnect(describe(error))
         }
     }
+
+    /** A provider's HLS catch-up just failed and its TS link is being tried (playlist id). */
+    @Volatile private var hlsCatchupFailedOn: String? = null
+    /** Called with the playlist id when that provider's catch-up works as TS but not HLS. */
+    var onCatchupHlsUnsupported: ((String) -> Unit)? = null
+    /** Called with the playlist id when that provider's catch-up plays as HLS. */
+    var onCatchupHlsWorks: ((String) -> Unit)? = null
 
     /** Format tried for a link that doesn't say what it is (after "container unsupported"). */
     @Volatile private var forcedMime: String? = null
@@ -1141,9 +1260,11 @@ class LiveTvPlaybackController @Inject constructor(
         if (item.localConfiguration?.mimeType == MimeTypes.APPLICATION_M3U8) {
             return androidx.media3.exoplayer.hls.HlsMediaSource.Factory(http)
                 .setExtractorFactory(
-                    androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory(
-                        androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES,
-                        /* exposeCea608WhenMissingDeclarations = */ true
+                    LiveCaptions.Hls(
+                        androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory(
+                            androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES,
+                            /* exposeCea608WhenMissingDeclarations = */ true
+                        )
                     )
                 )
                 .createMediaSource(item)
@@ -1153,15 +1274,9 @@ class LiveTvPlaybackController @Inject constructor(
                 androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES or
                     androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_OVERRIDE_CAPTION_DESCRIPTORS
             )
-            .setTsSubtitleFormats(
-                listOf(
-                    androidx.media3.common.Format.Builder()
-                        .setSampleMimeType(MimeTypes.APPLICATION_CEA608)
-                        .setAccessibilityChannel(1)
-                        .build()
-                )
-            )
-        return DefaultMediaSourceFactory(http, extractors).createMediaSource(item)
+            // CC1–CC4 and the digital (708) captions; the menu only offers those with text.
+            .setTsSubtitleFormats(LiveCaptions.formats)
+        return DefaultMediaSourceFactory(http, LiveCaptions.Extractors(extractors)).createMediaSource(item)
     }
 
     /**

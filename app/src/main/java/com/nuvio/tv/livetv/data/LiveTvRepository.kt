@@ -549,7 +549,8 @@ class LiveTvRepository @Inject constructor(
 
         // A guide kept in the database fills in in the background (empty for a moment), so an
         // empty list then doesn't mean there's no guide: only re-match if something changed.
-        if (changed || (_programs.value.isEmpty() && !guideInDb)) {
+        if (changed || (_programs.value.isEmpty() && (!guideInDb || storedGuideEmpty))) {
+            storedGuideEmpty = false
             outOfTheWay()
             setStatus(loading = true, message = "Matching guide data…")
             buildPrograms(settings, epgTargets)
@@ -828,6 +829,8 @@ class LiveTvRepository @Inject constructor(
     @Volatile private var loadedFrom = Long.MAX_VALUE
     @Volatile private var loadedTo = Long.MIN_VALUE
     @Volatile private var guideInDb = false
+    /** The stored guide turned out to have no listings around now: match the guides again. */
+    @Volatile private var storedGuideEmpty = false
     private val rangeMutex = Mutex()
 
     private fun defaultWindow(now: Long = System.currentTimeMillis()) = (now - 3 * HOUR) to (now + 12 * HOUR + RANGE_SLACK_MS)
@@ -901,7 +904,7 @@ class LiveTvRepository @Inject constructor(
         val from = pre?.from ?: (now - 60 * 60 * 1000L)
         val to = pre?.to ?: (now + 4 * HOUR)
         _programs.value = pre?.window.orEmpty()
-        fullRangeChannels.clear()
+        fullRangeChannels.clear(); _guideGeneration.value++
         _autoMatches.value = runCatching { guideDb.autoMatches() }.getOrDefault(emptyMap())
         loadedFrom = from
         loadedTo = to
@@ -927,6 +930,15 @@ class LiveTvRepository @Inject constructor(
                 loadedTo = maxOf(loadedTo, fullTo)
             }
             LIVE_REPORT.add("All channels' listings ready: ${_programs.value.size} channels in ${System.currentTimeMillis() - t0} ms")
+            // The stored guide has nothing for now or the next hours (it was stored empty, or
+            // all of it has run out): it was still taken as up to date, so the guide stayed
+            // empty until a playlist or guide changed. Match the guide files again now (and
+            // download them again if they're old too).
+            if (_programs.value.isEmpty() && _channels.value.isNotEmpty() && targets.isNotEmpty()) {
+                storedGuideEmpty = true
+                LIVE_REPORT.add("Stored guide has no listings for now: reading the guides again")
+                scope.launch { runCatching { refreshStale() } }
+            }
           } finally {
             rangeBusy.set(false)
             pendingRange?.let { (f, t) -> pendingRange = null; ensureRange(f, t) }
@@ -1010,6 +1022,15 @@ class LiveTvRepository @Inject constructor(
 
     /** Channels whose listings are loaded for the whole guide (as many days ahead as set). */
     private val fullRangeChannels = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    /**
+     * Goes up each time the guide in memory is replaced with just the hours around now (a guide
+     * update, a rebuild after changing Guide Days Ahead…). The guide screen then asks for its
+     * group's days ahead again: before, they were only asked for when you changed group, so
+     * after an update the guide ran out "tomorrow" whatever Guide Days Ahead was set to.
+     */
+    private val _guideGeneration = MutableStateFlow(0)
+    val guideGeneration: StateFlow<Int> = _guideGeneration.asStateFlow()
     private var fullRangeJob: kotlinx.coroutines.Job? = null
 
     /**
@@ -1653,7 +1674,7 @@ class LiveTvRepository @Inject constructor(
             lightPrograms = false
             val (from, to) = defaultWindow()
             _programs.value = result.mapValues { (_, l) -> l.filter { it.stopMs > from && it.startMs < to } }.filterValues { it.isNotEmpty() }
-            fullRangeChannels.clear()
+            fullRangeChannels.clear(); _guideGeneration.value++
             loadedFrom = from
             loadedTo = to
             guideInDb = true

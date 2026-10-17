@@ -60,10 +60,15 @@ internal object LivePictureShape {
      * (Fit, Crop, Stretch, …) on top, the same way Nuvio's movie player does but from that shape.
      */
     fun apply(view: PlayerView, shape: PictureShape, mode: AspectMode?) {
-        val size = view.player?.videoSize ?: return
-        val aspect = aspect(size, shape) ?: return
         val frame = view.findViewById<View>(androidx.media3.ui.R.id.exo_content_frame) as? AspectRatioFrameLayout
             ?: return
+        // The preview window (no screen-size mode) is never zoomed or stretched: undo whatever
+        // the full-screen size (Slight Zoom, Crop, Stretch…) left on the picture. Without this
+        // the zoom stayed on when going back to the guide and the video spilled out of the
+        // preview window.
+        if (mode == null) reset(frame)
+        val size = view.player?.videoSize ?: return
+        val aspect = aspect(size, shape) ?: return
         frame.setAspectRatio(aspect)
         if (mode == null) return
         reset(frame)

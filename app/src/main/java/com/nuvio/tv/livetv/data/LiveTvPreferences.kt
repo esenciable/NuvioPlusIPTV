@@ -377,7 +377,14 @@ class LiveTvPreferences @Inject constructor(
         }
         HiddenEverywhere(ids.distinct().map { id ->
             val v = profileView(p, id)
-            (v[Keys.hiddenChannels] ?: emptySet()) to (v[Keys.hiddenGroups] ?: emptySet())
+            val hiddenGroups = v[Keys.hiddenGroups] ?: emptySet()
+            // Channels this profile still shows somewhere else: in Favorites, in a group of its
+            // own, or copied into another group. Their own group being hidden doesn't hide them.
+            val kept = HashSet<String>()
+            kept += decodeStringList(v[Keys.favorites])
+            decodeCustomGroups(v[Keys.customGroups]).forEach { g -> if (g.id !in hiddenGroups) kept += g.channelKeys }
+            decodeListMap(v[Keys.channelCopies]).forEach { (groupId, keys) -> if (groupId !in hiddenGroups) kept += keys }
+            HiddenView(v[Keys.hiddenChannels] ?: emptySet(), hiddenGroups, kept)
         })
     }.distinctUntilChanged()
 
@@ -1035,6 +1042,7 @@ class LiveTvPreferences @Inject constructor(
                     importLive = o.optBoolean("importLive", true),
                     streamFormat = o.optString("streamFormat").ifBlank { "auto" },
                     serverTimezone = o.optString("serverTimezone"),
+                    catchupNoHlsSince = o.optLong("catchupNoHlsSince", 0L),
                     logoSource = o.optString("logoSource").ifBlank { "playlist" }
                 )
             }
@@ -1057,6 +1065,7 @@ class LiveTvPreferences @Inject constructor(
                     .put("importLive", s.importLive)
                     .put("streamFormat", s.streamFormat)
                     .put("serverTimezone", s.serverTimezone)
+                    .put("catchupNoHlsSince", s.catchupNoHlsSince)
                     .put("logoSource", s.logoSource)
             )
         }
@@ -1175,8 +1184,18 @@ class LiveTvPreferences @Inject constructor(
 }
 
 /** Each profile's hidden channels and hidden groups (see [LiveTvPreferences.hiddenEverywhere]). */
-data class HiddenEverywhere(private val views: List<Pair<Set<String>, Set<String>>>) {
-    /** True when no profile shows this channel (hidden itself, or its group is). */
+/** One profile's hidden channels and groups, and the channels it shows elsewhere anyway. */
+data class HiddenView(val channels: Set<String>, val groups: Set<String>, val kept: Set<String> = emptySet())
+
+data class HiddenEverywhere(private val views: List<HiddenView>) {
+    /**
+     * True when no profile shows this channel (hidden itself, or its group is). A channel in
+     * Favorites, in a group you made, or copied into another group is shown: its listings are
+     * kept even when its own group is hidden. (They weren't: channels in your own groups whose
+     * provider group was hidden had almost no guide.)
+     */
     fun hides(channelKey: String, groupId: String): Boolean =
-        views.isNotEmpty() && views.all { (channels, groups) -> channelKey in channels || groupId in groups }
+        views.isNotEmpty() && views.all { v ->
+            channelKey !in v.kept && (channelKey in v.channels || groupId in v.groups)
+        }
 }

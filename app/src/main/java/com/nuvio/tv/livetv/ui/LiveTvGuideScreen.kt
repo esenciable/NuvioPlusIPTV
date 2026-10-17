@@ -300,7 +300,9 @@ fun LiveTvGuideScreen(
     val selectedGroupTitle = ui.groups.firstOrNull { it.id == ui.selectedGroupId }?.title ?: "All channels"
     // The group on screen gets its listings for every day ahead (Guide Days Ahead), in the
     // background, so scrolling ahead in it doesn't run out after half a day.
-    LaunchedEffect(ui.selectedGroupId, ui.channels.size) {
+    // Also after a guide update, which keeps only the hours around now in memory.
+    val guideGeneration by viewModel.guideGeneration.collectAsStateWithLifecycle()
+    LaunchedEffect(ui.selectedGroupId, ui.channels.size, guideGeneration) {
         delay(400) // flicking through groups: only the one you stop on
         viewModel.ensureGroupFullRange(ui.channels.map { it.key })
     }
@@ -751,6 +753,28 @@ fun LiveTvGuideScreen(
     var previewBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     // Only a Back press that *started* in the guide counts as "hold Back" here.
     var backPressStartedHere by remember { mutableStateOf(false) }
+    // Guide left alone for 2 minutes while a channel plays in the preview, with the guide itself
+    // on screen (not a menu, a dialog or the side menu): back to full screen.
+    var lastKeyAt by remember { mutableStateOf(System.currentTimeMillis()) }
+    var guideHasFocus by remember { mutableStateOf(false) }
+    val windowFocused = androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused
+    val idleMinutes = GUIDE_IDLE_FULL_SCREEN_MINUTES
+    // Coming back from full screen or closing a dialog starts the wait again.
+    LaunchedEffect(windowFocused, fullscreen) { lastKeyAt = System.currentTimeMillis() }
+    LaunchedEffect(idleMinutes, lastKeyAt, fullscreen, guideHasFocus, windowFocused, playback.channelKey) {
+        if (idleMinutes <= 0 || fullscreen || !guideHasFocus || !windowFocused || playback.channelKey == null) return@LaunchedEffect
+        val wait = idleMinutes * 60_000L - (System.currentTimeMillis() - lastKeyAt)
+        delay(wait.coerceAtLeast(5_000L))
+        if (viewModel.playbackState.value.channelKey == null || viewModel.playbackState.value.error != null) return@LaunchedEffect
+        com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Guide left alone for $idleMinutes min: full screen")
+        // Same as going full screen yourself: remember where you were, and use the playing
+        // channel's group so Up / Down work from it.
+        savedSpot = ui.selectedGroupId to focusedChannel?.key
+        viewModel.channelByKey(viewModel.playbackState.value.channelKey)?.let { playing ->
+            viewModel.groupToShow(playing)?.let { viewModel.selectGroup(it) }
+        }
+        goFullscreen()
+    }
     androidx.compose.runtime.CompositionLocalProvider(
         LocalShowDetails provides { key, p -> viewModel.details(key, p) },
         LocalChannelAbout provides { ch, title -> viewModel.channelAbout(ch, title) }
@@ -760,7 +784,12 @@ fun LiveTvGuideScreen(
             .fillMaxSize()
             .background(NuvioTheme.colors.Background)
             .onGloballyPositioned { rootBounds = it.boundsInRoot() }
+            .onFocusChanged {
+                if (it.hasFocus && !guideHasFocus) lastKeyAt = System.currentTimeMillis()
+                guideHasFocus = it.hasFocus
+            }
             .onPreviewKeyEvent { e ->
+                lastKeyAt = System.currentTimeMillis()
                 // Full screen handles its own keys.
                 if (fullscreen) return@onPreviewKeyEvent false
                 val playingNow = playback.channelKey != null
@@ -2109,8 +2138,9 @@ private fun GuideRow(
             } else {
                 Spacer(Modifier.weight(1f))
             }
-            // Quality badge, from the last time this channel played.
-            if (quality != null && !moving) {
+            // Quality badge, from the last time this channel played. (Not while managing
+            // visibility, so the eye at the end always has room.)
+            if (quality != null && !moving && visible == null) {
                 LiveText(
                     quality,
                     modifier = Modifier
@@ -2122,8 +2152,8 @@ private fun GuideRow(
                 )
                 Spacer(Modifier.width(4.dp))
             }
-            // Catch-up available on this channel.
-            if (channel.catchup != null && !moving) {
+            // Catch-up available on this channel (not while managing visibility, like quality).
+            if (channel.catchup != null && !moving && visible == null) {
                 Icon(
                     imageVector = Icons.Default.History,
                     contentDescription = "Catch-up",
@@ -3618,3 +3648,6 @@ private fun gdp(v: Float): Dp = (v * LocalGuideScale.current.coerceAtLeast(1f)).
 /** How much time the guide shows across: Extra Large shows 1½ hours so short shows' text fits. */
 private fun guideWindowMs(s: LiveTvSettings): Long =
     if (s.effectiveGuideSize == "XLARGE") 90L * 60L * 1000L else WINDOW_MS
+
+/** Minutes the guide can be left alone with a channel playing before it goes full screen. */
+private const val GUIDE_IDLE_FULL_SCREEN_MINUTES = 2

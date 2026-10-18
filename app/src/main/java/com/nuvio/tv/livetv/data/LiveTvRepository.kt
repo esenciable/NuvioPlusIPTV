@@ -568,10 +568,19 @@ class LiveTvRepository @Inject constructor(
             val file = epgFile(target.fileId)
             val stale = !file.exists() ||
                 now - file.lastModified() > settings.epgRefreshHours.coerceAtLeast(1) * HOUR
-            if (forceEpg || stale || target.sourceId in forceIds || (target.sourceId == null && changed && !file.exists())) {
+            // A playlist saved again (its login, user agent…): its own guide is downloaded again too.
+            val forcedHere = target.sourceId in forceIds || target.playlistId in forceIds
+            if (forceEpg || stale || forcedHere || (target.sourceId == null && changed && !file.exists())) {
                 setStatus(loading = true, message = "Downloading guide \"${target.name}\"…")
                 LIVE_REPORT.add("Downloading guide \"${target.name}\" (user agent: ${target.userAgent.ifBlank { "app default" }})")
-                val result = runCatching { download(target.url, file, target.userAgent, progressLabel = "Downloading guide \"${target.name}\"") }
+                val result = runCatching {
+                    download(
+                        target.url, file, target.userAgent,
+                        progressLabel = "Downloading guide \"${target.name}\"",
+                        full = forceEpg || forcedHere,
+                        reportAs = target.name
+                    )
+                }
                 if (result.getOrNull() == true) changed = true
                 val err = result.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName }
                 if (target.sourceId != null) {
@@ -1468,7 +1477,9 @@ class LiveTvRepository @Inject constructor(
         val sourceId: String?,
         val name: String,
         val url: String,
-        val userAgent: String
+        val userAgent: String,
+        /** A playlist's own (built-in) guide: that playlist. */
+        val playlistId: String? = null
     )
 
     /** Named EPG sources first (they win on conflicts), then EPG URLs embedded in playlists. */
@@ -1494,7 +1505,7 @@ class LiveTvRepository @Inject constructor(
             urls += embeddedEpgUrls[pl.id].orEmpty()
             urls.distinct().forEach { url ->
                 if (targets.none { it.url == url }) {
-                    targets += EpgTarget("auto_" + sha1(url), null, "${pl.name} (built-in)", url, pl.userAgent)
+                    targets += EpgTarget("auto_" + sha1(url), null, "${pl.name} (built-in)", url, pl.userAgent, playlistId = pl.id)
                 }
             }
         }
@@ -1661,6 +1672,11 @@ class LiveTvRepository @Inject constructor(
             // guide that stops early can be told apart from the app cutting it short.
             run {
                 val lastStop = parsed.programs.values.maxOfOrNull { l -> l.maxOfOrNull { it.stopMs } ?: 0L } ?: 0L
+                // A guide whose listings have all run out: the next download asks for the whole
+                // file (not "only if changed"), in case a cache keeps answering "not changed".
+                if (lastStop in 1 until System.currentTimeMillis()) {
+                    runCatching { File(file.parentFile, file.name + ".meta").delete() }
+                }
                 if (lastStop > 0) {
                     val fmt = java.text.SimpleDateFormat("EEE d MMM, h:mm a", java.util.Locale.getDefault())
                     val hours = ((lastStop - System.currentTimeMillis()) / HOUR).coerceAtLeast(0)
@@ -1966,11 +1982,21 @@ class LiveTvRepository @Inject constructor(
      * modified" (we send the ETag / Last-Modified from last time), or the new file is identical.
      * Unchanged files skip the re-reading and re-matching that follows a download.
      */
-    private suspend fun download(url: String, target: File, userAgent: String, progressLabel: String? = null): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun download(
+        url: String,
+        target: File,
+        userAgent: String,
+        progressLabel: String? = null,
+        /** Ask for the whole file, not "only if changed" (Update now: a cache that wrongly
+         *  answers "not changed" otherwise keeps an old guide forever). */
+        full: Boolean = false,
+        /** Name for the Start-Up Report line saying what came back (guides only). */
+        reportAs: String? = null
+    ): Boolean = withContext(Dispatchers.IO) {
         require(url.isNotBlank()) { "No URL set" }
         target.parentFile?.mkdirs()
         val meta = File(target.parentFile, target.name + ".meta")
-        val (etag, lastModified) = if (target.exists() && meta.exists()) {
+        val (etag, lastModified) = if (!full && target.exists() && meta.exists()) {
             meta.readLines().let { it.getOrNull(0).orEmpty() to it.getOrNull(1).orEmpty() }
         } else "" to ""
         val request = Request.Builder()
@@ -1984,6 +2010,7 @@ class LiveTvRepository @Inject constructor(
         http.newCall(request).execute().use { response ->
             if (response.code == 304 && target.exists()) {
                 target.setLastModified(System.currentTimeMillis()) // checked again after the usual interval
+                reportAs?.let { LIVE_REPORT.add("Guide \"$it\": server said not changed since last time; kept the copy we have") }
                 return@withContext false
             }
             if (!response.isSuccessful) error(httpError(response.code))
@@ -2027,11 +2054,14 @@ class LiveTvRepository @Inject constructor(
                 meta.writeText(response.header("ETag").orEmpty() + "\n" + response.header("Last-Modified").orEmpty())
             }
             val same = target.exists() && target.length() == tmp.length() && sameContent(target, tmp)
+            val serverDate = response.header("Last-Modified")?.let { " (server's date: $it)" }.orEmpty()
             if (same) {
                 tmp.delete()
                 target.setLastModified(System.currentTimeMillis())
+                reportAs?.let { LIVE_REPORT.add("Guide \"$it\": downloaded ${sizeLabel(target.length())} zipped, same as the copy we had$serverDate") }
                 return@withContext false
             }
+            reportAs?.let { LIVE_REPORT.add("Guide \"$it\": downloaded, new copy ${sizeLabel(tmp.length())} zipped$serverDate") }
             if (!tmp.renameTo(target)) {
                 tmp.copyTo(target, overwrite = true)
                 tmp.delete()

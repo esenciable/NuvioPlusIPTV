@@ -462,14 +462,52 @@ class LiveTvRepository @Inject constructor(
         forcePlaylists: Boolean,
         forceEpg: Boolean,
         forceIds: Set<String> = emptySet()
-    ) = mutex.withLock {
+    ): Unit {
+        val automatic = !forcePlaylists && !forceEpg && forceIds.isEmpty()
+        if (!automatic) {
+            // An update you asked for (Update now, a new playlist…) doesn't queue up behind an
+            // automatic check that's waiting for Nuvio's player to close: that check stops
+            // waiting and finishes now. (It could wait for hours, and "Update now" did nothing.)
+            manualQueued.value = true
+            if (mutex.isLocked) LIVE_REPORT.add("Update asked for: finishing the update already running first")
+        }
+        mutex.withLock { refreshLocked(forcePlaylists, forceEpg, forceIds, automatic) }
+    }
+
+    /** An update you asked for is waiting: automatic checks stop waiting for Nuvio's player. */
+    private val manualQueued = MutableStateFlow(false)
+
+    private suspend fun refreshLocked(
+        forcePlaylists: Boolean,
+        forceEpg: Boolean,
+        forceIds: Set<String>,
+        automatic: Boolean
+    ) {
+        if (!automatic) manualQueued.value = false
+        val t0Update = System.currentTimeMillis()
+        LIVE_REPORT.add(if (automatic) "Update check started" else "Update started")
+        try { refreshBody(forcePlaylists, forceEpg, forceIds, automatic) }
+        finally { LIVE_REPORT.add("Update finished in ${(System.currentTimeMillis() - t0Update) / 1000} s") }
+    }
+
+    private suspend fun refreshBody(
+        forcePlaylists: Boolean,
+        forceEpg: Boolean,
+        forceIds: Set<String>,
+        automatic: Boolean
+    ) {
         val settings = prefs.currentSettings()
         val now = System.currentTimeMillis()
         val playlists = prefs.currentPlaylists().filter { it.liveEnabled }
         var changed = false
-        // Automatic checks wait while a movie or episode is playing in Nuvio's player.
-        val automatic = !forcePlaylists && !forceEpg && forceIds.isEmpty()
-        suspend fun outOfTheWay() { if (automatic) BackgroundWork.awaitIdle() }
+        // Automatic checks wait while a movie or episode is playing in Nuvio's player (unless
+        // an update you asked for is waiting behind this one).
+        suspend fun outOfTheWay() {
+            if (!automatic || !BackgroundWork.nuvioPlaying.value || manualQueued.value) return
+            LIVE_REPORT.add("Update check waiting while Nuvio's player is open")
+            kotlinx.coroutines.flow.combine(BackgroundWork.nuvioPlaying, manualQueued) { playing, manual -> !playing || manual }
+                .first { it }
+        }
 
         for (pl in playlists) {
             outOfTheWay()
@@ -532,6 +570,7 @@ class LiveTvRepository @Inject constructor(
                 now - file.lastModified() > settings.epgRefreshHours.coerceAtLeast(1) * HOUR
             if (forceEpg || stale || target.sourceId in forceIds || (target.sourceId == null && changed && !file.exists())) {
                 setStatus(loading = true, message = "Downloading guide \"${target.name}\"…")
+                LIVE_REPORT.add("Downloading guide \"${target.name}\" (user agent: ${target.userAgent.ifBlank { "app default" }})")
                 val result = runCatching { download(target.url, file, target.userAgent, progressLabel = "Downloading guide \"${target.name}\"") }
                 if (result.getOrNull() == true) changed = true
                 val err = result.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName }
@@ -549,7 +588,10 @@ class LiveTvRepository @Inject constructor(
 
         // A guide kept in the database fills in in the background (empty for a moment), so an
         // empty list then doesn't mean there's no guide: only re-match if something changed.
-        if (changed || (_programs.value.isEmpty() && (!guideInDb || storedGuideEmpty))) {
+        // "Update guide now" always matches the guides again, even when the files came back
+        // unchanged: a guide matched wrong or stored empty was otherwise kept until a file
+        // changed, so pressing Update did nothing for it.
+        if (changed || forceEpg || (_programs.value.isEmpty() && (!guideInDb || storedGuideEmpty))) {
             storedGuideEmpty = false
             outOfTheWay()
             setStatus(loading = true, message = "Matching guide data…")
@@ -1432,8 +1474,18 @@ class LiveTvRepository @Inject constructor(
     /** Named EPG sources first (they win on conflicts), then EPG URLs embedded in playlists. */
     private suspend fun collectEpgTargets(): List<EpgTarget> {
         val targets = mutableListOf<EpgTarget>()
-        prefs.currentEpgSources().filter { it.enabled && it.url.isNotBlank() }.forEach {
-            targets += EpgTarget(it.id, it.id, it.name, it.url, "")
+        // A guide added on its own from the same server as a playlist (often that playlist's own
+        // guide link) is asked for with that playlist's user agent, like the playlist itself:
+        // some servers answer a different user agent with a different (or empty) guide.
+        val allPlaylists = prefs.currentPlaylists()
+        fun hostOf(u: String) = runCatching { java.net.URI(u.trim()).host?.lowercase() }.getOrNull()
+        prefs.currentEpgSources().filter { it.enabled && it.url.isNotBlank() }.forEach { src ->
+            val host = hostOf(src.url)
+            val ua = allPlaylists.firstOrNull { pl ->
+                pl.userAgent.isNotBlank() && host != null &&
+                    hostOf(if (pl.isXtream) pl.xtreamBase() else pl.url) == host
+            }?.userAgent.orEmpty()
+            targets += EpgTarget(src.id, src.id, src.name, src.url, ua)
         }
         val playlists = prefs.currentPlaylists().filter { it.liveEnabled && it.useEmbeddedEpg }
         for (pl in playlists) {
@@ -1522,6 +1574,10 @@ class LiveTvRepository @Inject constructor(
         val hidden = prefs.currentHiddenEverywhere()
         val skipped = HashSet<String>()
         val channels = all.filter { c -> (!hidden.hides(c.key, c.groupId)).also { shown -> if (!shown) skipped += c.key } }
+        LIVE_REPORT.add(
+            "Guide matching: ${channels.size} of ${all.size} channels shown somewhere" +
+                " (${channels.count { !it.tvgId.isNullOrBlank() }} with a tvg-id)"
+        )
         val now = System.currentTimeMillis()
         val windowStart = now - settings.epgPastHours.coerceAtLeast(1) * HOUR
         val windowEnd = now + settings.epgFutureDays.coerceAtLeast(1) * 24 * HOUR
@@ -1629,6 +1685,23 @@ class LiveTvRepository @Inject constructor(
             }
             idHits.forEach { (xmlId, chans) -> offer(xmlId, chans, idMatch = true) }
             nameHits.forEach { (xmlId, chans) -> offer(xmlId, chans, idMatch = false) }
+            // What this guide matched, and when it's nothing, a few ids from each side, so a
+            // "0 programs matched" can be told apart: ids that don't line up, a guide with no
+            // listings for these days, or no channels left to match.
+            val matchedChannels = (idHits.values.flatten() + nameHits.values.flatten()).mapTo(HashSet()) { it.key }.size
+            LIVE_REPORT.add(
+                "Guide \"${target.name}\": ${entries.size} guide channels, ${parsed.programs.size} with listings kept; " +
+                    "matched ${idHits.size} by id, ${nameHits.size} by name → $matchedChannels channels, $count listings"
+            )
+            if (count == 0) {
+                val guideIds = entries.take(3).joinToString { it.id }
+                val ourIds = channels.mapNotNull { it.tvgId?.takeIf { id -> id.isNotBlank() } }.take(3).joinToString()
+                val totalListings = parsed.programs.values.sumOf { it.size }
+                LIVE_REPORT.add(
+                    "Guide \"${target.name}\" matched nothing: guide ids like [$guideIds], playlist tvg-ids like [$ourIds], " +
+                        "$totalListings listings in the guide between ${settings.epgPastHours} h ago and ${settings.epgFutureDays} days ahead"
+                )
+            }
             if (target.sourceId != null) {
                 prefs.updateEpgSources { l -> l.map { if (it.id == target.sourceId) it.copy(programCount = count) else it } }
             }

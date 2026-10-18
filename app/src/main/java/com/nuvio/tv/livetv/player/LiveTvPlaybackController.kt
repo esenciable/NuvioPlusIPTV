@@ -713,6 +713,10 @@ class LiveTvPlaybackController @Inject constructor(
             return
         }
         Log.w(TAG, "Stream stalled on ${ch.name}; reloading")
+        com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+            "Channel ${ch.name} " + (if (awaitingFrame) "never started (nothing came in for ${STALL_MS / 1000}s)" else "stalled") +
+                "; reloading · ${redact(currentUrl ?: ch.url)}"
+        )
         val url = currentUrl ?: ch.url
         val resumeAt = if (archive) pos else C_TIME_UNSET
         p.stop()
@@ -1181,8 +1185,9 @@ class LiveTvPlaybackController @Inject constructor(
             if (ch != null && p != null && isUnrecognizedFormat(error) && formatGuess < FORMAT_GUESSES.size) {
                 forcedMime = FORMAT_GUESSES[formatGuess++]
                 Log.w(TAG, "Unrecognized stream format for ${ch.name}; trying $forcedMime")
-                if (_state.value.catchupTitle != null) com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
-                    "Catch-up failed (${error.errorCodeName}); trying the last link as ${forcedMime?.substringAfter('/')}"
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                    (if (_state.value.catchupTitle != null) "Catch-up" else "Channel ${ch.name}") +
+                        " failed (${error.errorCodeName}); trying it as ${forcedMime?.substringAfter('/')}"
                 )
                 val url = currentUrl ?: ch.url
                 p.setMediaSource(buildMediaSource(url, ch.headers, isLive = _state.value.catchupTitle == null))
@@ -1198,7 +1203,7 @@ class LiveTvPlaybackController @Inject constructor(
             if (_state.value.catchupTitle != null) com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
                 "Catch-up failed on ${ch?.name} (${error.errorCodeName}); no other links left to try"
             )
-            scheduleReconnect(describe(error))
+            scheduleReconnect(describe(error), error)
         }
     }
 
@@ -1225,11 +1230,27 @@ class LiveTvPlaybackController @Inject constructor(
 
     /** A link for the start-up report, with the username and password hidden. */
     private fun redact(url: String): String =
-        url.replace(Regex("""(/(?:timeshift|live)/)[^/]+/[^/]+/"""), "$1***/***/")
+        url.replace(Regex("""(/(?:timeshift|live|movie|series)/)[^/]+/[^/]+/"""), "$1***/***/")
             .replace(Regex("""(username|password)=[^&]*"""), "$1=***")
+            // Xtream links without "/live": http://host:port/user/pass/123.ts
+            .replace(Regex("""^(https?://[^/]+)/(?!\*\*\*)[^/]+/[^/]+/(\d+(?:\.[A-Za-z0-9]+)?(?:\?.*)?)$"""), "$1/***/***/$2")
 
-    private fun scheduleReconnect(reason: String) {
+    private fun scheduleReconnect(reason: String, error: PlaybackException? = null) {
         val attempt = _state.value.reconnectAttempt + 1
+        // Live channels that won't play: what failed and why, for the Start-Up Report (only
+        // catch-up failures were written there, so "it won't play" reports had nothing to go on).
+        if (_state.value.catchupTitle == null) {
+            val detail = error?.let { e ->
+                generateSequence(e.cause) { it.cause }.take(4)
+                    .map { c -> c.javaClass.simpleName + (c.message?.take(80)?.let { m -> ": $m" } ?: "") }
+                    .joinToString(" ← ")
+            }.orEmpty()
+            com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                "Channel ${currentChannel?.name} failed (try $attempt): $reason" +
+                    (if (detail.isNotBlank()) " [$detail]" else "") +
+                    (currentUrl?.let { " · ${redact(it)}" } ?: "")
+            )
+        }
         _state.value = _state.value.copy(error = reason, isBuffering = false, reconnectAttempt = attempt)
         if (!autoReconnect || attempt > MAX_RECONNECTS) return
         reconnectJob?.cancel()

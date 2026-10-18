@@ -355,7 +355,18 @@ class LiveTvDriveSync @Inject constructor(
     private suspend fun applyLocally(data: JSONObject) {
         applying = true
         try {
+            val before = prefs.exportForSync()
             val changed = prefs.importFromSync(data)
+            val after = prefs.exportForSync()
+            // What really changed here. Nothing: no reload at all (it used to reload Live TV,
+            // reading the guide again, on every sync, often twice at start-up).
+            val keys = (before.keys().asSequence() + after.keys().asSequence()).toSet()
+                .filter { k -> before.opt(k)?.toString() != after.opt(k)?.toString() }
+            if (keys.isEmpty() && changed.isEmpty()) {
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Sync: other TV's setup is the same as this one; nothing to reload")
+                return
+            }
+            com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Sync: applied changes from your other TV (${keys.take(6).joinToString()}${if (keys.size > 6) "…" else ""})")
             // Download any playlists or guides this TV doesn't have yet, playlists whose address
             // or login changed on the other TV, and rebuild the guide.
             repository.reloadAfterSync(changed)

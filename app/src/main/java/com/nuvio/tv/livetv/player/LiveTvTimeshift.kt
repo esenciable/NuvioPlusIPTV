@@ -67,7 +67,16 @@ class LiveTvTimeshift(private val context: Context) {
      * Starts recording [url] (with [headers]). Returns the session to play, or null if this
      * stream can't be recorded (encrypted HLS, a link that won't open…).
      */
-    fun start(url: String, headers: Map<String, String>, keepMinutes: Int): Session? {
+    fun start(
+        url: String,
+        headers: Map<String, String>,
+        /** Older parts dropped past this (null: keep it all, for a catch-up replay). */
+        keepMinutes: Int?,
+        /** Open the stream again when it ends (live); false for a replay, which simply ends. */
+        reconnect: Boolean = true,
+        /** How it's named in the Start-Up Report. */
+        label: String = "Pause buffer"
+    ): Session? {
         stop()
         val dir = File(baseDir, System.currentTimeMillis().toString()).apply { mkdirs() }
             .takeIf { it.exists() } ?: File(context.cacheDir, "timeshift/" + System.currentTimeMillis()).apply { mkdirs() }
@@ -77,10 +86,10 @@ class LiveTvTimeshift(private val context: Context) {
         recording = true
         val s = if (isHls) {
             val local = File(dir, "index.m3u8")
-            Session(Kind.HLS, now, Uri.fromFile(local), dir).also { job = scope.launch { recordHls(url, headers, dir, local, keepMinutes) } }
+            Session(Kind.HLS, now, Uri.fromFile(local), dir).also { job = scope.launch { recordHls(url, headers, dir, local, keepMinutes ?: 24 * 60) } }
         } else {
             val local = File(dir, "index.m3u8")
-            Session(Kind.TS, now, Uri.fromFile(local), dir).also { job = scope.launch { recordTs(url, headers, dir, keepMinutes) } }
+            Session(Kind.TS, now, Uri.fromFile(local), dir).also { job = scope.launch { recordTs(url, headers, dir, keepMinutes, reconnect, label) } }
         }
         session = s
         return s
@@ -108,9 +117,16 @@ class LiveTvTimeshift(private val context: Context) {
 
     // ------------------------------------------------------------------ TS
 
-    private suspend fun recordTs(url: String, headers: Map<String, String>, dir: File, keepMinutes: Int) {
+    private suspend fun recordTs(
+        url: String,
+        headers: Map<String, String>,
+        dir: File,
+        keepMinutes: Int?,
+        reconnect: Boolean = true,
+        label: String = "Pause buffer"
+    ) {
         // Pieces past the time limit are dropped as new ones come in (it records on, behind you).
-        val segmenter = TsSegmenter(dir, keepSec = keepMinutes * 60.0) { _ -> }
+        val segmenter = TsSegmenter(dir, keepSec = keepMinutes?.let { it * 60.0 }) { _ -> }
         val report = com.nuvio.tv.livetv.model.LiveTvLoadReport
         val began = System.currentTimeMillis()
         // The player has only just let go of its connection: give the provider a moment, or
@@ -152,13 +168,19 @@ class LiveTvTimeshift(private val context: Context) {
                     e.message ?: e.javaClass.simpleName
                 }
                 if (!recording) break
-                report.add("Pause buffer: connection ended after ${(System.currentTimeMillis() - t0) / 1000}s, ${bytes / 1024} KB ($why); reconnecting")
+                // A replay that came in and ended: it's all saved (no reconnecting, which would
+                // start the replay again from its beginning).
+                if (!reconnect && (bytes > 0 || attempt >= 2)) {
+                    report.add("$label: ${bytes / 1024 / 1024} MB saved ($why)")
+                    break
+                }
+                report.add("$label: connection ended after ${(System.currentTimeMillis() - t0) / 1000}s, ${bytes / 1024} KB ($why); reconnecting")
                 // Got nothing at all several times running: give up (the provider won't serve it).
                 if (bytes == 0L && attempt >= 4) { report.add("Pause buffer: gave up (no data)"); break }
                 if (bytes > 0) attempt = 1
             }
         } finally {
-            report.add("Pause buffer finished after ${(System.currentTimeMillis() - began) / 1000}s (${segmenter.totalSec.toInt()}s recorded)")
+            report.add("$label finished after ${(System.currentTimeMillis() - began) / 1000}s (${segmenter.totalSec.toInt()}s recorded)")
             runCatching { segmenter.finish(ended = true) }
             recording = false
         }

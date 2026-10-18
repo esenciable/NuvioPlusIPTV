@@ -82,6 +82,8 @@ class LiveTvPreferences @Inject constructor(
         val epgFuture = intPreferencesKey("epg_future_days")
         val clock24 = booleanPreferencesKey("clock_24h")
         val autoReconnect = booleanPreferencesKey("auto_reconnect")
+        val autoBackupChannel = booleanPreferencesKey("auto_backup_channel")
+        val catchupCache = booleanPreferencesKey("catchup_cache")
         val channelSort = stringPreferencesKey("channel_sort")
         val solidHighlight = booleanPreferencesKey("solid_highlight")
         val showInSearch = booleanPreferencesKey("show_in_search")
@@ -105,6 +107,7 @@ class LiveTvPreferences @Inject constructor(
         val parentalPin = stringPreferencesKey("parental_pin")
         val lockAdultContent = booleanPreferencesKey("lock_adult_content")
         val showQualityBadges = booleanPreferencesKey("show_quality_badges")
+        val showFrameRate = booleanPreferencesKey("show_frame_rate")
         val matchFrameRate = booleanPreferencesKey("match_frame_rate")
         val onDemandInSidebar = booleanPreferencesKey("on_demand_in_sidebar")
         val recordingsInSidebar = booleanPreferencesKey("recordings_in_sidebar")
@@ -288,6 +291,8 @@ class LiveTvPreferences @Inject constructor(
             epgFutureDays = p[Keys.epgFuture] ?: d.epgFutureDays,
             use24HourClock = p[Keys.clock24] ?: d.use24HourClock,
             autoReconnect = p[Keys.autoReconnect] ?: d.autoReconnect,
+            autoBackupChannel = p[Keys.autoBackupChannel] ?: d.autoBackupChannel,
+            catchupCache = p[Keys.catchupCache] ?: d.catchupCache,
             channelSort = p[Keys.channelSort]?.let { runCatching { ChannelSort.valueOf(it) }.getOrNull() } ?: d.channelSort,
             solidHighlight = p[Keys.solidHighlight] ?: d.solidHighlight,
             showInSearch = p[Keys.showInSearch] ?: d.showInSearch,
@@ -311,6 +316,7 @@ class LiveTvPreferences @Inject constructor(
             parentalPin = p[Keys.parentalPin] ?: d.parentalPin,
             lockAdultContent = p[Keys.lockAdultContent] ?: d.lockAdultContent,
             showQualityBadges = p[Keys.showQualityBadges] ?: d.showQualityBadges,
+            showFrameRate = p[Keys.showFrameRate] ?: d.showFrameRate,
             matchFrameRate = p[Keys.matchFrameRate] ?: d.matchFrameRate,
             onDemandInSidebar = p[Keys.onDemandInSidebar] ?: d.onDemandInSidebar,
             recordingsInSidebar = p[Keys.recordingsInSidebar] ?: d.recordingsInSidebar,
@@ -471,6 +477,8 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.epgFuture] = s.epgFutureDays
         p[Keys.clock24] = s.use24HourClock
         p[Keys.autoReconnect] = s.autoReconnect
+        p[Keys.autoBackupChannel] = s.autoBackupChannel
+        p[Keys.catchupCache] = s.catchupCache
         p[Keys.channelSort] = s.channelSort.name
         p[Keys.solidHighlight] = s.solidHighlight
         p[Keys.showInSearch] = s.showInSearch
@@ -494,6 +502,7 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.parentalPin] = s.parentalPin
         p[Keys.lockAdultContent] = s.lockAdultContent
         p[Keys.showQualityBadges] = s.showQualityBadges
+        p[Keys.showFrameRate] = s.showFrameRate
         p[Keys.matchFrameRate] = s.matchFrameRate
         p[Keys.onDemandInSidebar] = s.onDemandInSidebar
         p[Keys.recordingsInSidebar] = s.recordingsInSidebar
@@ -960,8 +969,11 @@ class LiveTvPreferences @Inject constructor(
                 is Set<*> -> JSONObject().put("t", "s").put("v", JSONArray(value.map { it.toString() }))
                 is String -> {
                     val v = when (name) {
+                        // Download status and what this TV learned about the server (its time zone,
+                        // whether HLS catch-up works) stay per TV: they differ between boxes, and
+                        // syncing them made each TV look changed to the other, so both reloaded.
                         Keys.playlists.name -> encodePlaylists(decodePlaylists(value).map {
-                            it.copy(lastUpdatedMs = 0, lastError = null, channelCount = 0)
+                            it.copy(lastUpdatedMs = 0, lastError = null, channelCount = 0, serverTimezone = "", catchupNoHlsSince = 0L)
                         })
                         Keys.epgs.name -> encodeEpgs(decodeEpgs(value).map {
                             it.copy(lastUpdatedMs = 0, lastError = null, programCount = 0)
@@ -1009,7 +1021,10 @@ class LiveTvPreferences @Inject constructor(
                                     if (l.url != r.url || l.xtreamServer != r.xtreamServer || l.xtreamUsername != r.xtreamUsername ||
                                         l.xtreamPassword != r.xtreamPassword || l.userAgent != r.userAgent || l.streamFormat != r.streamFormat
                                     ) changed += r.id
-                                    r.copy(lastUpdatedMs = l.lastUpdatedMs, lastError = l.lastError, channelCount = l.channelCount)
+                                    r.copy(
+                                        lastUpdatedMs = l.lastUpdatedMs, lastError = l.lastError, channelCount = l.channelCount,
+                                        serverTimezone = l.serverTimezone, catchupNoHlsSince = l.catchupNoHlsSince
+                                    )
                                 } ?: r
                             })
                         } else if (name == Keys.epgs.name) {

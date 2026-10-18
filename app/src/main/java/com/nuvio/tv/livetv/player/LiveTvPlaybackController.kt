@@ -86,6 +86,55 @@ class LiveTvPlaybackController @Inject constructor(
     // ---------------------------------------------------------------- pause and rewind
 
     private val timeshift = LiveTvTimeshift(context)
+    /**
+     * Catch-up replays (TS) saved to the device while they play, and played from there: skipping
+     * back is instant, and so is skipping ahead as far as the replay has come in. Before, every
+     * skip asked the provider for the replay again from the new point. HLS replays can already
+     * skip within themselves and are played as before.
+     */
+    private val replayCache = LiveTvTimeshift(context)
+    /** Settings: save catch-up replays while they play (see [replayCache]). */
+    var catchupCache: Boolean = true
+    @Volatile private var replayLocal = false
+    private var replayJob: Job? = null
+
+    private fun stopReplayCache() {
+        replayJob?.cancel()
+        replayJob = null
+        replayLocal = false
+        if (replayCache.session != null) replayCache.stop()
+    }
+
+    /** Starts saving the catch-up at [url] and plays it from the device once the first part is in. */
+    private fun startReplayCache(channel: LiveChannel, url: String): Boolean {
+        val p = _player ?: return false
+        replayCache.baseDir = timeshift.baseDir
+        if (!replayCache.hasRoomFor(120)) return false
+        val session = replayCache.start(url, channel.headers, keepMinutes = null, reconnect = false, label = "Catch-up save") ?: return false
+        com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Catch-up: saving the replay while it plays, for instant skipping")
+        p.stop()
+        replayJob?.cancel()
+        replayJob = scope.launch {
+            val f = java.io.File(session.playUri.path ?: "")
+            var waited = 0
+            while (waited < 15_000 && !(f.exists() && f.length() > 0)) { delay(200); waited += 200 }
+            if (replayCache.session != session || currentUrl != url) return@launch
+            archiveStartPending = true
+            if (!f.exists() || f.length() == 0L) {
+                // Nothing came in to save: play it straight from the provider, as before (any
+                // other links for this replay are tried from there if it fails).
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Catch-up: nothing came in to save; playing it directly")
+                replayCache.stop()
+                p.setMediaSource(buildMediaSource(url, channel.headers, isLive = false))
+            } else {
+                replayLocal = true
+                p.setMediaSource(localRecordingSource(session.playUri), 0L)
+            }
+            p.prepare()
+            p.playWhenReady = true
+        }
+        return true
+    }
     var timeshiftEnabled: Boolean = true
     var timeshiftMinutes: Int = 10
     /** Rewind anytime: full-screen channels play through a rolling buffer (see [startAlwaysBuffer]). */
@@ -498,6 +547,7 @@ class LiveTvPlaybackController @Inject constructor(
         archiveStartWallMs = if (catchupTitle != null) catchupStartMs else null
         archiveWallMapped = false
         if (currentChannel?.key != channel.key) {
+            neverStartedCount = 0
             audioHandled = false
             audioPrefPending = true
             captionsHandled = false
@@ -544,6 +594,7 @@ class LiveTvPlaybackController @Inject constructor(
             return
         }
         reconnectJob?.cancel()
+        stopReplayCache()
         currentChannel = channel
         LiveWatching.sourceId = channel.sourceId
         currentUrl = url
@@ -554,6 +605,10 @@ class LiveTvPlaybackController @Inject constructor(
             p.stop()
             if (startAlwaysBuffer(channel, url)) { p.playWhenReady = true; return }
         }
+        // A TS catch-up replay: saved while it plays, for instant skipping.
+        if (catchupTitle != null && catchupCache && channel.drm == null &&
+            !url.substringBefore('?').endsWith(".m3u8", ignoreCase = true) && startReplayCache(channel, url)
+        ) return
         archiveStartPending = catchupTitle != null
         p.setMediaSource(buildMediaSource(url, channel.headers, isLive = catchupTitle == null))
         p.prepare()
@@ -651,6 +706,7 @@ class LiveTvPlaybackController @Inject constructor(
 
     fun stop() {
         reconnectJob?.cancel()
+        stopReplayCache()
         _player?.stop()
         _player?.clearMediaItems()
         currentChannel = null
@@ -729,6 +785,7 @@ class LiveTvPlaybackController @Inject constructor(
             return
         }
         Log.w(TAG, "Stream stalled on ${ch.name}; reloading")
+        if (!archive && awaitingFrame && ++neverStartedCount >= 2 && onLiveFailure?.invoke(ch.key) == true) return
         com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
             "Channel ${ch.name} " + (if (awaitingFrame) "never started (nothing came in for ${STALL_MS / 1000}s)" else "stalled") +
                 "; reloading · ${redact(currentUrl ?: ch.url)}"
@@ -1262,6 +1319,22 @@ class LiveTvPlaybackController @Inject constructor(
             }
             if (_shiftStartedAt.value != null) { Log.w(TAG, "Recording playback failed", error); goLive(); return }
             if (_recordingPlayback.value != null) { Log.w(TAG, "Playing from the recording failed", error); recordingPlaybackEnded(); return }
+            // The saved catch-up couldn't be played: play the replay straight from the provider.
+            if (replayLocal) {
+                val ch0 = currentChannel
+                val url0 = currentUrl
+                stopReplayCache()
+                if (ch0 != null && url0 != null) {
+                    com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Catch-up: the saved copy didn't play (${error.errorCodeName}); playing it directly")
+                    archiveStartPending = true
+                    _player?.let { pl ->
+                        pl.setMediaSource(buildMediaSource(url0, ch0.headers, isLive = false))
+                        pl.prepare()
+                        pl.playWhenReady = true
+                    }
+                    return
+                }
+            }
             val p = _player
             // The provider doesn't offer this as HLS: switch to the TS link once.
             val ch = currentChannel
@@ -1333,6 +1406,14 @@ class LiveTvPlaybackController @Inject constructor(
             // Xtream links without "/live": http://host:port/user/pass/123.ts
             .replace(Regex("""^(https?://[^/]+)/(?!\*\*\*)[^/]+/[^/]+/(\d+(?:\.[A-Za-z0-9]+)?(?:\?.*)?)$"""), "$1/***/***/$2")
 
+    /**
+     * A live channel failed twice in a row (or never started): Live TV may switch to a backup
+     * channel. True when it did, and this channel isn't tried again.
+     */
+    var onLiveFailure: ((channelKey: String) -> Boolean)? = null
+    /** Times the channel playing sat loading with nothing coming in. */
+    private var neverStartedCount = 0
+
     private fun scheduleReconnect(reason: String, error: PlaybackException? = null) {
         val attempt = _state.value.reconnectAttempt + 1
         // Live channels that won't play: what failed and why, for the Start-Up Report (only
@@ -1350,6 +1431,10 @@ class LiveTvPlaybackController @Inject constructor(
             )
         }
         _state.value = _state.value.copy(error = reason, isBuffering = false, reconnectAttempt = attempt)
+        if (_state.value.catchupTitle == null && attempt == 2) {
+            val key = currentChannel?.key
+            if (key != null && onLiveFailure?.invoke(key) == true) return
+        }
         if (!autoReconnect || attempt > MAX_RECONNECTS) return
         reconnectJob?.cancel()
         reconnectJob = scope.launch {

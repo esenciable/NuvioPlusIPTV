@@ -231,6 +231,10 @@ data class LiveTvSettings(
     val epgFutureDays: Int = 3,
     val use24HourClock: Boolean = false,
     val autoReconnect: Boolean = true,
+    /** A channel that won't play: switch to another channel by the same name (from another group or playlist). */
+    val autoBackupChannel: Boolean = true,
+    /** Catch-up replays saved to the device while they play, for instant skipping. */
+    val catchupCache: Boolean = true,
     val channelSort: ChannelSort = ChannelSort.PLAYLIST,
     /** Fill the focused cell with the accent color instead of outlining it. */
     val solidHighlight: Boolean = false,
@@ -277,6 +281,8 @@ data class LiveTvSettings(
     val lockAdultContent: Boolean = true,
     /** Small 4K / FHD / HD / SD badges next to channels you've watched. */
     val showQualityBadges: Boolean = true,
+    /** The frame rate ("50 FPS") next to the picture size on the info bar. */
+    val showFrameRate: Boolean = true,
     /** Switch the TV's refresh rate to match the video (auto frame rate). */
     val matchFrameRate: Boolean = false,
     /** Show On Demand in Nuvio's side menu (when there's something to show). */

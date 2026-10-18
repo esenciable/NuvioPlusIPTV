@@ -160,6 +160,8 @@ class LiveTvViewModel @Inject constructor(
         // A provider whose catch-up only works as TS: ask for TS for a week (saves a failed
         // HLS try, about a second, on every replay), then try HLS again; if that fails too,
         // another week of TS, and so on.
+        // A channel that won't play: another channel by the same name, if there is one.
+        playback.onLiveFailure = { key -> switchToBackup(key) }
         // The audio track picked on each channel, remembered and used every time it plays.
         playback.onAudioChosen = { key, audio -> viewModelScope.launch { prefs.setChannelAudio(key, audio) } }
         viewModelScope.launch { userState.collect { playback.channelAudio = it.channelAudio } }
@@ -192,6 +194,7 @@ class LiveTvViewModel @Inject constructor(
         viewModelScope.launch {
             settings.collect {
                 playback.autoReconnect = it.autoReconnect
+                playback.catchupCache = it.catchupCache
                 playback.audioPassthrough = it.audioPassthrough
                 playback.bufferSize = it.bufferSize
                 playback.timeshiftEnabled = it.timeshiftEnabled
@@ -400,7 +403,40 @@ class LiveTvViewModel @Inject constructor(
         session.currentGroupId.value = ChannelGroup.SEARCH
     }
 
+    /** Channels already tried in a row of backup switches (cleared when you change channel). */
+    private val backupTried = HashSet<String>()
+    private var switchingToBackup = false
+
+    /**
+     * Switches from a channel that won't play to another one with the same name (a different
+     * group or playlist: "US: ESPN HD" / "ESPN Backup"), other playlists first. Each one is tried
+     * once; when none are left it stops and the channel shows its error as before.
+     */
+    private fun switchToBackup(failedKey: String): Boolean {
+        if (!settings.value.autoBackupChannel) return false
+        val all = repository.channels.value
+        val failed = all.firstOrNull { it.key == failedKey } ?: return false
+        backupTried += failedKey
+        val name = backupName(failed.name)
+        if (name.length < 2) return false
+        val s = settings.value
+        val user = userState.value
+        val pick = all.asSequence()
+            .filter { it.key !in backupTried && backupName(it.name) == name }
+            // Local stations: "FOX (WNYW)" isn't a backup for "FOX (KTTV)".
+            .filter { c -> val a = stationNote(failed.name); val b = stationNote(c.name); a == null || b == null || a == b }
+            .filter { !com.nuvio.tv.livetv.parental.ParentalControls.isLocked(it.groupId, it.group, s, user.lockedGroups) }
+            .sortedBy { if (it.sourceId != failed.sourceId) 0 else 1 }
+            .firstOrNull() ?: return false
+        com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Channel ${failed.name} won't play: switched to ${pick.name} (${pick.group})")
+        com.nuvio.tv.livetv.record.LiveTvNotice.show("${failed.name} isn't working right now. Switched to ${pick.name} from ${pick.group}.")
+        switchingToBackup = true
+        try { preview(pick) } finally { switchingToBackup = false }
+        return true
+    }
+
     fun preview(channel: LiveChannel) {
+        if (!switchingToBackup) backupTried.clear()
         _catchup.value = null
         // Another channel from a provider that's recording: the recording holds a connection.
         recorder.recordings.value.firstOrNull {
@@ -1275,3 +1311,22 @@ private fun com.nuvio.tv.livetv.data.LiveTv247Matcher.Match.toMeta() = com.nuvio
 
 /** How long catch-up sticks to TS on a provider whose HLS replays failed, before trying HLS again. */
 private const val HLS_RETRY_MS = 7L * 24 * 3_600_000L
+
+/**
+ * A channel's name without what differs between copies of the same channel: a country or
+ * provider prefix ("US: ", "UK | "), bracketed notes and quality or backup words ("HD", "4K",
+ * "Backup", "FHD"…). "US: ESPN HD" and "ESPN (Backup)" both give "espn".
+ */
+internal fun backupName(name: String): String {
+    var s = name.lowercase()
+    s = s.replace(Regex("""^\s*[a-z]{2,4}\s*[:|]\s*"""), "")
+    s = s.replace(Regex("""^\s*[a-z]{2,3}\s+-\s+"""), "")
+    s = s.replace(Regex("""[\[(][^\])]*[\])]"""), " ")
+    s = s.replace(Regex("""\b(hd|fhd|uhd|sd|4k|8k|hevc|h\.?26[45]|1080[pi]?|720p?|2160p?|\d{2}\s?fps|backup|bkp|bk|alt|alternate|raw|ᴴᴰ)\b"""), " ")
+    return s.filter { it.isLetterOrDigit() || it == ' ' }.split(' ').filter { it.isNotBlank() }.joinToString(" ")
+}
+
+/** The call sign or region in brackets ("FOX (WNYW)" -> "wnyw"), not quality notes like "(HD)". */
+internal fun stationNote(name: String): String? =
+    Regex("""[\[(]([^\])]*)[\])]""").findAll(name.lowercase()).map { it.groupValues[1].trim() }
+        .firstOrNull { it.isNotBlank() && backupName(it).isNotBlank() }

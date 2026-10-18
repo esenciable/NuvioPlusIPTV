@@ -677,6 +677,12 @@ fun LiveTvSettingsContent(
                         s.showQualityBadges,
                         { update { it.copy(showQualityBadges = !it.showQualityBadges) } }
                     )
+                    SettingsToggleRow(
+                        "Frame Rate on the Info Bar",
+                        "Shows how smooth the channel is (25, 30, 50 or 60 FPS) next to the picture size while watching full screen. Handy for live sports.",
+                        s.showFrameRate,
+                        { update { it.copy(showFrameRate = !it.showFrameRate) } }
+                    )
                     SubHeading("Look")
                     SettingsActionRow(
                         title = "Highlight Style",
@@ -857,6 +863,12 @@ fun LiveTvSettingsContent(
                         )
                     }
                     SettingsToggleRow(
+                        "Faster Catch-Up Skipping",
+                        "Saves a replay to the device while you watch it, so rewinding and skipping ahead are instant instead of reloading. Uses about 35 MB a minute, deleted when you stop watching.",
+                        s.catchupCache,
+                        { update { it.copy(catchupCache = !it.catchupCache) } }
+                    )
+                    SettingsToggleRow(
                         "Prefer HLS for Catch-Up",
                         "Asks Xtream providers for replays in HLS (m3u8) first, so the seek bar works. Falls back to TS if the provider doesn't offer it.",
                         s.catchupPreferHls,
@@ -882,6 +894,12 @@ fun LiveTvSettingsContent(
                         "Tries the stream again by itself if it drops or freezes",
                         s.autoReconnect,
                         { update { it.copy(autoReconnect = !it.autoReconnect) } }
+                    )
+                    SettingsToggleRow(
+                        "Switch to a Backup Channel",
+                        "If a channel won't play, switch to another channel with the same name from another group or playlist (like \"ESPN\" and \"ESPN Backup\")",
+                        s.autoBackupChannel,
+                        { update { it.copy(autoBackupChannel = !it.autoBackupChannel) } }
                     )
                 }
             }

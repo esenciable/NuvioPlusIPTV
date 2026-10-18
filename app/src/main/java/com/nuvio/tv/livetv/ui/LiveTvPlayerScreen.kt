@@ -172,7 +172,10 @@ fun LiveTvPlayerScreen(
 
     // Picture quality (for the guide's badges) and frame rate (for Match frame rate).
     var videoFps by remember { mutableStateOf(-1f) }
+    // For the info bar: this channel's frame rate (not the last channel's while it starts).
+    var shownFps by remember { mutableStateOf(-1f) }
     LaunchedEffect(playback.channelKey, playback.catchupTitle) {
+        shownFps = -1f
         while (true) {
             val p = viewModel.playback.player
             val f = p?.videoFormat
@@ -181,7 +184,7 @@ fun LiveTvPlayerScreen(
                 // The stream's stated frame rate, else the one measured from its frames (many
                 // live streams don't state it, so the display was never switched).
                 val fps = if (f.frameRate > 0f) f.frameRate else viewModel.playback.measuredFps
-                if (fps > 0f) videoFps = fps
+                if (fps > 0f) { videoFps = fps; shownFps = fps }
             }
             // Match Frame Rate switches the display itself: the player's own frame rate hint to
             // the screen is turned off then, so the two don't pull against each other.
@@ -774,7 +777,11 @@ fun LiveTvPlayerScreen(
                     sizeLabel = context.getString(aspectModeOf(settings.aspectMode).labelResId),
                     sleepLabel = sleepAt?.let { at -> "Sleep " + ((at - tick).coerceAtLeast(0) / 60_000 + 1) + "m" },
                     clock = if (settings.clockMode == "never") "" else formatClock(tick, use24h),
-                    resolution = if (playback.videoHeight > 0) "${playback.videoHeight}p" else null,
+                    // "1080p · 50 FPS": the frame rate rounded (23.976 -> 24, 59.94 -> 60).
+                    resolution = if (playback.videoHeight > 0) {
+                        "${playback.videoHeight}p" +
+                            (if (settings.showFrameRate && shownFps > 0f) " · ${kotlin.math.round(shownFps).toInt()} FPS" else "")
+                    } else null,
                     audioBadge = remember(playback.channelKey, bannerVisible, playback.videoHeight, panelFull) { viewModel.playback.audioBadge() },
                     showNumber = settings.showChannelNumbers,
                     nextTitle = nextUp?.title?.let { titleMarks(it).title },

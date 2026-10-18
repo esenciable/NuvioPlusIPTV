@@ -1611,7 +1611,7 @@ class LiveTvRepository @Inject constructor(
         //   2. a tvg-id match beats a name match
         //   3. then the earlier guide in the list
         // so a guide full of placeholders can't hide real listings from another guide.
-        data class Candidate(val score: Int, val sourceId: String, val xmltvId: String, val programs: List<EpgProgram>)
+        data class Candidate(val score: Long, val sourceId: String, val xmltvId: String, val programs: List<EpgProgram>)
         val best = HashMap<String, Candidate>()
         val pinned = HashMap<String, List<EpgProgram>>()
         val sourceLists = ArrayList<EpgSourceChannels>()
@@ -1703,8 +1703,8 @@ class LiveTvRepository @Inject constructor(
                 if (list.isEmpty()) return
                 count += list.size
                 val real = !isPlaceholderListing(list)
-                // Higher is better; the guide's position only breaks ties.
-                val score = (if (real) 4_000 else 0) + (if (idMatch) 2_000 else 0) - order
+                // Higher is better; then more days ahead, then the guide's position.
+                val score = guideRank(real, idMatch, list, order)
                 chans.forEach { c ->
                     val cur = best[c.key]
                     if (cur == null || score > cur.score) best[c.key] = Candidate(score, target.fileId, xmlId, list)
@@ -1786,6 +1786,20 @@ class LiveTvRepository @Inject constructor(
             loadedFrom = Long.MIN_VALUE
             loadedTo = Long.MAX_VALUE
         }
+    }
+
+    /**
+     * How good a guide's listings for a channel are, higher is better: real listings over
+     * placeholders, then a tvg-id match over a name match, then the one that goes further ahead
+     * (in half-days, so a few hours either way don't count), and only then the guide higher in
+     * the list. Before, the guide higher in the list won even with a day of listings against
+     * another guide's week, so the same provider showed "until Saturday" on one TV and "until
+     * Monday" on another depending on the order of their guides.
+     */
+    private fun guideRank(real: Boolean, idMatch: Boolean, listings: List<EpgProgram>, order: Int): Long {
+        val lastStop = listings.maxOfOrNull { it.stopMs } ?: 0L
+        val halfDaysAhead = ((lastStop - System.currentTimeMillis()).coerceAtLeast(0L) / (12 * HOUR)).coerceAtMost(999L)
+        return (if (real) 4_000_000L else 0L) + (if (idMatch) 2_000_000L else 0L) + halfDaysAhead * 1_000L - order
     }
 
     /**
@@ -1915,12 +1929,12 @@ class LiveTvRepository @Inject constructor(
         // match over a name match, then the guide higher in the list).
         val newAuto = HashMap<String, EpgAssignment>()
         cands.forEach { (key, list) ->
-            var bestScore = Int.MIN_VALUE
+            var bestScore = Long.MIN_VALUE
             var best: Pair<Cand, List<EpgProgram>>? = null
             list.forEach { c ->
                 val listings = cleanListings(programsBySource[c.sourceId]?.get(c.xmltvId).orEmpty())
                 if (listings.isEmpty()) return@forEach
-                val score = (if (!isPlaceholderListing(listings)) 4_000 else 0) + (if (c.idMatch) 2_000 else 0) - c.order
+                val score = guideRank(!isPlaceholderListing(listings), c.idMatch, listings, c.order)
                 if (score > bestScore) { bestScore = score; best = c to listings }
             }
             best?.let { (c, listings) ->
@@ -2411,7 +2425,8 @@ class LiveTvRepository @Inject constructor(
         private const val MAX_FULL_RANGE_CHANNELS = 400
         // Hours read ahead of what's asked for (each read only adds the hours not loaded yet).
         private const val RANGE_SLACK_MS = 6 * HOUR
-        private const val GUIDE_CACHE_VERSION = 1
+        // 2: guides compared by how far ahead they go (matched again once after updating).
+        private const val GUIDE_CACHE_VERSION = 2
         private const val CHANNELS_CACHE_VERSION = 6
         private const val MAX_SAVED_LISTINGS = 300_000
         /** Titles guides use when they have no real listing. */

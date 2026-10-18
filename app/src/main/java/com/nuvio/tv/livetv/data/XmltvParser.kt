@@ -66,7 +66,13 @@ object XmltvParser {
                                 programs.getOrPut(channelId!!) { ArrayList() }.add(program)
                             }
                         } else {
-                            skip(parser)
+                            skipProgramme(parser)
+                        }
+                        // It ended at the next <programme> (it was never closed): read that one
+                        // now rather than stepping past it.
+                        if (parser.eventType == XmlPullParser.START_TAG && parser.name == "programme") {
+                            event = parser.eventType
+                            continue
                         }
                     }
                 }
@@ -111,7 +117,7 @@ object XmltvParser {
         val start = parseTime(parser.getAttributeValue(null, "start"))
         val stop = parseTime(parser.getAttributeValue(null, "stop"))
         if (start == null || stop == null || stop <= windowStart || start >= windowEnd) {
-            skip(parser)
+            skipProgramme(parser)
             return null
         }
         var title: String? = null
@@ -125,6 +131,10 @@ object XmltvParser {
         val depth = parser.depth
         var event = parser.next()
         while (!(event == XmlPullParser.END_TAG && parser.depth == depth)) {
+            // Another show starting inside this one: this one was never closed (some guides
+            // have hundreds of these). It ends here; the parser stays on the new one. Before,
+            // every show after it was taken as part of it and lost.
+            if (event == XmlPullParser.START_TAG && parser.name == "programme") break
             if (event == XmlPullParser.START_TAG) {
                 when (parser.name) {
                     "title" -> { val t = readText(parser); if (title == null) title = t }
@@ -234,6 +244,19 @@ object XmltvParser {
             event = parser.next()
         }
         return sb.toString()
+    }
+
+    /** Skips a show, stopping at the next <programme> if this one was never closed. */
+    private fun skipProgramme(parser: XmlPullParser) {
+        if (parser.eventType != XmlPullParser.START_TAG) return
+        var depth = 1
+        while (depth != 0) {
+            when (parser.next()) {
+                XmlPullParser.START_TAG -> if (parser.name == "programme") return else depth++
+                XmlPullParser.END_TAG -> depth--
+                XmlPullParser.END_DOCUMENT -> return
+            }
+        }
     }
 
     private fun skip(parser: XmlPullParser) {

@@ -57,7 +57,11 @@ data class LiveTrackOption(
     val label: String,
     val selected: Boolean,
     /** Closed captions inside the video: which kind ([LiveCaptions.CC1]…), or null for subtitles. */
-    val kind: String? = null
+    val kind: String? = null,
+    /** The track's language code ("en", "es"…), if it says. */
+    val language: String? = null,
+    /** Audio channels (2 stereo, 6 for 5.1), 0 if unknown. */
+    val channels: Int = 0
 )
 
 /**
@@ -494,6 +498,8 @@ class LiveTvPlaybackController @Inject constructor(
         archiveStartWallMs = if (catchupTitle != null) catchupStartMs else null
         archiveWallMapped = false
         if (currentChannel?.key != channel.key) {
+            audioHandled = false
+            audioPrefPending = true
             captionsHandled = false
             resetFrameRate()
             LiveCaptions.reset()
@@ -515,6 +521,16 @@ class LiveTvPlaybackController @Inject constructor(
         // Captions follow the setting until you change them yourself on this channel. Without
         // this the player switched on captions a stream marks as "default" (ARD, ZDF…) a couple
         // of seconds in, even with captions off in Settings.
+        // Audio picked before on this channel: ask for that language from the start (catch-up
+        // and reconnects included); without one, the stream's own default as before.
+        if (audioPrefPending) {
+            audioPrefPending = false
+            val lang = channelAudio[channel.key]?.split('|')?.getOrNull(0)?.ifBlank { null }
+            p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                .setPreferredAudioLanguage(lang)
+                .build()
+        }
         if (!captionsHandled) {
             p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
                 .clearOverridesOfType(C.TRACK_TYPE_TEXT)
@@ -880,10 +896,88 @@ class LiveTvPlaybackController @Inject constructor(
         }
     }
 
+    /**
+     * The sound of what's playing for the info bar badge: the kind when it's surround from Dolby
+     * or DTS, and the channels ("DD+ 5.1", "DOLBY 5.1", "ATMOS", "DTS 5.1", "5.1", "STEREO").
+     */
+    fun audioBadge(): String? {
+        val f = _player?.audioFormat ?: return null
+        val chans = when (val c = f.channelCount) {
+            1 -> "MONO"
+            2 -> "STEREO"
+            6 -> "5.1"
+            8 -> "7.1"
+            in 3..16 -> "${c}CH"
+            else -> null
+        }
+        val mime = f.sampleMimeType.orEmpty()
+        val codecs = f.codecs.orEmpty().lowercase()
+        val kind = when {
+            mime == MimeTypes.AUDIO_E_AC3_JOC || codecs.contains("joc") -> return "ATMOS"
+            mime == MimeTypes.AUDIO_E_AC3 -> "DD+"
+            mime == MimeTypes.AUDIO_AC3 -> "DOLBY"
+            mime == MimeTypes.AUDIO_AC4 -> "AC-4"
+            mime.startsWith("audio/vnd.dts") -> "DTS"
+            else -> null
+        }
+        return when {
+            kind != null && chans != null && chans != "STEREO" && chans != "MONO" -> "$kind $chans"
+            kind != null && chans == null -> kind
+            else -> chans
+        }
+    }
+
     /** The audio track playing, short ("English 5.1"), for the panel. */
     fun audioLabel(): String = tracksOf(C.TRACK_TYPE_AUDIO).firstOrNull { it.selected }?.label?.take(18) ?: "Audio"
 
     fun audioTracks(): List<LiveTrackOption> = tracksOf(C.TRACK_TYPE_AUDIO)
+
+    /** Saved audio choices: channel key -> "language|label|channels" (kept up to date by Live TV). */
+    var channelAudio: Map<String, String> = emptyMap()
+    /** Called when you pick an audio track, to remember it for that channel. */
+    var onAudioChosen: ((channelKey: String, audio: String) -> Unit)? = null
+    private var audioHandled = false
+    private var audioPrefPending = true
+
+    /** Picked in the Audio menu: plays it, and it's used every time this channel plays. */
+    fun pickAudio(option: LiveTrackOption) {
+        audioHandled = true
+        selectTrack(C.TRACK_TYPE_AUDIO, option)
+        val key = currentChannel?.key ?: return
+        val saved = listOf(option.language.orEmpty(), option.label, option.channels.toString()).joinToString("|")
+        channelAudio = channelAudio + (key to saved)
+        _player?.let { p ->
+            // Later streams on this channel (catch-up, a reconnect) start in this language too.
+            p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+                .setPreferredAudioLanguage(option.language)
+                .build()
+        }
+        onAudioChosen?.invoke(key, saved)
+    }
+
+    /**
+     * The saved audio choice, once this channel's tracks are known. The language is already
+     * asked for; this also picks the same track among several in that language (stereo or 5.1,
+     * main or audio description), by its label and number of channels.
+     */
+    private fun applySavedAudio() {
+        if (audioHandled) return
+        val key = currentChannel?.key ?: return
+        val options = tracksOf(C.TRACK_TYPE_AUDIO)
+        if (options.isEmpty()) return
+        audioHandled = true
+        val parts = channelAudio[key]?.split('|') ?: return
+        val lang = parts.getOrNull(0).orEmpty()
+        val label = parts.getOrNull(1).orEmpty()
+        val chans = parts.getOrNull(2)?.toIntOrNull() ?: 0
+        fun sameLang(o: LiveTrackOption) = lang.isNotBlank() && o.language != null &&
+            java.util.Locale.forLanguageTag(o.language).language == java.util.Locale.forLanguageTag(lang).language
+        val pick = options.firstOrNull { it.label == label }
+            ?: options.firstOrNull { sameLang(it) && it.channels == chans }
+            ?: options.firstOrNull { sameLang(it) }
+            ?: return
+        if (!pick.selected) selectTrack(C.TRACK_TYPE_AUDIO, pick)
+    }
     /**
      * The Subtitles menu: ordinary subtitle tracks, plus one closed-captions entry (the others
      * are under "More caption tracks"). No captions entry once 20 s of watching found none.
@@ -924,7 +1018,10 @@ class LiveTvPlaybackController @Inject constructor(
                     f.sampleMimeType?.takeIf { captions == null }?.substringAfter('/')?.uppercase(),
                     if (f.channelCount > 0) "${f.channelCount}ch" else null
                 )
-                out += LiveTrackOption(gi, ti, parts.distinct().joinToString(" · ").ifBlank { "Track ${out.size + 1}" }, group.isTrackSelected(ti), kind)
+                out += LiveTrackOption(
+                    gi, ti, parts.distinct().joinToString(" · ").ifBlank { "Track ${out.size + 1}" }, group.isTrackSelected(ti), kind,
+                    language = f.language, channels = f.channelCount.coerceAtLeast(0)
+                )
             }
         }
         return out
@@ -1049,6 +1146,7 @@ class LiveTvPlaybackController @Inject constructor(
         }
 
         override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+            applySavedAudio()
             // "Captions on by default": once the channel's caption tracks are known, switch them
             // on (once per channel, and not if you've turned them off yourself).
             if (!captionsByDefault || captionsHandled) return

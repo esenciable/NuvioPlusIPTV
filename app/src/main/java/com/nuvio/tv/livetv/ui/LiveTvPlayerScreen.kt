@@ -522,7 +522,10 @@ fun LiveTvPlayerScreen(
                         // Swallow the rest of this Back press (held repeats and letting go), so
                         // holding Back here can't reach the guide and bounce back to full screen.
                         (context as? com.nuvio.tv.MainActivity)?.longPressBackHeld?.value = true
-                        onBack()
+                        // The info bar is up: Back just closes it (a second Back leaves). Before,
+                        // Back always left full screen, so the bar could only be waited out.
+                        if (bannerVisible && e.nativeKeyEvent.repeatCount == 0) bannerVisible = false
+                        else onBack()
                         true
                     }
                     else -> false
@@ -772,6 +775,7 @@ fun LiveTvPlayerScreen(
                     sleepLabel = sleepAt?.let { at -> "Sleep " + ((at - tick).coerceAtLeast(0) / 60_000 + 1) + "m" },
                     clock = if (settings.clockMode == "never") "" else formatClock(tick, use24h),
                     resolution = if (playback.videoHeight > 0) "${playback.videoHeight}p" else null,
+                    audioBadge = remember(playback.channelKey, bannerVisible, playback.videoHeight, panelFull) { viewModel.playback.audioBadge() },
                     showNumber = settings.showChannelNumbers,
                     nextTitle = nextUp?.title?.let { titleMarks(it).title },
                     nextTime = nextUp?.let { formatRange(it.startMs, it.stopMs, use24h) },
@@ -897,7 +901,7 @@ fun LiveTvPlayerScreen(
             title = "Audio",
             options = viewModel.playback.audioTracks(),
             allowOff = false,
-            onPick = { viewModel.playback.selectTrack(C.TRACK_TYPE_AUDIO, it); dialog = PlayerDialog.NONE },
+            onPick = { option -> option?.let { viewModel.playback.pickAudio(it) }; dialog = PlayerDialog.NONE },
             onDismiss = { dialog = PlayerDialog.NONE }
         )
         PlayerDialog.SUBTITLES -> TrackDialog(

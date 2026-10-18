@@ -39,6 +39,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Lock
@@ -241,7 +242,9 @@ fun LiveTvGuideScreen(
     var focusGroupsOnOpen by remember { mutableStateOf(false) }
     // Manage visibility (TiviMate style): every channel in the group, hidden ones included.
     var visibilityMode by remember { mutableStateOf(false) }
-    // Reorder channels: the channel being moved, and the group's list while you move it.
+    // Reorder channels: on while reordering (several channels can be moved one after another);
+    // the channel picked up (null between moves), and the group's list while you move them.
+    var reorderActive by remember { mutableStateOf(false) }
     var reorderKey by remember { mutableStateOf<String?>(null) }
     var reorderList by remember { mutableStateOf<List<LiveChannel>>(emptyList()) }
     var reorderGroupId by remember { mutableStateOf("") }
@@ -292,7 +295,7 @@ fun LiveTvGuideScreen(
     var epgUnassignedOnly by remember { mutableStateOf(false) }
     val channels = when {
         visibilityMode -> visibilityChannels
-        reorderKey != null -> reorderList
+        reorderActive -> reorderList
         savedOrder != null -> savedOrder!!
         epgUnassignedOnly -> ui.channels.filter { programs[it.key].isNullOrEmpty() }
         else -> ui.channels
@@ -1044,33 +1047,44 @@ fun LiveTvGuideScreen(
                             }
                             .onPreviewKeyEvent { event ->
                                 val isOk = event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter
-                                if (reorderKey != null) {
-                                    // Up/Down moves the channel; OK or Back saves.
+                                if (reorderActive) {
+                                    // A channel picked up: Up/Down moves it, OK puts it down (still
+                                    // reordering, so another can be picked). Nothing picked: Up/Down
+                                    // moves the highlight, OK picks that channel up. Back saves it all.
+                                    fun scrollTo(target: Int) {
+                                        // After the list has been redrawn in its new order: the list
+                                        // keeps its place by channel, so scrolling straight away was
+                                        // undone and a channel moved past the top went off screen.
+                                        scope.launch {
+                                            androidx.compose.runtime.withFrameNanos { }
+                                            androidx.compose.runtime.withFrameNanos { }
+                                            ensureRowVisible(target)
+                                        }
+                                    }
                                     if (event.type == KeyEventType.KeyDown) {
-                                        val from = reorderList.indexOfFirst { it.key == reorderKey }
+                                        val picked = reorderKey
+                                        val from = if (picked != null) reorderList.indexOfFirst { it.key == picked } else row
                                         fun moveTo(to: Int) {
                                             if (from < 0 || to !in reorderList.indices || to == from) return
-                                            reorderList = reorderList.toMutableList().apply { add(to, removeAt(from)) }
+                                            if (picked != null) reorderList = reorderList.toMutableList().apply { add(to, removeAt(from)) }
                                             row = to
-                                            ensureRowVisible(to)
+                                            if (picked != null) scrollTo(to) else ensureRowVisible(to)
                                         }
                                         when {
                                             event.key == Key.DirectionUp -> moveTo(from - 1)
                                             event.key == Key.DirectionDown -> moveTo(from + 1)
                                             event.key == Key.PageUp || event.key == Key.ChannelUp -> moveTo((from - 8).coerceAtLeast(0))
                                             event.key == Key.PageDown || event.key == Key.ChannelDown -> moveTo((from + 8).coerceAtMost(reorderList.lastIndex))
-                                            event.key == Key.Back -> {
+                                            event.key == Key.Back && event.nativeKeyEvent.repeatCount == 0 -> {
                                                 viewModel.saveOrder(reorderGroupId, reorderList.map { it.key })
                                                 savedOrder = reorderList
-                                                savedMovedKey = reorderKey
+                                                savedMovedKey = reorderKey ?: reorderList.getOrNull(row)?.key
                                                 reorderKey = null
+                                                reorderActive = false
                                             }
                                         }
                                     } else if (isOk && event.type == KeyEventType.KeyUp) {
-                                        viewModel.saveOrder(reorderGroupId, reorderList.map { it.key })
-                                        savedOrder = reorderList
-                                        savedMovedKey = reorderKey
-                                        reorderKey = null
+                                        reorderKey = if (reorderKey != null) null else reorderList.getOrNull(row)?.key
                                     }
                                     return@onPreviewKeyEvent true
                                 }
@@ -1261,11 +1275,13 @@ fun LiveTvGuideScreen(
                                             now = now,
                                             isFavorite = ch.key in user.favorites,
                                             isPlaying = ch.key == playback.channelKey,
-                                            focusColumn = if (index == row && (gridFocused || epgPickerFor != null) && !nameFocus) column else null,
-                                            nameFocused = index == row && gridFocused && nameFocus,
+                                            focusColumn = if (index == row && (gridFocused || epgPickerFor != null) && !nameFocus && !reorderActive) column else null,
                                             focusedBlock = if (index == row) focusedBlock else null,
                                             visible = if (visibilityMode) ch.key !in pendingHidden else null,
                                             moving = reorderKey == ch.key,
+                                            reorderMode = reorderActive,
+                                            nameFocused = (index == row && gridFocused && nameFocus) ||
+                                                (reorderActive && reorderKey == null && index == row),
                                             quality = if (settings.showQualityBadges) user.channelQuality[ch.key] else null,
                                             reminderStarts = if (user.reminders.isEmpty()) emptySet()
                                                 else user.reminders.filter { it.channelKey == ch.key }.map { it.startMs }.toSet(),
@@ -1447,7 +1463,7 @@ fun LiveTvGuideScreen(
                 LiveText("OK or Back: save", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
             }
         }
-        if (reorderKey != null) {
+        if (reorderActive) {
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -1459,9 +1475,15 @@ fun LiveTvGuideScreen(
             ) {
                 LiveText("Reorder channels", size = 15.sp, weight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
-                LiveText("Up / Down: move the channel", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
-                LiveText("CH+ / CH−: move 8 places", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
-                LiveText("OK or Back: save", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
+                if (reorderKey != null) {
+                    LiveText("Up / Down: move the channel", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
+                    LiveText("CH+ / CH−: move 8 places", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
+                    LiveText("OK: place it here", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
+                } else {
+                    LiveText("Up / Down: choose a channel", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
+                    LiveText("OK: select it to move", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
+                }
+                LiveText("Back: save and finish", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
             }
         }
         if (visibilityMode) {
@@ -1609,6 +1631,7 @@ fun LiveTvGuideScreen(
                     menuTarget = null
                     reorderGroupId = ui.selectedGroupId
                     reorderList = channels
+                    reorderActive = true
                     reorderKey = target.channel.key
                     row = channels.indexOfFirst { it.key == target.channel.key }.coerceAtLeast(0)
                     scope.launch { delay(60); runCatching { gridFocus.requestFocus() } }
@@ -2075,8 +2098,10 @@ private fun GuideRow(
     focusedBlock: GuideBlock?,
     /** In Manage visibility: true = shown, false = hidden. Null otherwise. */
     visible: Boolean? = null,
-    /** Being moved with "Reorder channels". */
+    /** Picked up to be moved with "Reorder channels". */
     moving: Boolean = false,
+    /** "Reorder channels" is on: every channel shows the move marker. */
+    reorderMode: Boolean = false,
     /** "Browse by channel name": this row's channel name has the highlight. */
     nameFocused: Boolean = false,
     /** Picture quality seen when this channel last played ("4K", "FHD", "HD", "SD"). */
@@ -2101,7 +2126,9 @@ private fun GuideRow(
         // The channel cell is never highlighted; the program under the cursor is.
         // …except while it's being moved with Reorder channels.
         val channelFocused = moving || nameFocused
-        val cell = liveCellColors(focused = moving || nameFocused, idle = guideSurface())
+        // The channel picked up to move: its own color (gold), apart from the highlight.
+        val cell = if (moving) LiveCellColors(NuvioTheme.colors.Rating, NuvioTheme.colors.Rating, Color.Black)
+            else liveCellColors(focused = nameFocused, idle = guideSurface())
         Row(
             modifier = Modifier
                 .width(channelColWidth)
@@ -2140,7 +2167,7 @@ private fun GuideRow(
             }
             // Quality badge, from the last time this channel played. (Not while managing
             // visibility, so the eye at the end always has room.)
-            if (quality != null && !moving && visible == null) {
+            if (quality != null && !reorderMode && !moving && visible == null) {
                 LiveText(
                     quality,
                     modifier = Modifier
@@ -2153,7 +2180,7 @@ private fun GuideRow(
                 Spacer(Modifier.width(4.dp))
             }
             // Catch-up available on this channel (not while managing visibility, like quality).
-            if (channel.catchup != null && !moving && visible == null) {
+            if (channel.catchup != null && !reorderMode && !moving && visible == null) {
                 Icon(
                     imageVector = Icons.Default.History,
                     contentDescription = "Catch-up",
@@ -2162,7 +2189,7 @@ private fun GuideRow(
                 )
                 Spacer(Modifier.width(3.dp))
             }
-            if (isFavorite && !moving) {
+            if (isFavorite && !reorderMode && !moving) {
                 Icon(
                     imageVector = Icons.Default.Star,
                     contentDescription = null,
@@ -2171,13 +2198,19 @@ private fun GuideRow(
                 )
             }
             // While moving, only the move marker shows (no playing dot or star in the way).
-            if (isPlaying && !moving) {
+            if (isPlaying && !reorderMode && !moving) {
                 Spacer(Modifier.width(4.dp))
                 Box(Modifier.size(7.dp).clip(RoundedCornerShape(50)).background(NuvioTheme.colors.Error))
             }
-            if (moving) {
+            // Reordering: every channel shows the up/down marker; the one picked up in its color.
+            if (reorderMode || moving) {
                 Spacer(Modifier.width(6.dp))
-                LiveText("⇅", color = cell.text, size = gsp(18f), weight = FontWeight.Bold)
+                Icon(
+                    imageVector = Icons.Default.SwapVert,
+                    contentDescription = if (moving) "Moving" else "Can be moved",
+                    tint = if (moving || nameFocused) cell.text else NuvioTheme.colors.TextSecondary,
+                    modifier = Modifier.size(gdp(18f))
+                )
             }
             // Manage visibility: an eye for shown channels, a crossed-out eye for hidden ones.
             if (visible != null) {

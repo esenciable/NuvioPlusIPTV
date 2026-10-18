@@ -130,14 +130,17 @@ internal fun LiveTvPlayerPanel(
     recentClear: Boolean = true,
     /** Channel surfing: this is a channel you're looking at, not the one playing. */
     browsing: Boolean = false,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** The sound of what's playing, next to the picture size ("5.1", "DD+ 5.1", "STEREO"). */
+    audioBadge: String? = null
 ) {
     // The OK panel: one compact layout, the same height with or without the channel row.
     if (full) {
         FullInfoPanel(
             channel, mode, title, meta, description, poster, showPosters, timeline, paused, controls,
             focused, captionsOn, audioLabel, sizeLabel, sleepLabel, clock, resolution, showNumber,
-            nextTitle, nextTime, catchupAvailable, recent, recentFocus, recentTitle, recentClear, modifier
+            nextTitle, nextTime, catchupAvailable, recent, recentFocus, recentTitle, recentClear, modifier,
+            audioBadge = audioBadge
         )
         return
     }
@@ -212,6 +215,11 @@ internal fun LiveTvPlayerPanel(
                 resolution?.let {
                     Spacer(Modifier.width(6.dp))
                     LiveTag(it.uppercase(), Color.Transparent, colors.TextSecondary,
+                        Modifier.border(1.dp, colors.Border, RoundedCornerShape(5.dp)))
+                }
+                audioBadge?.let {
+                    Spacer(Modifier.width(6.dp))
+                    LiveTag(it, Color.Transparent, colors.TextSecondary,
                         Modifier.border(1.dp, colors.Border, RoundedCornerShape(5.dp)))
                 }
                 if (catchupAvailable && mode == PanelMode.LIVE) {
@@ -559,7 +567,8 @@ private fun FullInfoPanel(
     recentFocus: Int?,
     recentTitle: String,
     recentClear: Boolean,
-    modifier: Modifier
+    modifier: Modifier,
+    audioBadge: String? = null
 ) {
     val colors = NuvioTheme.colors
     val accent = colors.Secondary
@@ -628,6 +637,11 @@ private fun FullInfoPanel(
                     resolution?.let {
                         Spacer(Modifier.width(6.dp))
                         LiveTag(it.uppercase(), Color.Transparent, colors.TextSecondary,
+                            Modifier.border(1.dp, colors.Border, RoundedCornerShape(5.dp)))
+                    }
+                    audioBadge?.let {
+                        Spacer(Modifier.width(6.dp))
+                        LiveTag(it, Color.Transparent, colors.TextSecondary,
                             Modifier.border(1.dp, colors.Border, RoundedCornerShape(5.dp)))
                     }
                     if (catchupAvailable && mode == PanelMode.LIVE) {

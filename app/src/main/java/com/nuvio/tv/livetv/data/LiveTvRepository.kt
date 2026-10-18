@@ -1608,7 +1608,7 @@ class LiveTvRepository @Inject constructor(
 
         for ((order, target) in targets.withIndex()) {
             val file = epgFile(target.fileId)
-            if (!file.exists()) continue
+            if (!file.exists()) { LIVE_REPORT.add("Guide \"${target.name}\": no file downloaded yet"); continue }
             // How far through each guide file it is, so a big guide doesn't look frozen.
             val fileSize = file.length().coerceAtLeast(1L)
             val step = if (targets.size > 1) " (${order + 1} of ${targets.size})" else ""
@@ -1624,6 +1624,8 @@ class LiveTvRepository @Inject constructor(
             val idHits = HashMap<String, MutableSet<LiveChannel>>()
             val nameHits = HashMap<String, MutableSet<LiveChannel>>()
             val parsed = runCatching {
+                // What the file starts with, for the report if it can't be read at all (an
+                // error page or a login page instead of a guide shows up here).
                 openMaybeGzip(file, showProgress).use { input ->
                     XmltvParser.parse(input, windowStart, windowEnd) { xmlChannels ->
                         xmlChannels.values.forEach { xc ->
@@ -1636,7 +1638,16 @@ class LiveTvRepository @Inject constructor(
                         else idHits.keys + nameHits.keys + pinnedHere.values.map { it.xmltvId }
                     }
                 }
-            }.onFailure { Log.w(TAG, "EPG parse ${target.name} failed", it) }.getOrNull() ?: continue
+            }.onFailure {
+                Log.w(TAG, "EPG parse ${target.name} failed", it)
+                val start = runCatching {
+                    openMaybeGzip(file).use { inp -> String(inp.readNBytesCompat(120), Charsets.UTF_8) }
+                }.getOrDefault("").replace(Regex("\\s+"), " ").trim()
+                LIVE_REPORT.add("Guide \"${target.name}\" couldn't be read (${it.message?.take(140) ?: it.javaClass.simpleName}); ${file.length() / 1024} KB starting \"$start\"")
+            }.getOrNull() ?: continue
+            parsed.error?.let { err ->
+                LIVE_REPORT.add("Guide \"${target.name}\" is broken at $err. Kept what was read before that.")
+            }
 
             val entries = if (parsed.channels.isNotEmpty()) {
                 parsed.channels.values.map { EpgChannelEntry(it.id, it.displayNames, it.icon) }
@@ -2404,4 +2415,16 @@ class LiveTvRepository @Inject constructor(
             return n.filter { it.isLetterOrDigit() }
         }
     }
+}
+
+/** Up to [n] bytes from the start of a stream (InputStream.readNBytes needs Android 13). */
+private fun java.io.InputStream.readNBytesCompat(n: Int): ByteArray {
+    val buf = ByteArray(n)
+    var total = 0
+    while (total < n) {
+        val r = read(buf, total, n - total)
+        if (r < 0) break
+        total += r
+    }
+    return buf.copyOf(total)
 }

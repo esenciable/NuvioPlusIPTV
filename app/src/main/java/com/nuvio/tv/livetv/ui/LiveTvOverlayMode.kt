@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -132,6 +133,9 @@ private fun OverlayModeContent(
     val groups = remember(ui.groups) { ui.groups.filter { it.id != ChannelGroup.SEARCH } }
 
     var level by remember { mutableStateOf(OverlayLevel.CHANNELS) }
+    // Widths of the whole overlay and of its panels, for sizing the show card beside them.
+    var overlayWidthPx by remember { mutableStateOf(0) }
+    var panelsWidthPx by remember { mutableStateOf(0) }
     var chIndex by remember { mutableIntStateOf(channels.indexOfFirst { it.key == playback.channelKey }.coerceAtLeast(0)) }
     var groupIndex by remember { mutableIntStateOf(groups.indexOfFirst { it.id == ui.selectedGroupId }.coerceAtLeast(0)) }
     var scheduleChannel by remember { mutableStateOf<LiveChannel?>(null) }
@@ -290,9 +294,10 @@ private fun OverlayModeContent(
                 }
                 true
             }
+            .onSizeChanged { overlayWidthPx = it.width }
             .focusable()
     ) {
-        Row(modifier = Modifier.fillMaxHeight()) {
+        Row(modifier = Modifier.fillMaxHeight().onSizeChanged { panelsWidthPx = it.width }) {
             when (level) {
                 OverlayLevel.GROUPS -> {
                     GroupsPanel(groups, groupIndex, settings.showGroupCounts)
@@ -311,7 +316,12 @@ private fun OverlayModeContent(
             }
         }
 
-        // Details of the highlighted show, top right.
+        // Details of the highlighted show, top right, in the space the panels leave (it used to be
+        // a fixed width and covered the schedule on narrower screens or with a bigger guide size).
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        val cardWidth = with(density) { (overlayWidthPx - panelsWidthPx).coerceAtLeast(0).toDp() } - 24.dp - 16.dp
+        val cardFits = overlayWidthPx > 0 && cardWidth >= 200.dp
+        val cardW = if (cardWidth > 360.dp) 360.dp else cardWidth
         val card: EpgProgram? = when (level) {
             OverlayLevel.CHANNELS -> settledChannel?.let { ch -> programs[ch.key]?.firstOrNull { now >= it.startMs && now < it.stopMs } }
             OverlayLevel.SCHEDULE, OverlayLevel.DATES -> focusedShow?.program
@@ -320,12 +330,12 @@ private fun OverlayModeContent(
         val cardChannelKey = if (level == OverlayLevel.CHANNELS) settledChannel?.key else scheduleChannel?.key
         // 24/7 channels with no listing: what the channel plays, as the card.
         val about = if (level == OverlayLevel.CHANNELS) rememberChannelAbout(settledChannel, card) else null
-        if (card == null && about != null && !about.description.isNullOrBlank()) {
+        if (cardFits && card == null && about != null && !about.description.isNullOrBlank()) {
             Column(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 24.dp, end = 24.dp)
-                    .width(360.dp)
+                    .width(cardW)
                     .clip(RoundedCornerShape(12.dp))
                     .background(Color.Black.copy(alpha = 0.55f))
                     .padding(16.dp)
@@ -339,12 +349,12 @@ private fun OverlayModeContent(
                 LiveText(about.description.orEmpty(), size = osp(13f), color = Color.White.copy(alpha = 0.85f), maxLines = 6)
             }
         }
-        rememberShowDetails(cardChannelKey, card)?.let { p ->
+        rememberShowDetails(cardChannelKey, card)?.takeIf { cardFits }?.let { p ->
             Column(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 24.dp, end = 24.dp)
-                    .width(360.dp)
+                    .width(cardW)
                     .clip(RoundedCornerShape(12.dp))
                     .background(Color.Black.copy(alpha = 0.55f))
                     .padding(16.dp)

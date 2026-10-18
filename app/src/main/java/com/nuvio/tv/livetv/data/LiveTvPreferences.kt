@@ -158,6 +158,7 @@ class LiveTvPreferences @Inject constructor(
         val lockedGroups = stringSetPreferencesKey("locked_groups")
         val reminders = stringPreferencesKey("reminders")
         val channelQuality = stringPreferencesKey("channel_quality")
+        val channelAudio = stringPreferencesKey("channel_audio")
         val vodHiddenCategories = stringSetPreferencesKey("vod_hidden_categories")
         val vodGroupOrder = stringPreferencesKey("vod_group_order")
         val vodGroupNames = stringPreferencesKey("vod_group_names")
@@ -414,6 +415,7 @@ class LiveTvPreferences @Inject constructor(
             lockedGroups = p[Keys.lockedGroups] ?: emptySet(),
             reminders = decodeReminders(p[Keys.reminders]),
             channelQuality = decodeStringMap(d[Keys.channelQuality] ?: p[Keys.channelQuality]),
+            channelAudio = decodeStringMap(p[Keys.channelAudio]),
             vodHiddenCategories = p[Keys.vodHiddenCategories] ?: emptySet(),
             vodGroupOrder = decodeStringList(p[Keys.vodGroupOrder]),
             vodGroupNames = decodeStringMap(p[Keys.vodGroupNames]),
@@ -663,6 +665,15 @@ class LiveTvPreferences @Inject constructor(
             val cur = decodeReminders(p[my(Keys.reminders)])
             val kept = cur.filter { it.startMs + graceMs > now }
             if (kept.size != cur.size) p[my(Keys.reminders)] = encodeReminders(kept)
+        }
+    }
+
+    /** The audio track picked on a channel, used every time it plays (null forgets it). */
+    suspend fun setChannelAudio(key: String, audio: String?) {
+        store.edit { p ->
+            val m = decodeStringMap(p[Keys.channelAudio]).toMutableMap()
+            if (audio == null) m.remove(key) else m[key] = audio
+            p[Keys.channelAudio] = encodeStringMap(m)
         }
     }
 

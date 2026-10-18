@@ -160,6 +160,9 @@ class LiveTvViewModel @Inject constructor(
         // A provider whose catch-up only works as TS: ask for TS for a week (saves a failed
         // HLS try, about a second, on every replay), then try HLS again; if that fails too,
         // another week of TS, and so on.
+        // The audio track picked on each channel, remembered and used every time it plays.
+        playback.onAudioChosen = { key, audio -> viewModelScope.launch { prefs.setChannelAudio(key, audio) } }
+        viewModelScope.launch { userState.collect { playback.channelAudio = it.channelAudio } }
         playback.onCatchupHlsUnsupported = { sourceId ->
             viewModelScope.launch {
                 com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Catch-up: this provider doesn't do HLS replays; using TS for the next week")

@@ -57,7 +57,8 @@ class LiveTv247Matcher @Inject constructor(
     suspend fun match(channel: LiveChannel, names: List<String>): Match? {
         if (names.isEmpty() || com.nuvio.tv.BuildConfig.TMDB_API_KEY.isBlank()) return null
         val lean = leanOf(channel)
-        val key = "247tmdb|" + lean.code + "|" + norm(names.first())
+        // "247tmdb3": matches from before collections won over a single film are looked up again.
+        val key = "247tmdb3|" + lean.code + "|" + norm(names.first())
         memory[key]?.let { return it }
         if (key in misses) return null
         withContext(Dispatchers.IO) { store.get(key) }?.let { saved ->
@@ -113,7 +114,7 @@ class LiveTv247Matcher @Inject constructor(
         val collJson = coll.await()
         if (multiJson == null && collJson == null) return@coroutineScope null to false
         val wanted = norm(name)
-        data class Scored(val m: Match, val score: Double)
+        data class Scored(val m: Match, val score: Double, val exact: Boolean = false, val movieId: Int = 0)
         val all = ArrayList<Scored>()
 
         fun nameScore(candidate: String): Double? {
@@ -160,7 +161,8 @@ class LiveTv247Matcher @Inject constructor(
                                 year = (if (type == "tv") r.optString("first_air_date") else r.optString("release_date")).take(4).takeIf { it.length == 4 },
                                 rating = r.optDouble("vote_average", 0.0).toFloat().takeIf { it > 0f }
                             ),
-                            base + prior + popularity + votes
+                            base + prior + popularity + votes,
+                            movieId = if (type == "movie") r.optInt("id", 0) else 0
                         )
                     }
                     "person" -> {
@@ -221,11 +223,43 @@ class LiveTv247Matcher @Inject constructor(
                         lean.shows -> 60.0
                         lean.people -> 120.0
                         else -> 170.0
-                    }) + (if (i == 0) 40.0 else 0.0)
+                    }) + (if (i == 0) 40.0 else 0.0),
+                    exact = base >= 1_000.0
                 )
             }
         }
-        all.maxByOrNull { it.score }?.m to true
+        // A 24/7 channel named after a film series ("BATMAN", "DIE HARD") plays the whole series,
+        // not one film: a collection with exactly that name wins over a film. (A famous single
+        // film used to win on popularity, so only less popular series like Blade got their
+        // collection cover.) Shows and people are scored as before.
+        val best = all.maxByOrNull { it.score }
+        val exactCollection = all.filter { it.m.kind == "collection" && it.exact }.maxByOrNull { it.score }
+        val pick = if (best != null && exactCollection != null && best.m.kind == "movie") exactCollection else best
+        // Still a single film (no collection by the channel's name): a 24/7 channel plays the
+        // whole series, so use the collection that film belongs to, if it's in one ("BATMAN" ->
+        // The Batman -> The Batman Collection). A film on its own keeps its poster. Not for shows.
+        if (pick != null && pick.m.kind == "movie" && pick.movieId > 0) {
+            collectionOf(pick.movieId, apiKey)?.let { return@coroutineScope it to true }
+        }
+        pick?.m to true
+    }
+
+    /** The collection film [movieId] belongs to, as a match (poster, backdrop, overview). */
+    private suspend fun collectionOf(movieId: Int, apiKey: String): Match? {
+        val movie = get("https://api.themoviedb.org/3/movie/$movieId?api_key=$apiKey") ?: return null
+        val c = movie.optJSONObject("belongs_to_collection") ?: return null
+        val poster = c.optString("poster_path").takeIf { it.startsWith("/") } ?: return null
+        val id = c.optInt("id", 0)
+        val details = if (id > 0) get("https://api.themoviedb.org/3/collection/$id?api_key=$apiKey") else null
+        return Match(
+            kind = "collection",
+            title = c.optString("name").ifBlank { details?.optString("name").orEmpty() },
+            poster = IMG + poster,
+            backdrop = c.optString("backdrop_path").takeIf { it.startsWith("/") }?.let { BACKDROP + it },
+            overview = details?.optString("overview")?.takeIf { it.isNotBlank() },
+            year = null,
+            rating = null
+        )
     }
 
     private suspend fun get(url: String): JSONObject? = permits.withPermit {

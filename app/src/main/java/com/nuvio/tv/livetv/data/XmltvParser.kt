@@ -16,7 +16,9 @@ data class XmltvChannel(
 data class XmltvResult(
     val channels: Map<String, XmltvChannel>,
     /** Programs keyed by XMLTV channel id, sorted by start time. */
-    val programs: Map<String, List<EpgProgram>>
+    val programs: Map<String, List<EpgProgram>>,
+    /** Reading stopped early here (a broken file): what was read before it is kept. */
+    val error: String? = null
 )
 
 /**
@@ -34,6 +36,9 @@ object XmltvParser {
     ): XmltvResult {
         val parser = Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
+        // Forgiving mode, like other IPTV apps: a stray "&" in a title, an HTML entity such as
+        // &nbsp; or an unclosed tag no longer stops the whole guide from being read.
+        runCatching { parser.setFeature("http://xmlpull.org/v1/doc/features.html#relaxed", true) }
         parser.setInput(input, null)
 
         val channels = LinkedHashMap<String, XmltvChannel>()
@@ -41,6 +46,8 @@ object XmltvParser {
         var wanted: Set<String>? = null
         var wantedResolved = false
 
+        var error: String? = null
+        try {
         var event = parser.eventType
         while (event != XmlPullParser.END_DOCUMENT) {
             if (event == XmlPullParser.START_TAG) {
@@ -66,8 +73,15 @@ object XmltvParser {
             }
             event = parser.next()
         }
+        } catch (e: Exception) {
+            // A guide broken partway (bad characters, cut off): keep everything read up to there
+            // instead of throwing the whole guide away.
+            error = "line ${runCatching { parser.lineNumber }.getOrDefault(-1)}: " +
+                (e.message?.take(140) ?: e.javaClass.simpleName)
+            if (!wantedResolved) wanted = null
+        }
         val sorted = programs.mapValues { (_, list) -> list.sortedBy { it.startMs } }
-        return XmltvResult(channels, sorted)
+        return XmltvResult(channels, sorted, error)
     }
 
     private fun readChannel(parser: XmlPullParser): XmltvChannel? {

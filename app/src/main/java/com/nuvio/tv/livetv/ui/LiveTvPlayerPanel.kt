@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -132,7 +133,9 @@ internal fun LiveTvPlayerPanel(
     browsing: Boolean = false,
     modifier: Modifier = Modifier,
     /** The sound of what's playing, next to the picture size ("5.1", "DD+ 5.1", "STEREO"). */
-    audioBadge: String? = null
+    audioBadge: String? = null,
+    /** How dark the background is: "standard", "darker" or "solid" (Live TV settings). */
+    background: String = "standard"
 ) {
     // The OK panel: one compact layout, the same height with or without the channel row.
     if (full) {
@@ -140,25 +143,19 @@ internal fun LiveTvPlayerPanel(
             channel, mode, title, meta, description, poster, showPosters, timeline, paused, controls,
             focused, captionsOn, audioLabel, sizeLabel, sleepLabel, clock, resolution, showNumber,
             nextTitle, nextTime, catchupAvailable, recent, recentFocus, recentTitle, recentClear, modifier,
-            audioBadge = audioBadge
+            audioBadge = audioBadge, background = background
         )
-        return
-    }
+    } else {
     val withRecent = false
     val colors = NuvioTheme.colors
     val accent = colors.Secondary
     val posterW = if (withRecent) 88.dp else if (full) 116.dp else 110.dp
     val posterH = if (withRecent) 132.dp else if (full) 174.dp else 165.dp
-    // Fades up from the bottom over the picture, in the theme's background color.
-    val scrim = androidx.compose.ui.graphics.Brush.verticalGradient(
-        0f to Color.Transparent,
-        0.38f to colors.Background.copy(alpha = 0.86f),
-        1f to colors.Background.copy(alpha = 0.97f)
-    )
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(scrim)
+            // Fades in above the text (in the top padding), then stays dark behind it.
+            .panelScrim(colors.Background, background, fade = 56.dp)
             .padding(start = 48.dp, end = 48.dp, top = if (withRecent) 48.dp else 64.dp, bottom = if (withRecent) 14.dp else if (full) 18.dp else 24.dp)
     ) {
     Row(verticalAlignment = Alignment.Bottom) {
@@ -205,7 +202,8 @@ internal fun LiveTvPlayerPanel(
                 }
                 LiveText(
                     (if (showNumber) "${channel.number} · " else "") + channel.name,
-                    size = 14.sp, weight = FontWeight.SemiBold, color = colors.TextSecondary
+                    size = 14.sp, weight = FontWeight.SemiBold, color = colors.TextSecondary,
+                    shadow = true
                 )
                 when (mode) {
                     PanelMode.LIVE -> { Spacer(Modifier.width(10.dp)); LiveTag("LIVE", LIVE_RED, Color.White) }
@@ -227,6 +225,8 @@ internal fun LiveTvPlayerPanel(
                     LiveTag("CATCH-UP", Color.Transparent, colors.TextSecondary,
                         Modifier.border(1.dp, colors.Border, RoundedCornerShape(5.dp)))
                 }
+                // Sports: the live score of the game on this channel.
+                if (mode == PanelMode.LIVE) com.nuvio.tv.livetv.sports.SportsScoreTag(channel.key)
                 Spacer(Modifier.weight(1f))
                 if (full) timeline?.let {
                     LiveText(it.status, size = 13.sp, color = if (it.statusLive) colors.Error else accent, modifier = Modifier.padding(end = 14.dp))
@@ -236,17 +236,17 @@ internal fun LiveTvPlayerPanel(
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.Bottom) {
                 Column(Modifier.weight(1f)) {
-                    LiveText(title, size = if (withRecent) 26.sp else 30.sp, weight = FontWeight.ExtraBold, maxLines = 1, marquee = true, color = colors.TextPrimary)
+                    LiveText(title, size = if (withRecent) 26.sp else 30.sp, weight = FontWeight.ExtraBold, maxLines = 1, marquee = true, color = colors.TextPrimary, shadow = true)
                     // Channel surfing: the lines are always there (empty until the details arrive),
                     // so nothing moves when the description fills in.
                     if (meta.isNotBlank() || browsing) {
                         Spacer(Modifier.height(2.dp))
-                        LiveText(meta.ifBlank { " " }, size = 14.sp, color = colors.TextSecondary, maxLines = 1)
+                        LiveText(meta.ifBlank { " " }, size = 14.sp, color = colors.TextSecondary, maxLines = 1, shadow = true)
                     }
                     val desc = description?.takeIf { it.isNotBlank() }
                     if (desc != null || browsing) {
                         Spacer(Modifier.height(4.dp))
-                        LiveText(desc ?: " ", size = 14.sp, color = colors.TextSecondary, maxLines = if (full && !withRecent) 2 else 1)
+                        LiveText(desc ?: " ", size = 14.sp, color = colors.TextSecondary, maxLines = if (full && !withRecent) 4 else 1, shadow = true)
                     }
                 }
                 // What's on next, on the right.
@@ -254,7 +254,7 @@ internal fun LiveTvPlayerPanel(
                     Spacer(Modifier.width(24.dp))
                     Column(horizontalAlignment = Alignment.End) {
                         LiveText("NEXT", size = 11.sp, weight = FontWeight.Bold, color = colors.TextTertiary)
-                        LiveText(nextTitle, size = 15.sp, weight = FontWeight.Bold, color = colors.TextPrimary, modifier = Modifier.widthIn(max = 260.dp))
+                        LiveText(nextTitle, size = 15.sp, weight = FontWeight.Bold, color = colors.TextPrimary, modifier = Modifier.widthIn(max = 260.dp), shadow = true)
                         nextTime?.let { LiveText(it, size = 13.sp, color = colors.TextSecondary) }
                     }
                 }
@@ -279,6 +279,7 @@ internal fun LiveTvPlayerPanel(
         RecentRow(recent.orEmpty(), recentFocus, recentTitle, recentClear)
     }
     }
+    } // else (the smaller panel)
 }
 
 /** A channel in the info panel's Recent row: what's on now and how far into it. */
@@ -312,7 +313,8 @@ private fun RecentRow(recent: List<PanelRecent>, focus: Int?, title: String, sho
     Box(Modifier.width(14.dp).height(TILE_H), contentAlignment = Alignment.Center) {
         LiveText(
             title, size = 9.sp, weight = FontWeight.Bold, color = colors.TextTertiary,
-            modifier = Modifier.wrapContentSize(unbounded = true).rotate(-90f)
+            modifier = Modifier.wrapContentSize(unbounded = true).rotate(-90f),
+            shadow = true
         )
     }
     Spacer(Modifier.width(4.dp))
@@ -568,7 +570,8 @@ private fun FullInfoPanel(
     recentTitle: String,
     recentClear: Boolean,
     modifier: Modifier,
-    audioBadge: String? = null
+    audioBadge: String? = null,
+    background: String = "standard"
 ) {
     val colors = NuvioTheme.colors
     val accent = colors.Secondary
@@ -577,16 +580,12 @@ private fun FullInfoPanel(
     // The poster matches the height of the text beside it.
     var infoHeightPx by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val posterH = with(density) { infoHeightPx.toDp() }
-    val scrim = androidx.compose.ui.graphics.Brush.verticalGradient(
-        0f to Color.Transparent,
-        0.22f to colors.Background.copy(alpha = 0.86f),
-        1f to colors.Background.copy(alpha = 0.97f)
-    )
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(scrim)
-            .padding(start = 40.dp, end = 40.dp, top = 30.dp, bottom = 10.dp)
+            // Fades in above the text (in the top padding), then stays dark behind it.
+            .panelScrim(colors.Background, background, fade = 38.dp)
+            .padding(start = 40.dp, end = 40.dp, top = 42.dp, bottom = 10.dp)
     ) {
         Row(verticalAlignment = Alignment.Top) {
             val posterShape = RoundedCornerShape(liveCorner())
@@ -627,7 +626,8 @@ private fun FullInfoPanel(
                     }
                     LiveText(
                         (if (showNumber) "${channel.number} · " else "") + channel.name,
-                        size = 12.sp, weight = FontWeight.SemiBold, color = colors.TextSecondary
+                        size = 12.sp, weight = FontWeight.SemiBold, color = colors.TextSecondary,
+                        shadow = true
                     )
                     when (mode) {
                         PanelMode.LIVE -> { Spacer(Modifier.width(8.dp)); LiveTag("LIVE", LIVE_RED, Color.White) }
@@ -649,6 +649,7 @@ private fun FullInfoPanel(
                         LiveTag("CATCH-UP", Color.Transparent, colors.TextSecondary,
                             Modifier.border(1.dp, colors.Border, RoundedCornerShape(5.dp)))
                     }
+                    if (mode == PanelMode.LIVE) com.nuvio.tv.livetv.sports.SportsScoreTag(channel.key)
                     Spacer(Modifier.weight(1f))
                     // Time left / how far behind live: up here, so the time bar keeps its length.
                     timeline?.let {
@@ -658,27 +659,28 @@ private fun FullInfoPanel(
                             modifier = Modifier.padding(end = 12.dp)
                         )
                     }
-                    if (clock.isNotEmpty()) LiveText(clock, size = 16.sp, weight = FontWeight.Bold, color = colors.TextPrimary)
+                    if (clock.isNotEmpty()) LiveText(clock, size = 16.sp, weight = FontWeight.Bold, color = colors.TextPrimary, shadow = true)
                 }
                 Spacer(Modifier.height(2.dp))
                 // Title · category, and what's next on the right.
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     LiveText(
                         title, size = 22.sp, weight = FontWeight.ExtraBold, maxLines = 1, marquee = true,
-                        color = colors.TextPrimary, modifier = Modifier.weight(1f, fill = false)
+                        color = colors.TextPrimary, modifier = Modifier.weight(1f, fill = false),
+                        shadow = true
                     )
                     if (meta.isNotBlank()) {
                         Spacer(Modifier.width(10.dp))
-                        LiveText(meta, size = 12.sp, color = colors.TextSecondary, maxLines = 1, modifier = Modifier.weight(1f, fill = false))
+                        LiveText(meta, size = 12.sp, color = colors.TextSecondary, maxLines = 1, modifier = Modifier.weight(1f, fill = false), shadow = true)
                     }
                     Spacer(Modifier.weight(0.001f))
                     if (nextTitle != null) {
                         Spacer(Modifier.width(16.dp))
-                        LiveText("Next: ", size = 12.sp, color = colors.TextSecondary)
-                        LiveText(nextTitle, size = 12.sp, weight = FontWeight.Bold, color = colors.TextPrimary, modifier = Modifier.widthIn(max = 220.dp))
+                        LiveText("Next: ", size = 12.sp, color = colors.TextSecondary, shadow = true)
+                        LiveText(nextTitle, size = 12.sp, weight = FontWeight.Bold, color = colors.TextPrimary, modifier = Modifier.widthIn(max = 220.dp), shadow = true)
                         nextTime?.let {
                             Spacer(Modifier.width(6.dp))
-                            LiveText(it.substringBefore(" –"), size = 12.sp, color = colors.TextSecondary)
+                            LiveText(it.substringBefore(" –"), size = 12.sp, color = colors.TextSecondary, shadow = true)
                         }
                     }
                 }
@@ -687,8 +689,10 @@ private fun FullInfoPanel(
                     Spacer(Modifier.height(6.dp))
                     LiveText(
                         description?.takeIf { it.isNotBlank() } ?: " ",
-                        size = 12.sp, color = colors.TextSecondary, maxLines = 3,
-                        modifier = Modifier.heightIn(min = 48.dp)
+                        // Grows to fit (the panel and poster get taller), up to 5 lines.
+                        size = 12.sp, color = colors.TextSecondary, maxLines = 5,
+                        modifier = Modifier.heightIn(min = 48.dp),
+                        shadow = true
                     )
                 }
                 Spacer(Modifier.height(if (withRow) 8.dp else 10.dp))
@@ -760,3 +764,31 @@ private fun InlineTimeline(t: PanelTimeline, grabbed: Boolean) {
         )
     }
 }
+
+/**
+ * The info panel's background in the theme's color: clear at the very top, dark by the time the
+ * text starts (the fade sits in the top padding, [fade] tall), a touch darker toward the bottom.
+ * [level]: "standard", "darker" or "solid" (Live TV settings, Info Panel Background).
+ */
+private fun Modifier.panelScrim(base: Color, level: String, fade: androidx.compose.ui.unit.Dp): Modifier =
+    this.drawBehind {
+        val (top, bottom) = when (level) {
+            "solid" -> 1f to 1f
+            "darker" -> 0.95f to 0.99f
+            else -> 0.88f to 0.97f
+        }
+        val f = fade.toPx().coerceAtMost(size.height)
+        drawRect(
+            androidx.compose.ui.graphics.Brush.verticalGradient(
+                0f to base.copy(alpha = 0f), 1f to base.copy(alpha = top), startY = 0f, endY = f
+            ),
+            size = androidx.compose.ui.geometry.Size(size.width, f)
+        )
+        drawRect(
+            androidx.compose.ui.graphics.Brush.verticalGradient(
+                0f to base.copy(alpha = top), 1f to base.copy(alpha = bottom), startY = f, endY = size.height
+            ),
+            topLeft = androidx.compose.ui.geometry.Offset(0f, f),
+            size = androidx.compose.ui.geometry.Size(size.width, size.height - f)
+        )
+    }

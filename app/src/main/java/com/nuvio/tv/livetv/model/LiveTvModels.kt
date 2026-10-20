@@ -373,6 +373,8 @@ data class LiveTvSettings(
     val clockOpacity: Int = 70,
     /** A soft dark pill behind the always-on clock. */
     val clockBackground: Boolean = true,
+    /** How dark the info panel's background is: "standard", "darker" or "solid". */
+    val panelBackground: String = "standard",
     /** The row of recently watched channels at the bottom of the full info panel (OK). */
     val recentInPanel: Boolean = true,
     /** The row at the bottom of the full info panel: "RECENT", "FAVORITES" or "OFF". */

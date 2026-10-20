@@ -69,6 +69,12 @@ import java.util.Locale
 /** True = focused items are filled with the accent color; false = tinted fill with an accent outline. */
 internal val LocalLiveSolidHighlight = staticCompositionLocalOf { false }
 
+private val TEXT_OVER_PICTURE = androidx.compose.ui.graphics.Shadow(
+    color = Color.Black.copy(alpha = 0.55f),
+    offset = androidx.compose.ui.geometry.Offset(0f, 1.5f),
+    blurRadius = 4f
+)
+
 /**
  * @param marquee scrolls single-line text that doesn't fit, like TiviMate does for the
  * focused program. Only turn it on for the focused item.
@@ -83,9 +89,12 @@ internal fun LiveText(
     weight: FontWeight = FontWeight.Normal,
     maxLines: Int = 1,
     align: TextAlign? = null,
-    marquee: Boolean = false
+    marquee: Boolean = false,
+    /** A soft dark shadow, for text over the picture (the info panel). */
+    shadow: Boolean = false
 ) {
     Text(
+        style = if (shadow) androidx.compose.material3.LocalTextStyle.current.copy(shadow = TEXT_OVER_PICTURE) else androidx.compose.material3.LocalTextStyle.current,
         text = text,
         modifier = if (marquee && maxLines == 1) {
             modifier.basicMarquee(
@@ -191,13 +200,43 @@ internal fun ChannelLogo(url: String?, size: Dp, modifier: Modifier = Modifier) 
         modifier = modifier.size(width = size * 1.6f, height = size),
         contentAlignment = Alignment.Center
     ) {
-        if (!url.isNullOrBlank()) {
+        if (!url.isNullOrBlank() && !DeadLogos.isDead(url)) {
             AsyncImage(
                 model = url,
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().padding(2.dp)
+                modifier = Modifier.fillMaxSize().padding(2.dp),
+                onError = { DeadLogos.failed(url, it.result.throwable) }
             )
+        }
+    }
+}
+
+/**
+ * Logo links the server said don't exist (404, 410…). Playlists are full of them, and the
+ * picture loader doesn't remember failures: every time such a row scrolled back into view, the
+ * logo was asked for again and failed again, a steady stream of wasted requests while scrolling
+ * a big group. They're left alone for a while (30 minutes), then tried once more. Network
+ * trouble (no connection yet, a timeout) doesn't count: those logos are tried again as usual.
+ */
+internal object DeadLogos {
+    private const val RETRY_AFTER_MS = 30 * 60_000L
+    private val dead = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    fun isDead(url: String): Boolean {
+        val at = dead[url] ?: return false
+        if (System.currentTimeMillis() - at < RETRY_AFTER_MS) return true
+        dead.remove(url)
+        return false
+    }
+
+    fun failed(url: String, error: Throwable) {
+        // Coil's HttpException reads "HTTP 404": only answers that mean "not there" count.
+        val code = error.message?.trim()?.takeIf { error.javaClass.simpleName == "HttpException" }
+            ?.removePrefix("HTTP")?.trim()?.take(3)?.toIntOrNull() ?: return
+        if (code in 400..499 && code != 408 && code != 429) {
+            if (dead.size > 5_000) dead.clear()
+            dead[url] = System.currentTimeMillis()
         }
     }
 }
@@ -242,7 +281,23 @@ internal data class TitleMarks(val title: String, val live: Boolean, val isNew: 
 private val LIVE_MARK = Regex("""^\s*live\s*[:\-–|]\s*""", RegexOption.IGNORE_CASE)
 private val NEW_MARK = Regex("""^\s*new\s*[:\-–|]\s*|\s*[(\[]\s*new\s*[)\]]\s*""", RegexOption.IGNORE_CASE)
 
-internal fun titleMarks(title: String): TitleMarks {
+/**
+ * A small least-recently-used memory, safe from any thread. The guide draws the same few hundred
+ * titles and times over and over (every scroll, every highlight move); working each one out
+ * again each time was a lot of wasted work on slower TV boxes.
+ */
+internal class LiveMemo<K, V>(private val max: Int) {
+    private val map = object : java.util.LinkedHashMap<K, V>(max, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean = size > max
+    }
+    @Synchronized fun get(key: K, make: (K) -> V): V = map[key] ?: make(key).also { map[key] = it }
+}
+
+private val titleMarksMemo = LiveMemo<String, TitleMarks>(4096)
+
+internal fun titleMarks(title: String): TitleMarks = titleMarksMemo.get(title) { workOutTitleMarks(it) }
+
+private fun workOutTitleMarks(title: String): TitleMarks {
     var t = title
     // Small raised "ᴸᴵⱽᴱ" / "ᴺᴱᵂ" in the title: the same LIVE / NEW tags as "LIVE:" / "(NEW)".
     val small = LiveTvSearchBridge.smallWords(t)
@@ -390,8 +445,30 @@ internal fun PauseLiveTvInBackground(playback: com.nuvio.tv.livetv.player.LiveTv
     }
 }
 
-internal fun formatClock(ms: Long, use24h: Boolean): String =
-    SimpleDateFormat(if (use24h) "HH:mm" else "h:mm a", Locale.getDefault()).format(Date(ms))
+/**
+ * Clock times ("7:30 PM"). Making a date formatter is slow (it loads the language's data), and
+ * the guide asked for two per show on every redraw: formatters are kept (one per thread, as
+ * they aren't thread-safe), and each minute's text is remembered.
+ */
+private val clockFormatters = ThreadLocal<HashMap<String, SimpleDateFormat>>()
+private val clockMemo = LiveMemo<String, String>(2048)
+
+private fun clockFormatter(pattern: String, locale: Locale, zone: java.util.TimeZone): SimpleDateFormat {
+    val all = clockFormatters.get() ?: HashMap<String, SimpleDateFormat>().also { clockFormatters.set(it) }
+    val key = pattern + '|' + locale + '|' + zone.id
+    return all.getOrPut(key) { SimpleDateFormat(pattern, locale).also { it.timeZone = zone } }
+}
+
+internal fun formatClock(ms: Long, use24h: Boolean): String {
+    val locale = Locale.getDefault()
+    val zone = java.util.TimeZone.getDefault()
+    val pattern = if (use24h) "HH:mm" else "h:mm a"
+    // Seconds never show, so one text per minute (and per language and time zone).
+    val minute = Math.floorDiv(ms, 60_000L)
+    return clockMemo.get("$minute|$pattern|$locale|${zone.id}") {
+        clockFormatter(pattern, locale, zone).format(Date(minute * 60_000L))
+    }
+}
 
 internal fun formatRange(startMs: Long, stopMs: Long, use24h: Boolean): String =
     "${formatClock(startMs, use24h)} – ${formatClock(stopMs, use24h)}"
@@ -452,6 +529,33 @@ internal fun rememberChannelAbout(channel: com.nuvio.tv.livetv.model.LiveChannel
         value = if (channel != null && noListing) loader(channel, program?.title) else null
     }
     return state.value
+}
+
+/**
+ * A guide description with the release year taken off its end ("… a can of Coke. (2009)"), and
+ * the year to show next to the category instead, so it can't be cut off with the description.
+ * Only a year in brackets, or one standing alone after the last sentence, counts: a year inside
+ * the text ("…won the title in 1998.") stays where it is.
+ */
+internal data class DescriptionParts(val text: String?, val year: Int?)
+
+private val TRAILING_YEAR = Regex("""\s*[,;·|\-–—]?\s*\(\s*((?:19|20)\d{2})\s*\)[\s.]*$""")
+private val TRAILING_BARE_YEAR = Regex("""(?<=[.!?])\s+((?:19|20)\d{2})\.?\s*$""")
+
+internal fun splitDescriptionYear(description: String?, year: Int?): DescriptionParts {
+    val d = description?.trim()?.takeIf { it.isNotEmpty() } ?: return DescriptionParts(null, year)
+    val m = TRAILING_YEAR.find(d) ?: TRAILING_BARE_YEAR.find(d)
+    val found = m?.groupValues?.get(1)?.toIntOrNull()
+    val text = if (m != null) d.substring(0, m.range.first).trimEnd() else d
+    return DescriptionParts(text.ifEmpty { null }, year ?: found)
+}
+
+/** "S2 E5  ·  Drama  ·  2009": the year added unless the line already has it. */
+internal fun metaWithYear(parts: List<String?>, year: Int?): String {
+    val base = parts.filterNotNull().filter { it.isNotBlank() }
+    val y = year?.toString()
+    val withYear = if (y != null && base.none { it.contains(y) }) base + y else base
+    return withYear.joinToString("  ·  ")
 }
 
 /** "2014– · Comedy, Drama · ★ 8.1" for a 24/7 channel's show. */

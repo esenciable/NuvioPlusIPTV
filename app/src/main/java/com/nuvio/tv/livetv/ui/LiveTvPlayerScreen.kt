@@ -635,19 +635,24 @@ fun LiveTvPlayerScreen(
             browseChannel?.let { b ->
                 val use24h = settings.use24HourClock
                 var tick by remember { mutableStateOf(System.currentTimeMillis()) }
-                LaunchedEffect(Unit) { while (true) { delay(1_000); tick = System.currentTimeMillis() } }
+                // Live only (minutes left, a time bar over an hour or so): every 5 seconds is plenty,
+                // and redraws the panel a fifth as often on slower boxes.
+                LaunchedEffect(Unit) { while (true) { delay(5_000L - System.currentTimeMillis() % 5_000L); tick = System.currentTimeMillis() } }
                 val shown = if (browseSettled) browseDetails ?: browseProgram else browseProgram
                 val next = viewModel.nextProgram(b.key, browseProgram?.stopMs ?: tick)
+                val browseParts = remember(shown?.description, shown?.year) { splitDescriptionYear(shown?.description, shown?.year) }
                 LiveTvPlayerPanel(
+                    background = settings.panelBackground,
                     channel = b,
                     mode = PanelMode.LIVE,
                     full = false,
                     title = browseProgram?.title?.let { titleMarks(it).title } ?: b.name,
-                    meta = listOfNotNull(
-                        shown?.episode?.takeIf { settings.showEpisodeNumbers },
-                        shown?.category
-                    ).joinToString("  ·  "),
-                    description = if (browseSettled) shown?.description else null,
+                    // The year goes next to the category, off the end of the description.
+                    meta = metaWithYear(
+                        listOf(shown?.episode?.takeIf { settings.showEpisodeNumbers }, shown?.category),
+                        if (browseSettled) browseParts.year else shown?.year
+                    ),
+                    description = if (browseSettled) browseParts.text else null,
                     poster = browsePoster,
                     showPosters = settings.showPosters,
                     timeline = browseProgram?.let { p ->
@@ -677,6 +682,19 @@ fun LiveTvPlayerScreen(
                 )
             }
         }
+        // Sports: the game card in the top right corner while the full panel is up (OK).
+        AnimatedVisibility(
+            visible = panelFull && current != null && playback.catchupTitle == null && !listVisible,
+            enter = slideInHorizontally { it } + fadeIn(),
+            exit = slideOutHorizontally { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.TopEnd)
+        ) {
+            com.nuvio.tv.livetv.sports.SportsCornerCard(
+                channelKey = current?.key,
+                use24h = settings.use24HourClock,
+                modifier = Modifier.padding(top = 28.dp, end = 36.dp)
+            )
+        }
         AnimatedVisibility(
             visible = (bannerVisible || panelFull || pausedNow) && current != null && (browseKey == null || panelFull),
             enter = slideInVertically { it } + fadeIn(),
@@ -697,7 +715,16 @@ fun LiveTvPlayerScreen(
                 val showProgram = if (archive) cs?.program else nowProgram
                 // Ticks while visible, so the timeline moves.
                 var tick by remember { mutableStateOf(System.currentTimeMillis()) }
-                LaunchedEffect(Unit) { while (true) { delay(1_000); tick = System.currentTimeMillis() } }
+                // Seconds show in catch-up and paused live ("12:04 / 58:00"); live only needs minutes,
+                // so it ticks every 5 seconds there (a fifth of the redraws on slower boxes).
+                LaunchedEffect(mode) {
+                    tick = System.currentTimeMillis()
+                    while (true) {
+                        val step = if (mode == PanelMode.LIVE) 5_000L else 1_000L
+                        delay(step - System.currentTimeMillis() % step)
+                        tick = System.currentTimeMillis()
+                    }
+                }
                 val timeline: PanelTimeline? = when (mode) {
                     PanelMode.CATCHUP -> cs?.let { session ->
                         val pos = scrubTargetMs ?: positionMs
@@ -754,17 +781,27 @@ fun LiveTvPlayerScreen(
                 val nextUp = if (mode == PanelMode.LIVE) {
                     viewModel.nextProgram(ch.key, nowProgram?.stopMs ?: tick)
                 } else null
+                val rawDesc = about?.description?.takeIf { it.isNotBlank() } ?: showProgram?.description
+                val descParts = remember(rawDesc, showProgram?.year, about != null) {
+                    // A 24/7 channel's show already has its years in the line (from aboutLine).
+                    splitDescriptionYear(rawDesc, showProgram?.year).let { if (about != null) it.copy(year = null) else it }
+                }
                 LiveTvPlayerPanel(
+                    background = settings.panelBackground,
                     channel = ch,
                     mode = mode,
                     full = panelFull || pausedNow,
                     title = watchingTitle ?: ch.name,
-                    meta = listOfNotNull(
-                        showProgram?.episode?.takeIf { settings.showEpisodeNumbers },
-                        showProgram?.category,
-                        about?.let { aboutLine(it) }?.takeIf { it.isNotBlank() }
-                    ).joinToString("  ·  "),
-                    description = about?.description?.takeIf { it.isNotBlank() } ?: showProgram?.description,
+                    // The year goes next to the category, off the end of the description.
+                    meta = metaWithYear(
+                        listOf(
+                            showProgram?.episode?.takeIf { settings.showEpisodeNumbers },
+                            showProgram?.category,
+                            about?.let { aboutLine(it) }
+                        ),
+                        descParts.year
+                    ),
+                    description = descParts.text,
                     poster = poster,
                     showPosters = settings.showPosters,
                     timeline = timeline,

@@ -68,6 +68,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.drawscope.translate
@@ -143,16 +144,37 @@ fun LiveTvGuideScreen(
     onOpenSettings: () -> Unit,
     onFindInNuvio: () -> Unit = {},
     onOpenNuvioSearch: () -> Unit = onFindInNuvio,
+    /** Full screen was opened from the Sports page: Back goes back there. */
+    onReturnToSports: () -> Unit = {},
     viewModel: LiveTvViewModel = hiltViewModel()
 ) {
     // Full screen happens right here, TiviMate style: the same video view grows from the
     // preview window to the whole screen and back. The picture never moves to a different
     // view, which is what froze it (or left it loading) on some TVs.
     var fullscreen by remember { mutableStateOf(false) }
+    // For the smoothness line in the start-up report: guide and full screen counted apart.
+    val perfView = androidx.compose.ui.platform.LocalView.current
+    LaunchedEffect(fullscreen) {
+        runCatching {
+            androidx.metrics.performance.PerformanceMetricsState.getHolderForHierarchy(perfView).state
+                ?.putState("LiveTv", if (fullscreen) "Live TV full screen" else "Live TV guide")
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            runCatching {
+                androidx.metrics.performance.PerformanceMetricsState.getHolderForHierarchy(perfView).state?.removeState("LiveTv")
+            }
+        }
+    }
     // Where you were browsing when you held Back / pressed Play to go full screen; restored
     // when you come back, so you return to the channel you had selected.
     var savedSpot by remember { mutableStateOf<Pair<String, String?>?>(null) }
     var exitFullscreenTick by remember { mutableIntStateOf(0) }
+    // Full screen asked for from elsewhere and about to open: the guide mustn't take the
+    // highlight meanwhile (it used to land on the hidden group list behind the video, so OK and
+    // Back did nothing until pressed several times).
+    var fullscreenComing by remember { mutableStateOf(false) }
     fun goFullscreen() {
         fullscreen = true
     }
@@ -168,6 +190,13 @@ fun LiveTvGuideScreen(
     val seriesList by viewModel.seriesRules.collectAsStateWithLifecycle()
     // Shows set to record, by channel (for the red dot in the guide).
     val scheduledStarts = remember(schedulesList) { schedulesList.groupBy({ it.channel.key }, { it.startMs }).mapValues { it.value.toSet() } }
+    // Reminders by channel, worked out once (each row used to filter the whole list itself, and
+    // got a new set every redraw, so no row could ever skip redrawing).
+    val reminderStartsByChannel = remember(user.reminders) {
+        user.reminders.groupBy({ it.channelKey }, { it.startMs }).mapValues { it.value.toSet() }
+    }
+    // The guide's width, measured once for every row (see ProgramArea).
+    var gridWidthPx by remember { mutableIntStateOf(0) }
 
     /** The Record item for a show, or null when it can't be recorded (already over, no catch-up). */
     fun recordLabel(ch: LiveChannel, p: EpgProgram?): String? {
@@ -199,6 +228,14 @@ fun LiveTvGuideScreen(
     val programs by viewModel.programs.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
     val playback by viewModel.playbackState.collectAsStateWithLifecycle()
+    // A channel playing in the preview window: keep the TV awake (no screen saver), like full
+    // screen does. Also set again when full screen closes (it clears it on the way out).
+    val awakeView = androidx.compose.ui.platform.LocalView.current
+    val previewPlaying = playback.channelKey != null && (playback.isPlaying || playback.isBuffering) && !playback.userPaused
+    DisposableEffect(previewPlaying, fullscreen) {
+        if (previewPlaying) awakeView.keepScreenOn = true
+        onDispose { if (!fullscreen) awakeView.keepScreenOn = false }
+    }
     val now by viewModel.now.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
@@ -342,6 +379,7 @@ fun LiveTvGuideScreen(
     // Coming back from full screen: stay on the channel.
     LaunchedEffect(Unit) {
         delay(150)
+        if (fullscreenComing || fullscreen) return@LaunchedEffect
         val returning = viewModel.consumeReturningFromFullscreen()
         val toGroups = returning && viewModel.consumeGroupsOnReturn()
         if (returning && !toGroups) {
@@ -397,6 +435,7 @@ fun LiveTvGuideScreen(
             // Try a few times: the group's tile has to be on screen before it can take focus.
             for (attempt in 0 until 4) {
                 repeat(3) { androidx.compose.runtime.withFrameNanos { } }
+                if (fullscreenComing || fullscreen) break
                 if (runCatching { groupsFocus.requestFocus() }.isSuccess) break
                 runCatching { groupsListState.scrollToItem((idx - 3).coerceAtLeast(0)) }
             }
@@ -471,12 +510,22 @@ fun LiveTvGuideScreen(
         runCatching { gridFocus.requestFocus() }
     }
     LaunchedEffect(fullscreen) { LiveTvFullscreen.active.value = fullscreen }
-    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { LiveTvFullscreen.active.value = false } }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            LiveTvFullscreen.active.value = false
+            com.nuvio.tv.livetv.sports.SportsLaunch.dropReturn()
+        }
+    }
     // Full screen asked for from elsewhere (home screen row, reminders, search…).
     val fullscreenRequests by LiveTvFullscreen.requests.collectAsStateWithLifecycle()
     LaunchedEffect(fullscreenRequests) {
         if (!LiveTvFullscreen.pending) return@LaunchedEffect
         LiveTvFullscreen.pending = false
+        fullscreenComing = true
+        // Sports: a replay asked for while the guide was already open.
+        com.nuvio.tv.livetv.sports.SportsLaunch.takeCatchup()?.let { c ->
+            viewModel.channelByKey(c.channelKey)?.let { ch -> viewModel.playCatchup(ch, c.program) }
+        }
         delay(150)
         fullscreen = true
     }
@@ -505,6 +554,14 @@ fun LiveTvGuideScreen(
     //  2. Otherwise, if something is already playing, highlight it.
     //  3. Otherwise "Resume last channel in preview" starts the last channel in the preview.
     LaunchedEffect(Unit) {
+        // Sports: "Watch from the start" on a game (a replay through the channel's catch-up).
+        com.nuvio.tv.livetv.sports.SportsLaunch.takeCatchup()?.let { c ->
+            val ch = viewModel.channelByKey(c.channelKey)
+            if (ch != null && viewModel.playCatchup(ch, c.program)) {
+                goFullscreen()
+                return@LaunchedEffect
+            }
+        }
         if (viewModel.playbackState.value.channelKey == null) viewModel.autoPlayCandidate()?.let { ch ->
             viewModel.preview(ch)
             goFullscreen()
@@ -969,6 +1026,8 @@ fun LiveTvGuideScreen(
                 Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                     // ---------------------------------------------------------------- time ruler
                     val channelColWidth = channelColumnWidth(settings)
+                    val programAreaWidth: Dp? = if (gridWidthPx <= 0) null
+                        else with(androidx.compose.ui.platform.LocalDensity.current) { gridWidthPx.toDp() } - channelColWidth
                     // Tight rows so at least 8 channels fit even with the info panel and preview on.
                     val rowHeight = guideRowHeight(settings)
                     Row(
@@ -1263,7 +1322,11 @@ fun LiveTvGuideScreen(
                                 action = null
                             )
                             else -> {
-                                LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), userScrollEnabled = false) {
+                                LazyColumn(
+                                    state = listState,
+                                    modifier = Modifier.fillMaxSize().onSizeChanged { if (it.width != gridWidthPx) gridWidthPx = it.width },
+                                    userScrollEnabled = false
+                                ) {
                                     itemsIndexed(channels, key = { _, c -> c.key }) { index, ch ->
                                         androidx.compose.runtime.CompositionLocalProvider(LocalGuideScale provides guideScale(settings)) { GuideRow(
                                             channel = ch,
@@ -1283,10 +1346,10 @@ fun LiveTvGuideScreen(
                                             nameFocused = (index == row && gridFocused && nameFocus) ||
                                                 (reorderActive && reorderKey == null && index == row),
                                             quality = if (settings.showQualityBadges) user.channelQuality[ch.key] else null,
-                                            reminderStarts = if (user.reminders.isEmpty()) emptySet()
-                                                else user.reminders.filter { it.channelKey == ch.key }.map { it.startMs }.toSet(),
+                                            reminderStarts = reminderStartsByChannel[ch.key].orEmpty(),
                                             recordingSpan = recordingUntil[ch.key],
-                                            scheduledStarts = scheduledStarts[ch.key].orEmpty()
+                                            scheduledStarts = scheduledStarts[ch.key].orEmpty(),
+                                            programAreaWidth = programAreaWidth
                                         ) }
                                     }
                                 }
@@ -1845,9 +1908,18 @@ fun LiveTvGuideScreen(
         // ---------------------------------------------------------------- full screen
         if (fullscreen) {
             LiveTvPlayerScreen(
-                onBack = { fullscreen = false; exitFullscreenTick++ },
-                onFindInNuvio = { fullscreen = false; exitFullscreenTick++; onFindInNuvio() },
-                onBackToGroups = { fullscreen = false; savedSpot = null; exitFullscreenTick++; focusGroups() },
+                onBack = {
+                    fullscreenComing = false
+                    if (com.nuvio.tv.livetv.sports.SportsLaunch.takeReturnToSports()) {
+                        // Opened from the Sports page: back to the game you picked there.
+                        fullscreen = false
+                        onReturnToSports()
+                    } else {
+                        fullscreen = false; exitFullscreenTick++
+                    }
+                },
+                onFindInNuvio = { com.nuvio.tv.livetv.sports.SportsLaunch.clearReturn(); fullscreenComing = false; fullscreen = false; exitFullscreenTick++; onFindInNuvio() },
+                onBackToGroups = { com.nuvio.tv.livetv.sports.SportsLaunch.clearReturn(); fullscreenComing = false; fullscreen = false; savedSpot = null; exitFullscreenTick++; focusGroups() },
                 embedded = true,
                 viewModel = viewModel
             )
@@ -2111,7 +2183,9 @@ private fun GuideRow(
     /** Being recorded: from when to when (shows in this span get a red REC dot). */
     recordingSpan: Pair<Long, Long>? = null,
     /** Start times of shows set to record (a red dot too). */
-    scheduledStarts: Set<Long> = emptySet()
+    scheduledStarts: Set<Long> = emptySet(),
+    /** Width of the shows part of the row, measured once for the whole guide (null: measure here). */
+    programAreaWidth: Dp? = null
 ) {
     val windowEnd = windowStart + guideWindowMs(settings)
     val cellShape = RoundedCornerShape(liveCorner())
@@ -2218,18 +2292,24 @@ private fun GuideRow(
                 Icon(
                     imageVector = if (visible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
                     contentDescription = if (visible) "Shown" else "Hidden",
-                    tint = if (visible) NuvioTheme.colors.Secondary else NuvioTheme.colors.TextTertiary,
+                    // On the highlight, the highlight's text color (the accent color vanished on it).
+                    tint = when {
+                        channelFocused || nameFocused -> cell.text.copy(alpha = if (visible) 1f else 0.6f)
+                        visible -> NuvioTheme.colors.Secondary
+                        else -> NuvioTheme.colors.TextTertiary
+                    },
                     modifier = Modifier.size(gdp(18f))
                 )
             }
         }
 
         // Program blocks
-        BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxHeight()) {
-            val totalW = maxWidth
+        ProgramArea(programAreaWidth, Modifier.weight(1f).fillMaxHeight()) { totalW ->
             fun xOf(t: Long): Dp = totalW * ((t.coerceIn(windowStart, windowEnd) - windowStart) / guideWindowMs(settings).toFloat())
 
-            val visible = programs.filter { it.stopMs > windowStart && it.startMs < windowEnd }
+            // Worked out once per change of shows or time window, not on every redraw.
+            val laid = remember(programs, windowStart, windowEnd) { layOutRow(programs, windowStart, windowEnd) }
+            val visible = laid.visible
             // Highlighted in the program column: the whole empty row lights up, keeping its text
             // (in bold), instead of a small half-hour "No information" block.
             // (Also while the highlight is on the channel itself: a show lights up then too, and
@@ -2275,15 +2355,7 @@ private fun GuideRow(
             // Gaps in a channel's listings (nothing listed for a while, then shows again): the
             // same striped tile as a channel with no guide at all, instead of empty background.
             if (visible.isNotEmpty()) {
-                val sorted = visible.sortedBy { it.startMs }
-                val gaps = ArrayList<Pair<Long, Long>>()
-                var cursor = windowStart
-                for (p in sorted) {
-                    if (p.startMs - cursor > 60_000L) gaps += cursor to p.startMs
-                    cursor = maxOf(cursor, p.stopMs)
-                }
-                if (windowEnd - cursor > 60_000L) gaps += cursor to windowEnd
-                gaps.forEach { (from, to) ->
+                laid.gaps.forEach { (from, to) ->
                     val gx = xOf(from)
                     val gw = xOf(to) - gx
                     if (gw > 4.dp) {
@@ -2359,6 +2431,33 @@ private fun GuideRow(
             }
         }
     }
+}
+
+/** A row's shows inside the time window, and the gaps between them (nothing listed). */
+private class RowLayout(val visible: List<EpgProgram>, val gaps: List<Pair<Long, Long>>)
+
+private fun layOutRow(programs: List<EpgProgram>, windowStart: Long, windowEnd: Long): RowLayout {
+    val visible = programs.filter { it.stopMs > windowStart && it.startMs < windowEnd }
+    if (visible.isEmpty()) return RowLayout(visible, emptyList())
+    val gaps = ArrayList<Pair<Long, Long>>()
+    var cursor = windowStart
+    for (p in visible.sortedBy { it.startMs }) {
+        if (p.startMs - cursor > 60_000L) gaps += cursor to p.startMs
+        cursor = maxOf(cursor, p.stopMs)
+    }
+    if (windowEnd - cursor > 60_000L) gaps += cursor to windowEnd
+    return RowLayout(visible, gaps)
+}
+
+/**
+ * The shows part of a guide row. The guide measures its width once and hands it to every row;
+ * measuring inside each row (BoxWithConstraints) costs an extra layout pass per row, which made
+ * scrolling the guide heavier on slower boxes. Measured here only until the guide's width is known.
+ */
+@Composable
+private fun ProgramArea(width: Dp?, modifier: Modifier, content: @Composable androidx.compose.foundation.layout.BoxScope.(Dp) -> Unit) {
+    if (width != null && width > 0.dp) Box(modifier) { content(width) }
+    else BoxWithConstraints(modifier) { content(maxWidth) }
 }
 
 @Composable
@@ -2778,7 +2877,11 @@ private fun GroupItem(
             Icon(
                 imageVector = if (visible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
                 contentDescription = if (visible) "Shown" else "Hidden",
-                tint = if (visible) NuvioTheme.colors.Secondary else NuvioTheme.colors.TextTertiary,
+                tint = when {
+                    focused -> colors.text.copy(alpha = if (visible) 1f else 0.6f)
+                    visible -> NuvioTheme.colors.Secondary
+                    else -> NuvioTheme.colors.TextTertiary
+                },
                 modifier = Modifier.size(gdp(16f))
             )
         } else if (group.locked) {

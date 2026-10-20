@@ -18,7 +18,12 @@ data class XmltvResult(
     /** Programs keyed by XMLTV channel id, sorted by start time. */
     val programs: Map<String, List<EpgProgram>>,
     /** Reading stopped early here (a broken file): what was read before it is kept. */
-    val error: String? = null
+    val error: String? = null,
+    /**
+     * Every channel id the guide's shows mention, kept or not (just the ids). For guides with no
+     * channel list, so Change EPG can still offer all of them.
+     */
+    val programChannelIds: Set<String> = emptySet()
 )
 
 /**
@@ -32,6 +37,14 @@ object XmltvParser {
         input: InputStream,
         windowStartMs: Long,
         windowEndMs: Long,
+        /**
+         * For a guide with no channel list before its shows (so [selectChannels] can't pick
+         * any and returns null): whether to keep a channel's shows, asked once per channel id.
+         * Null keeps them all. Without it, every show in a big guide was held in memory, which
+         * on a low-memory box could slow the app down or close it.
+         * (Before [selectChannels], so `parse(…) { channels -> … }` still means selectChannels.)
+         */
+        keepUnlisted: ((String) -> Boolean)? = null,
         selectChannels: (Map<String, XmltvChannel>) -> Set<String>?
     ): XmltvResult {
         val parser = Xml.newPullParser()
@@ -45,6 +58,8 @@ object XmltvParser {
         val programs = HashMap<String, MutableList<EpgProgram>>()
         var wanted: Set<String>? = null
         var wantedResolved = false
+        val seenIds = HashSet<String>()
+        val unlistedAnswers = HashMap<String, Boolean>()
 
         var error: String? = null
         try {
@@ -59,7 +74,12 @@ object XmltvParser {
                             wantedResolved = true
                         }
                         val channelId = parser.getAttributeValue(null, "channel")
-                        val keep = channelId != null && (wanted == null || channelId in wanted!!)
+                        if (channelId != null) seenIds += channelId
+                        val keep = channelId != null && when {
+                            wanted != null -> channelId in wanted!!
+                            keepUnlisted != null -> unlistedAnswers.getOrPut(channelId) { keepUnlisted(channelId) }
+                            else -> true
+                        }
                         if (keep) {
                             val program = readProgramme(parser, windowStartMs, windowEndMs)
                             if (program != null) {
@@ -87,7 +107,7 @@ object XmltvParser {
             if (!wantedResolved) wanted = null
         }
         val sorted = programs.mapValues { (_, list) -> list.sortedBy { it.startMs } }
-        return XmltvResult(channels, sorted, error)
+        return XmltvResult(channels, sorted, error, seenIds)
     }
 
     private fun readChannel(parser: XmlPullParser): XmltvChannel? {

@@ -555,7 +555,8 @@ class LiveTvPlaybackController @Inject constructor(
             LiveCaptions.reset()
             captionWatch?.cancel()
         }
-        val url = overrideUrl ?: channel.url
+        // A channel whose HLS playlist couldn't be read earlier: its TS link instead.
+        val url = overrideUrl ?: channel.url.let { u -> if (channel.key in tsInstead) tsLinkFor(u) ?: u else u }
         if (currentChannel?.key != channel.key || currentUrl != url) {
             forcedMime = null
             formatGuess = 0
@@ -599,6 +600,7 @@ class LiveTvPlaybackController @Inject constructor(
         LiveWatching.sourceId = channel.sourceId
         currentUrl = url
         _state.value = LivePlaybackState(channelKey = channel.key, isBuffering = true, catchupTitle = catchupTitle)
+        if (catchupTitle == null) markStarting(channel.key)
         if (bufferFailedKey != null && bufferFailedKey != channel.key) bufferFailedKey = null
         // Rewind anytime (full screen): play through the rolling buffer instead.
         if (shouldBuffer(channel, catchupTitle)) {
@@ -705,6 +707,7 @@ class LiveTvPlaybackController @Inject constructor(
     }
 
     fun stop() {
+        clearStarting()
         reconnectJob?.cancel()
         stopReplayCache()
         _player?.stop()
@@ -1084,6 +1087,12 @@ class LiveTvPlaybackController @Inject constructor(
         return out
     }
 
+    /** How much the player may download ahead, in bytes, from how much memory the app gets. */
+    private fun playerBufferBytes(): Int {
+        val appMemory = Runtime.getRuntime().maxMemory().takeIf { it in 1 until Long.MAX_VALUE } ?: (512L shl 20)
+        return (appMemory * 3 / 10).coerceIn(32L shl 20, 160L shl 20).toInt()
+    }
+
     private fun buildPlayer(): ExoPlayer {
         val passthrough = audioPassthrough
         val renderers = object : DefaultRenderersFactory(context) {
@@ -1115,6 +1124,12 @@ class LiveTvPlaybackController @Inject constructor(
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(minMs, maxMs, startMs, rebufferMs)
             .setPrioritizeTimeOverSizeThresholds(true)
+            // The download-ahead lives in the app's memory. The player's own cap (about 130 MB
+            // for video) is more than half of what a cheap stick gives an app, which made the
+            // whole app stutter as memory ran short. Capped to about 30% of the app's memory:
+            // the same on boxes with plenty, smaller on low-memory ones. The minimum buffer
+            // time is always kept, so channels are just as steady.
+            .setTargetBufferBytes(playerBufferBytes())
             .build()
         return ExoPlayer.Builder(context, renderers)
             .setLoadControl(loadControl)
@@ -1217,6 +1232,13 @@ class LiveTvPlaybackController @Inject constructor(
 
         override fun onRenderedFirstFrame() {
             awaitingFrame = false
+            // Playing fine for a while: no longer counts as "the app closed while this was starting".
+            currentChannel?.key?.let { key ->
+                scope.launch {
+                    kotlinx.coroutines.delay(15_000)
+                    if (currentChannel?.key == key) clearStarting()
+                }
+            }
             // HLS catch-up failed and the TS link plays: remember it for this provider.
             hlsCatchupFailedOn?.let { source ->
                 hlsCatchupFailedOn = null
@@ -1366,6 +1388,24 @@ class LiveTvPlaybackController @Inject constructor(
                 p.playWhenReady = true
                 return
             }
+            // The provider's HLS playlist can't be read ("manifest malformed"): Xtream channels
+            // also come as plain TS, which TiviMate-style players use. Switch once, and keep using
+            // TS for this channel until the app restarts.
+            if (ch != null && p != null && _state.value.catchupTitle == null && ch.key !in tsInstead && isMalformedManifest(error)) {
+                val ts = tsLinkFor(currentUrl ?: ch.url)
+                if (ts != null) {
+                    tsInstead += ch.key
+                    com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                        "Channel ${ch.name}: its HLS playlist couldn't be read (${error.errorCodeName}); playing it as TS instead"
+                    )
+                    currentUrl = ts
+                    forcedMime = null
+                    p.setMediaSource(buildMediaSource(ts, ch.headers, isLive = true))
+                    p.prepare()
+                    p.playWhenReady = true
+                    return
+                }
+            }
             if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && p != null) {
                 p.seekToDefaultPosition()
                 p.prepare()
@@ -1384,6 +1424,49 @@ class LiveTvPlaybackController @Inject constructor(
     var onCatchupHlsUnsupported: ((String) -> Unit)? = null
     /** Called with the playlist id when that provider's catch-up plays as HLS. */
     var onCatchupHlsWorks: ((String) -> Unit)? = null
+
+    /** Live channels whose HLS playlist couldn't be read: played as TS instead (until the app restarts). */
+    private val tsInstead: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
+
+    /** The TS version of an Xtream HLS link (".../123.m3u8" -> ".../123.ts"), or null if it isn't one. */
+    private fun tsLinkFor(url: String): String? {
+        val base = url.substringBefore('?')
+        if (!base.endsWith(".m3u8", ignoreCase = true)) return null
+        if (!XTREAM_HLS.containsMatchIn(base)) return null
+        return base.dropLast(5) + ".ts" + url.substring(base.length)
+    }
+
+    private fun isMalformedManifest(error: PlaybackException): Boolean {
+        if (error.errorCode == PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED) return true
+        var c: Throwable? = error
+        while (c != null) {
+            if (c is androidx.media3.common.ParserException && c.message?.contains("malformed", true) == true) return true
+            c = c.cause
+        }
+        return false
+    }
+
+    // ---- start-up guard: a channel that made the app close while it was starting isn't
+    // started by itself again next time (it used to close the app again, over and over).
+
+    private val startGuard by lazy { context.getSharedPreferences("livetv_start_guard", Context.MODE_PRIVATE) }
+
+    /** The channel that was starting when the app last closed unexpectedly (read once, at start-up). */
+    val crashedWhileStarting: String? by lazy {
+        val key = startGuard.getString("starting", null)
+        val at = startGuard.getLong("at", 0L)
+        startGuard.edit().clear().apply()
+        key?.takeIf { System.currentTimeMillis() - at < 6 * 60 * 60 * 1000L }
+    }
+
+    private fun markStarting(key: String) {
+        crashedWhileStarting // read the last one before it's replaced
+        startGuard.edit().putString("starting", key).putLong("at", System.currentTimeMillis()).apply()
+    }
+
+    private fun clearStarting() {
+        if (startGuard.contains("starting")) startGuard.edit().remove("starting").remove("at").apply()
+    }
 
     /** Format tried for a link that doesn't say what it is (after "container unsupported"). */
     @Volatile private var forcedMime: String? = null
@@ -1609,6 +1692,7 @@ class LiveTvPlaybackController @Inject constructor(
     }
 
     private fun release() {
+        clearStarting()
         stopShift()
         reconnectJob?.cancel()
         stallJob?.cancel()
@@ -1627,6 +1711,8 @@ class LiveTvPlaybackController @Inject constructor(
         /** No progress for this long while it should be playing = stalled. */
         private const val STALL_MS = 15_000L
         private val FORMAT_GUESSES = listOf(MimeTypes.APPLICATION_M3U8, MimeTypes.APPLICATION_MPD)
+        /** Xtream live links: ".../live/user/pass/123.m3u8" or "host/user/pass/123.m3u8". */
+        private val XTREAM_HLS = Regex("""/(?:live/)?[^/]+/[^/]+/\d+\.m3u8$""", RegexOption.IGNORE_CASE)
         /** No picture this long after the video moved to a new screen = stuck. */
         private const val FRAME_TIMEOUT_MS = 2_500L
         /** Still loading this long after the video moved to a new screen = stuck. */

@@ -775,6 +775,16 @@ fun LiveTvSettingsContent(
                         }
                     )
                     SettingsActionRow(
+                        title = "Info Panel Background",
+                        subtitle = "How dark the box behind the show info is. Darker or Solid makes the text easier to read over bright, busy pictures.",
+                        value = when (s.panelBackground) { "darker" -> "Darker"; "solid" -> "Solid"; else -> "Standard" },
+                        onClick = {
+                            update {
+                                it.copy(panelBackground = when (it.panelBackground) { "standard" -> "darker"; "darker" -> "solid"; else -> "standard" })
+                            }
+                        }
+                    )
+                    SettingsActionRow(
                         title = "Info Bar Stays For",
                         subtitle = "How long the show info stays on screen after changing channel or pressing OK",
                         value = "${s.infoBannerSeconds} seconds",

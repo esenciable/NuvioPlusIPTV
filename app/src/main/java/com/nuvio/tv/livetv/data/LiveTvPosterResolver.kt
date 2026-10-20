@@ -224,7 +224,8 @@ class LiveTvPosterResolver @Inject constructor(
         val query = LiveTvSearchBridge.cleanTitle(programTitle).ifBlank { programTitle.trim() }
         if (query.length < 2) return null
         // One lookup per show (not per episode): the key is the title, kind and year.
-        val key = normalize(query) + "|" + (hint?.kind ?: "any") + "|" + (hint?.weight?.toInt() ?: 0) + "|" + (clues.year ?: "")
+        val key = (if (query.contains(": ")) "c2|" else "") +
+            normalize(query) + "|" + (hint?.kind ?: "any") + "|" + (hint?.weight?.toInt() ?: 0) + "|" + (clues.year ?: "")
         cache[key]?.let { return it.poster }
         // Remembered from an earlier session: no search needed.
         withContext(kotlinx.coroutines.Dispatchers.IO) { store.get(key) }?.let { saved ->
@@ -265,7 +266,12 @@ class LiveTvPosterResolver @Inject constructor(
         // Titles like "The Game - The Trey Wiggs Taps Back Episode" glue the show and episode
         // together. For series, try the show name first (that's what catalogs know); otherwise
         // the whole title first. Only one extra lookup, and only when the title has a separator.
-        val shows = showNameCandidates(programTitle, hint).filter { normalize(it) != normalize(query) }.take(1)
+        val shows = showNameCandidates(programTitle, null).filter { normalize(it) != normalize(query) }.take(1)
+        // "Show: Episode" (series only) is tried after the whole title, and only as a series:
+        // plenty of shows have a colon in their real name ("Fast: Home Rescue"), and "Fast" on its
+        // own found a 2010 movie called FAST.
+        val colonShow = colonShowName(programTitle, hint)?.takeIf { c -> normalize(c) != normalize(query) && shows.none { normalize(it) == normalize(c) } }
+        val seriesOnly = hint?.copy(kind = Kind.SERIES, strong = true)
         val attempts = buildList {
             if (hint?.kind == Kind.SERIES) shows.forEach { add(it to true) }
             add(query to false)
@@ -283,10 +289,14 @@ class LiveTvPosterResolver @Inject constructor(
             }
         }
         var poster: String? = null
-        for ((q, isShowName) in attempts) {
+        for ((q, isShowName) in attempts + listOfNotNull(colonShow?.let { it to true })) {
             poster = try {
                 // For a show name, the guide's year belongs to the episode, so leave it out.
-                if (isShowName) lookup(q, hint?.copy(strong = false), clues.copy(year = null), attempt)?.meta?.poster
+                if (q == colonShow) lookup(q, seriesOnly, clues.copy(year = null), attempt)?.meta?.poster
+                // An episode number (or the guide saying "series") stays a sure sign it's a show,
+                // for the show name too: it used to be relaxed here, which let a movie with the
+                // same short name win.
+                else if (isShowName) lookup(q, if (hint?.strong == true && hint.kind == Kind.SERIES) hint else hint?.copy(strong = false), clues.copy(year = null), attempt)?.meta?.poster
                 else lookup(q, hint, clues, attempt)?.meta?.poster
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -298,8 +308,8 @@ class LiveTvPosterResolver @Inject constructor(
         // None of your addons' catalogs has it (shows like "SportsCenter" often aren't in them):
         // TMDB's own entry with exactly that name, if there is one.
         if (poster == null) {
-            for ((q, isShowName) in attempts) {
-                poster = runCatching { tmdbPoster(q, hint, if (isShowName) null else clues.year) }
+            for ((q, isShowName) in attempts + listOfNotNull(colonShow?.let { it to true })) {
+                poster = runCatching { tmdbPoster(q, if (q == colonShow) seriesOnly else hint, if (isShowName) null else clues.year) }
                     .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
                     .getOrNull()
                 if (poster != null) break
@@ -694,6 +704,14 @@ class LiveTvPosterResolver @Inject constructor(
          * counts; "Show: Episode" only for series, because plenty of films use a colon
          * ("Star Wars: A New Hope").
          */
+        /** The part before ": " of a series' title ("Show: Episode"), or null. */
+        fun colonShowName(title: String, hint: TypeHint?): String? {
+            if (hint?.kind != Kind.SERIES) return null
+            val cleaned = LiveTvSearchBridge.cleanTitle(title).ifBlank { title.trim() }
+            if (!cleaned.contains(": ")) return null
+            return cleaned.substringBefore(": ").trim().takeIf { it.length >= 2 }
+        }
+
         fun showNameCandidates(title: String, hint: TypeHint?): List<String> {
             val cleaned = LiveTvSearchBridge.cleanTitle(title).ifBlank { title.trim() }
             val out = LinkedHashSet<String>()

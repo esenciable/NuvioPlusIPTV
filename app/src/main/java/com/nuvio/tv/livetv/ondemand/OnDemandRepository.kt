@@ -151,7 +151,8 @@ class OnDemandRepository @Inject constructor(
                 OnDemandStreams.tabPosition = s.onDemandStreamsPosition
             }
         }
-        scope.launch {
+        // Start-up upkeep and the automatic catalog check: low priority, out of the screen's way.
+        scope.launch(com.nuvio.tv.livetv.data.BackgroundWork.quiet) {
             // A failed check (database busy) keeps the current answer instead of hiding On Demand.
             _hasContent.value = runCatching { db.hasAny() }.getOrDefault(_hasContent.value)
             // The heavier work below waits a little, so it never competes with Nuvio's own
@@ -178,7 +179,7 @@ class OnDemandRepository @Inject constructor(
 
     /** Imports new providers and drops ones that were turned off (no re-download of the rest). */
     fun refreshSoon() {
-        scope.launch { kotlinx.coroutines.delay(1_500); refresh(force = false) }
+        scope.launch(com.nuvio.tv.livetv.data.BackgroundWork.quiet) { kotlinx.coroutines.delay(1_500); refresh(force = false) }
     }
 
     fun refreshNow() {
@@ -245,7 +246,8 @@ class OnDemandRepository @Inject constructor(
         if (genreJob?.isActive == true) return
         val key = com.nuvio.tv.BuildConfig.TMDB_API_KEY
         if (key.isBlank()) return
-        genreJob = scope.launch {
+        // Low priority: it runs for a long time in the background, and mustn't slow the screen.
+        genreJob = scope.launch(com.nuvio.tv.livetv.data.BackgroundWork.quiet) {
             var added = 0
             var shownOnce = false
             while (true) {

@@ -156,7 +156,8 @@ class LiveTvRepository @Inject constructor(
         scope.launch { refreshInternal(forcePlaylists = false, forceEpg = true) }
     }
 
-    private suspend fun refreshStale() = refreshInternal(forcePlaylists = false, forceEpg = false)
+    // Automatic updates run at low priority, so the screen and video stay smooth meanwhile.
+    private suspend fun refreshStale() = withContext(BackgroundWork.quiet) { refreshInternal(forcePlaylists = false, forceEpg = false) }
 
     // ---------------------------------------------------------------- sources CRUD
 
@@ -488,6 +489,36 @@ class LiveTvRepository @Inject constructor(
         LIVE_REPORT.add(if (automatic) "Update check started" else "Update started")
         try { refreshBody(forcePlaylists, forceEpg, forceIds, automatic) }
         finally { LIVE_REPORT.add("Update finished in ${(System.currentTimeMillis() - t0Update) / 1000} s") }
+        runCatching { sweepLeftoverFiles() }.onFailure { Log.w(TAG, "Leftover file sweep failed", it) }
+    }
+
+    /**
+     * Deletes saved guide and playlist files no source uses any more. A playlist's built-in
+     * guide is saved under a name made from its web address, so removing the playlist, or the
+     * provider changing that address (a new domain, a new login), left the old file behind for
+     * good. Guides are often 50–200 MB, and a box with little storage left slows right down.
+     * Only files untouched for two weeks go, so a guide that's just turned off for a while, or
+     * a source being added right now, is left alone (one turned back on is downloaded again).
+     */
+    private suspend fun sweepLeftoverFiles() {
+        val now = System.currentTimeMillis()
+        val oldEnough = now - 14L * 24 * HOUR
+        val guideIds = collectEpgTargets().mapTo(HashSet()) { it.fileId }
+        prefs.currentEpgSources().forEach { guideIds += it.id }
+        val playlistIds = prefs.currentPlaylists().mapTo(HashSet()) { it.id }
+        var freed = 0L
+        var count = 0
+        fun sweep(dir: File, idOf: (String) -> String, keep: Set<String>) {
+            dir.listFiles()?.forEach { f ->
+                if (!f.isFile || f.lastModified() > oldEnough) return@forEach
+                if (idOf(f.name) in keep) return@forEach
+                val size = f.length()
+                if (f.delete()) { freed += size; count++ }
+            }
+        }
+        sweep(epgDir, { it.substringBefore(".xml").substringBefore(".tmp") }, guideIds)
+        sweep(playlistDir, { it.substringBefore(".m3u").substringBefore(".tmp") }, playlistIds)
+        if (count > 0) LIVE_REPORT.add("Cleanup: deleted $count saved guide/playlist files no source uses (${freed / (1024 * 1024)} MB freed)")
     }
 
     private suspend fun refreshBody(
@@ -1016,6 +1047,7 @@ class LiveTvRepository @Inject constructor(
     @Volatile private var pendingRange: Pair<Long, Long>? = null
 
     fun ensureRange(fromMs: Long, toMs: Long) {
+        dropOldHours(fromMs)
         if (!guideInDb || (fromMs >= loadedFrom && toMs <= loadedTo)) return
         if (!rangeBusy.compareAndSet(false, true)) {
             // One read at a time (each covers every channel): remember the widest request.
@@ -1066,6 +1098,44 @@ class LiveTvRepository @Inject constructor(
             rangeBusy.set(false)
             pendingRange?.let { (f, t) -> pendingRange = null; ensureRange(f, t) }
           }
+        }
+    }
+
+    @Volatile private var lastDropAt = 0L
+
+    /**
+     * Lets go of listings that ended long ago. New hours were added as time passed but old ones
+     * were never dropped, and TV boxes keep the app open for days: memory slowly filled with
+     * days of past listings for every channel, and the app got slower the longer the box stayed
+     * on. Anything older than a day before what the guide asks for goes (at most every 30
+     * minutes); scrolling back for catch-up reads those hours from the guide database again.
+     * Only when the guide is kept in the database, so nothing is ever lost.
+     */
+    private fun dropOldHours(fromMs: Long) {
+        if (!guideInDb || loadedFrom == Long.MAX_VALUE) return
+        val now = System.currentTimeMillis()
+        if (now - lastDropAt < 30 * 60_000L) return
+        val cutoff = minOf(fromMs - RANGE_SLACK_MS, now - 24 * HOUR)
+        if (loadedFrom >= cutoff) return
+        lastDropAt = now
+        scope.launch(BackgroundWork.quiet) {
+            rangeMutex.withLock {
+                if (loadedFrom >= cutoff) return@withLock
+                val cur = _programs.value
+                var changed = false
+                val next = HashMap<String, List<EpgProgram>>(cur.size)
+                cur.forEach { (key, list) ->
+                    // Lists are in start order: only ones that begin before the cutoff change
+                    // (the others are kept as they are, so their guide rows needn't redraw).
+                    if (list.isNotEmpty() && list[0].stopMs <= cutoff) {
+                        changed = true
+                        val kept = list.filter { it.stopMs > cutoff }
+                        if (kept.isNotEmpty()) next[key] = kept
+                    } else next[key] = list
+                }
+                if (changed) _programs.value = next
+                loadedFrom = cutoff
+            }
         }
     }
 
@@ -1638,16 +1708,26 @@ class LiveTvRepository @Inject constructor(
                 // What the file starts with, for the report if it can't be read at all (an
                 // error page or a login page instead of a guide shows up here).
                 openMaybeGzip(file, showProgress).use { input ->
-                    XmltvParser.parse(input, windowStart, windowEnd) { xmlChannels ->
-                        xmlChannels.values.forEach { xc ->
-                            byTvgId[xc.id.lowercase()]?.let { idHits.getOrPut(xc.id) { LinkedHashSet() }.addAll(it) }
-                            (xc.displayNames + xc.id).forEach { dn ->
-                                byName[normalize(dn)]?.let { nameHits.getOrPut(xc.id) { LinkedHashSet() }.addAll(it) }
+                    XmltvParser.parse(
+                        input, windowStart, windowEnd,
+                        selectChannels = { xmlChannels ->
+                            xmlChannels.values.forEach { xc ->
+                                byTvgId[xc.id.lowercase()]?.let { idHits.getOrPut(xc.id) { LinkedHashSet() }.addAll(it) }
+                                (xc.displayNames + xc.id).forEach { dn ->
+                                    byName[normalize(dn)]?.let { nameHits.getOrPut(xc.id) { LinkedHashSet() }.addAll(it) }
+                                }
                             }
+                            if (xmlChannels.isEmpty()) null
+                            else idHits.keys + nameHits.keys + pinnedHere.values.map { it.xmltvId }
+                        },
+                        // No channel list in this guide: keep only shows for channels the matching
+                        // below can use (the same id / name test) or picked by hand, instead of
+                        // every show in the file.
+                        keepUnlisted = { id ->
+                            byTvgId.containsKey(id.lowercase()) || byName.containsKey(normalize(id)) ||
+                                pinnedHere.values.any { it.xmltvId == id }
                         }
-                        if (xmlChannels.isEmpty()) null
-                        else idHits.keys + nameHits.keys + pinnedHere.values.map { it.xmltvId }
-                    }
+                    )
                 }
             }.onFailure {
                 Log.w(TAG, "EPG parse ${target.name} failed", it)
@@ -1663,7 +1743,8 @@ class LiveTvRepository @Inject constructor(
             val entries = if (parsed.channels.isNotEmpty()) {
                 parsed.channels.values.map { EpgChannelEntry(it.id, it.displayNames, it.icon) }
             } else {
-                parsed.programs.keys.map { EpgChannelEntry(it, emptyList(), null) }
+                // No channel list: every channel the shows mention (kept or not), for Change EPG.
+                parsed.programChannelIds.ifEmpty { parsed.programs.keys }.map { EpgChannelEntry(it, emptyList(), null) }
             }
             val label = runCatching { java.net.URI(target.url).host?.removePrefix("www.") }.getOrNull()
                 ?.takeIf { it.isNotBlank() } ?: target.name

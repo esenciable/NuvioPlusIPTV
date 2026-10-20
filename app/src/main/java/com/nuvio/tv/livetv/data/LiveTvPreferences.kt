@@ -155,6 +155,7 @@ class LiveTvPreferences @Inject constructor(
         val clockSize = stringPreferencesKey("clock_size")
         val clockOpacity = intPreferencesKey("clock_opacity")
         val clockBackground = booleanPreferencesKey("clock_background")
+        val panelBackground = stringPreferencesKey("panel_background")
         val recentInPanel = booleanPreferencesKey("recent_in_panel")
         val panelRow = stringPreferencesKey("panel_row")
         val channelSurf = booleanPreferencesKey("channel_surf")
@@ -184,6 +185,10 @@ class LiveTvPreferences @Inject constructor(
         val epgOverrides = stringPreferencesKey("epg_overrides")
         /** Channel key → PictureShape name, for channels set away from Auto. */
         val pictureShapes = stringPreferencesKey("picture_shapes")
+        /** Sports: settings and channel fixes (shared by every profile), as JSON. */
+        val sports = stringPreferencesKey("sports")
+        /** Sports: the teams, leagues and names you follow, and game reminders (per profile), as JSON. */
+        val sportsMine = stringPreferencesKey("sports_mine")
     }
 
     // ---------- Nuvio profiles ----------
@@ -198,7 +203,7 @@ class LiveTvPreferences @Inject constructor(
     private val personalStringKeys: List<Preferences.Key<String>> = listOf(
         Keys.favorites, Keys.recent, Keys.lastChannel, Keys.previousChannel, Keys.lastGroup,
         Keys.groupOrder, Keys.customGroups, Keys.channelOrder, Keys.channelCopies, Keys.reminders,
-        Keys.vodGroupOrder, Keys.vodSorts
+        Keys.vodGroupOrder, Keys.vodSorts, Keys.sportsMine
     )
     private val personalSetKeys: List<Preferences.Key<Set<String>>> = listOf(
         Keys.hiddenChannels, Keys.hiddenGroups, Keys.vodHiddenCategories
@@ -365,6 +370,7 @@ class LiveTvPreferences @Inject constructor(
             clockSize = p[Keys.clockSize] ?: d.clockSize,
             clockOpacity = p[Keys.clockOpacity] ?: d.clockOpacity,
             clockBackground = p[Keys.clockBackground] ?: d.clockBackground,
+            panelBackground = p[Keys.panelBackground] ?: d.panelBackground,
             recentInPanel = p[Keys.recentInPanel] ?: d.recentInPanel,
             // Before the choice existed it was an on / off switch for Recent.
             panelRow = p[Keys.panelRow] ?: if (p[Keys.recentInPanel] == false) "OFF" else d.panelRow,
@@ -548,6 +554,7 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.clockSize] = s.clockSize
         p[Keys.clockOpacity] = s.clockOpacity
         p[Keys.clockBackground] = s.clockBackground
+        p[Keys.panelBackground] = s.panelBackground
         p[Keys.recentInPanel] = s.recentInPanel
         p[Keys.panelRow] = s.panelRow
         p[Keys.channelSurf] = s.channelSurf
@@ -631,6 +638,28 @@ class LiveTvPreferences @Inject constructor(
 
     /** Picture shape chosen per channel (channels left on Auto aren't listed). */
     val pictureShapes: Flow<Map<String, String>> = store.data.map { decodeStringMap(it[Keys.pictureShapes]) }
+
+    // ---------- Sports ----------
+    // Kept with Live TV's settings so Google Drive sync carries them to your other TVs too.
+
+    /** Sports settings and channel fixes (JSON, read by the Sports page). */
+    val sportsSettingsJson: Flow<String?> = store.data.map { it[Keys.sports] }.distinctUntilChanged()
+
+    /** What this profile follows in Sports (JSON). */
+    val sportsMineJson: Flow<String?> =
+        kotlinx.coroutines.flow.combine(store.data, profileManager.activeProfileId) { p, id -> profileView(p, id)[Keys.sportsMine] }
+            .distinctUntilChanged()
+
+    suspend fun editSportsSettings(transform: (String?) -> String) {
+        store.edit { p -> p[Keys.sports] = transform(p[Keys.sports]) }
+    }
+
+    suspend fun editSportsMine(transform: (String?) -> String) {
+        store.edit { p ->
+            val id = currentProfile
+            p[my(Keys.sportsMine, id)] = transform(profileView(p, id)[Keys.sportsMine])
+        }
+    }
 
     suspend fun setPictureShape(key: String, shape: com.nuvio.tv.livetv.player.PictureShape) {
         store.edit { p ->

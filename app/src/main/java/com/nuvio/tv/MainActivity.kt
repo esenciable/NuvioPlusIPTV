@@ -51,6 +51,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.GridView
@@ -311,6 +312,9 @@ open class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var liveTvRecordingScheduler: com.nuvio.tv.livetv.record.LiveTvRecordingScheduler
+
+    @Inject
+    lateinit var sportsRepository: com.nuvio.tv.livetv.sports.SportsRepository
 
     @Inject
     lateinit var layoutPreferenceDataStore: LayoutPreferenceDataStore
@@ -1109,6 +1113,8 @@ open class MainActivity : ComponentActivity() {
                     val recordingNow = allRecordings.any {
                         it.status == com.nuvio.tv.livetv.record.RecordingStatus.RECORDING
                     }
+                    // Live TV fork: the Sports page (on unless switched off in Sports settings).
+                    val sportsInSidebar = sportsRepository.settings.collectAsState().value.showInSidebar
                     // (The Live TV sub-list is gone: every page is in the one menu again. These stay
                     // so the menus' wiring is unchanged; nothing opens a sub-list any more.)
                     var liveTvGroupOpen by remember { mutableStateOf(false) }
@@ -1122,6 +1128,7 @@ open class MainActivity : ComponentActivity() {
                             // checked or updated; only its menu entry depends on having content.
                             add(Screen.OnDemand.route)
                             add(Screen.Recordings.route)
+                            add(Screen.Sports.route)
                             add(Screen.Search.route)
                             add(Screen.Library.route)
                             add(Screen.Settings.route)
@@ -1148,7 +1155,8 @@ open class MainActivity : ComponentActivity() {
                         liveTvInSidebar,
                         onDemandInSidebar,
                         recordingsInSidebar,
-                        recordingNow
+                        recordingNow,
+                        sportsInSidebar
                     ) {
                         buildList {
                             add(
@@ -1184,6 +1192,9 @@ open class MainActivity : ComponentActivity() {
                             val liveTvPages = buildList {
                                 if (liveTvInSidebar) {
                                     add(DrawerItem(route = Screen.LiveTv.route, label = "Live TV", icon = Icons.Default.LiveTv))
+                                }
+                                if (sportsInSidebar) {
+                                    add(DrawerItem(route = Screen.Sports.route, label = "Sports", icon = Icons.Default.EmojiEvents))
                                 }
                                 if (onDemandInSidebar) {
                                     add(DrawerItem(route = Screen.OnDemand.route, label = "On Demand", icon = Icons.Default.VideoLibrary))
@@ -1400,7 +1411,14 @@ open class MainActivity : ComponentActivity() {
         }
 
         jankStats = JankStats.createAndTrack(window) { frameData ->
-            if (frameData.isJank) {
+            // Counted per screen for the start-up report (Live TV says guide or full screen).
+            // It used to write every slow frame to the system log, which cost a little on each
+            // one and nobody could see; that's kept for debug builds only.
+            val states = frameData.states
+            val screen = states.firstOrNull { it.key == "LiveTv" }?.value
+                ?: states.firstOrNull { it.key == "Screen" }?.value
+            com.nuvio.tv.livetv.model.LiveSmoothness.frame(screen, frameData.isJank)
+            if (frameData.isJank && BuildConfig.IS_DEBUG_BUILD) {
                 Log.w(
                     "JankStats",
                     "JANK: ${frameData.frameDurationUiNanos / 1_000_000}ms | states: ${frameData.states}"

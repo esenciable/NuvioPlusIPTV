@@ -200,6 +200,9 @@ class LiveTvRecordingScheduler @Inject constructor(
 
     // ------------------------------------------------------------------ setting recordings
 
+    /** Extra time before and after recordings (Settings → Live TV → Recordings), in ms. */
+    fun padding(): Pair<Long, Long> = padPreMs to padPostMs
+
     /** True if [program] on [channelKey] is set to record. */
     fun isScheduled(channelKey: String, program: EpgProgram): Boolean =
         _schedules.value.any { it.channel.key == channelKey && it.startMs == program.startMs }

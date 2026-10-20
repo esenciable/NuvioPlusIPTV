@@ -98,8 +98,8 @@ data class VodCategory(
  * are read a page at a time.
  */
 @Singleton
-class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context) :
-    SQLiteOpenHelper(context, "livetv_on_demand.db", null, 8) {
+class OnDemandDatabase @Inject constructor(@ApplicationContext private val appContext: Context) :
+    SQLiteOpenHelper(appContext, "livetv_on_demand.db", null, 8) {
 
     init {
         // Browsing On Demand doesn't wait while an import or genre lookup is writing.
@@ -197,7 +197,21 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context)
     /** Gives back space left empty by removed titles (see SqliteCompact). */
     fun compact(): Long = com.nuvio.tv.livetv.data.SqliteCompact.compactIfWasteful(writableDatabase, "On Demand")
 
+    /**
+     * Release years for titles imported before years were read from their names (imports read
+     * them now). A one-time fix: it used to run on every start, scanning every title without a
+     * year (often tens of thousands) and finding nothing new. Done once, then remembered.
+     */
+    private val yearsFilledMark get() = java.io.File(appContext.noBackupFilesDir, "ondemand_years_filled")
+
     fun fillMissingYears(): Int {
+        if (yearsFilledMark.exists()) return 0
+        val n = fillMissingYearsOnce()
+        runCatching { yearsFilledMark.createNewFile() }
+        return n
+    }
+
+    private fun fillMissingYearsOnce(): Int {
         val db = writableDatabase
         val found = ArrayList<Pair<Long, Int>>()
         db.rawQuery("SELECT rowid, name FROM items WHERE year IS NULL", null).use { c ->

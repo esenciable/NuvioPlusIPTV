@@ -83,19 +83,6 @@ fun SportsPicker(viewModel: SportsViewModel, onClose: () -> Unit) {
     val league = leagues.firstOrNull { it.id == leagueId } ?: leagues.firstOrNull()
     var query by rememberSaveable { mutableStateOf("") }
     var askWord by remember { mutableStateOf(false) }
-    // A league picked from search: opened once its sport's leagues are showing.
-    var openLeague by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(sport, openLeague) {
-        val id = openLeague ?: return@LaunchedEffect
-        val i = leagues.indexOfFirst { it.id == id }
-        if (i < 0) return@LaunchedEffect
-        leagueId = id
-        openLeague = null
-        delay(90)
-        runCatching { leagueRowState.scrollToItem(i) }
-        delay(60)
-        runCatching { leagueReq(id).requestFocus() }
-    }
     // Leagues and competitions whose name (or short name, or how guides name them) matches.
     val leagueResults = remember(query) {
         val q = SportsCatalog.norm(query).trim()
@@ -114,6 +101,19 @@ fun SportsPicker(viewModel: SportsViewModel, onClose: () -> Unit) {
     val leagueRowState = androidx.compose.foundation.lazy.rememberLazyListState()
     val leagueReqs = remember { HashMap<String, FocusRequester>() }
     fun leagueReq(id: String) = leagueReqs.getOrPut(id) { FocusRequester() }
+    // A league picked from search: opened once its sport's leagues are showing.
+    var openLeague by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(sport, openLeague) {
+        val id = openLeague ?: return@LaunchedEffect
+        val i = leagues.indexOfFirst { it.id == id }
+        if (i < 0) return@LaunchedEffect
+        leagueId = id
+        openLeague = null
+        delay(90)
+        runCatching { leagueRowState.scrollToItem(i) }
+        delay(60)
+        runCatching { leagueReq(id).requestFocus() }
+    }
     // OK on a sport: the highlight goes over to its first league.
     var toLeagues by remember { mutableStateOf(0) }
     LaunchedEffect(toLeagues) {

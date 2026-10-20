@@ -2,16 +2,17 @@
 
 # Nuvio + IPTV
 
-**Everything in Nuvio, plus everything IPTV: a TiviMate-style Live TV guide, catch-up, recordings, and your provider's movies and series, all in one app for Google TV, Android TV and Fire TV.**
+**Everything in Nuvio, plus everything IPTV: a TiviMate-style Live TV guide, a Sports hub that finds every game on your own channels, catch-up, recordings, and your provider's movies and series, all in one app for Google TV, Android TV and Fire TV.**
 
 [![Latest release](https://img.shields.io/github/v/release/homelessbrian/NuvioTV?include_prereleases&label=latest&style=for-the-badge)](https://github.com/homelessbrian/NuvioTV/releases)
 [![Downloads](https://img.shields.io/github/downloads/homelessbrian/NuvioTV/total?style=for-the-badge)](https://github.com/homelessbrian/NuvioTV/releases)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=for-the-badge)](LICENSE)
 [![Based on Nuvio](https://img.shields.io/badge/based%20on-NuvioMedia%2FNuvioTV-8A2BE2?style=for-the-badge)](https://github.com/NuvioMedia/NuvioTV)
+[![Support on Ko-fi](https://img.shields.io/badge/support-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/homelessbrian)
 
 **Downloader code: 6532491**
 
-[What's new](#-whats-new) · [Download](#-installation) · [Features](#-features) · [Setup](#-getting-started) · [Remote controls](#-remote-controls) · [Report a bug](#-reporting-bugs-and-requesting-features)
+[What's new](#-whats-new) · [Sports hub](#-sports-hub) · [Download](#-installation) · [Features](#-features) · [Setup](#-getting-started) · [Remote controls](CONTROLS.md) · [Report a bug](#-reporting-bugs-and-requesting-features) · [Support](#-support-the-project)
 
 </div>
 
@@ -19,25 +20,72 @@
 
 ## 🆕 What's new
 
-**Now based on Nuvio 1.1.0-beta.6.**
+**Now based on Nuvio 1.1.0-beta.7.**
 
-- **Search, your way:**
-  - **Choose the order** of Live TV, On Demand and addon results in **Settings → Live TV → Search & Streams**.
-  - **One look everywhere:** Live TV and On Demand results now look just like addon results.
-  - **Preview behind search:** pick a live channel and it plays in the background while you keep searching.
-- **On Demand in the streams list:** put the On Demand tab first, after your first addon, or last, and let auto-play choose it if you want.
-- **On-screen clock:** always shown, only with the player controls, or never, with your choice of corner, size and opacity.
-- **Picture shape:** 24/7 movie channels that looked stretched tall now show at their real shape with black bars. You can also set the shape yourself for each channel.
-- **Recordings:**
-  - **Choose how early recordings start and how long they run after the show.**
-  - **See how much space each recording takes**, and hold OK on a recording for its full details.
-  - **Skip through recordings that are still recording.**
-- **Catch-up:**
-  - **Catch-up Time Shift** for providers whose catch-up is an hour or more off.
-  - **More ways to load a show** when the first one fails, and a clear message instead of endless loading.
-- **Playlist expiry:** see when each account runs out, with a warning when it's a week or less away.
-- **Guide Size now applies to overlay mode too,** and episode numbers can be hidden.
-- **Better posters:** sports games show the channel logo instead of random movie posters, and more shows get posters.
+- **🏆 The Sports hub is here.** Live scores and schedules for 160+ leagues, and every game matched to the channels in *your* playlists. Follow your teams, see what's on, and press OK to watch. [More below](#-sports-hub).
+- **Record a game** from its page: pick the channel and how long, and it starts 5 minutes early.
+- **Never miss kick-off:** reminders can switch to the game by themselves a minute before it starts.
+- **Live TV:**
+  - **Info Panel Background:** Standard, Darker or Solid, for easier reading over bright pictures.
+  - **Channels whose HLS link fails** now play as TS instead.
+- **Smoother on slower boxes:** a lighter guide, less memory used for buffering, old listings let go, and leftover guide files cleaned up, so the app no longer slows down after days of being left on.
+
+---
+
+## 🏆 Sports hub
+
+Sports in the side menu shows scores and schedules, and works out **which of your own channels are showing each game**. No more scrolling through sports channels to find the match.
+
+### Your teams, front and center
+- **My Sports:**
+  - **The big card:** your next games in your teams' colors. Left and Right flip through them.
+  - **Live & Upcoming,** then a row for every team, country, league and name you follow.
+  - **Your order:** arrange the rows how you like.
+- **All Events:** every game in your region's leagues plus everything you follow, with a live count. **Day tabs** run from a week back to a week ahead.
+- **Follow anything:**
+  - **Teams, countries, whole leagues,** or a **name** (a player, driver or fighter) to catch any show that mentions it.
+  - **One search** finds teams and leagues alike.
+  - **Following a club includes its cups** and European games.
+
+### 160+ leagues and competitions
+- **US sports:** NFL, NBA, NHL, MLB, WNBA, MLS, college football, basketball, hockey and baseball, plus CFL, UFL and G League.
+- **Football (soccer):**
+  - **The UK:** Premier League down to the National League, the FA Cup, Carabao Cup, Scottish leagues and cups, and the WSL.
+  - **Europe:** the Champions League, Europa League, LaLiga, Serie A, Bundesliga, Ligue 1, Eredivisie, Primeira Liga, and their cups.
+  - **Further afield:** the Libertadores, Brazil, Argentina, the Saudi Pro League, J1, the A-League and more.
+- **National teams:** follow England, France, USA and others for every game, from friendlies to the World Cup. Women's internationals have their own list.
+- **Rugby:** the Six Nations, Nations Championship, Rugby Championship, World Cup, Premiership, URC, Champions Cup, Top 14 and Super Rugby. **AFL** too.
+- **Events:** UFC, PFL, F1, NASCAR, IndyCar, PGA Tour, DP World Tour, LPGA, LIV, and ATP and WTA tennis, with leaderboards, results and full fight cards.
+- **Beyond ESPN:** from TheSportsDB, with scores about every 15 minutes on match days:
+  - **non-league football:** the National League and the step below
+  - **rugby league:** Super League, NRL and State of Origin
+  - **cricket:** T20 Blast, IPL and Big Bash
+  - **ice hockey:** the Elite Ice Hockey League
+  - **Gaelic games:** the National Football League
+  - **netball:** the UK Netball Superleague and Super Netball
+- **Wrestling and boxing schedules.** WWE and AEW shows are matched to your channels by show name.
+- **Your TV guide fills the gaps:** darts, snooker, horse racing, cycling and cricket internationals are found in your own guide.
+
+### Watching
+- **Watch on your channels:**
+  - **Every channel showing the game,** best match first, with the playlist it comes from.
+  - **Labels:** each channel is marked **SHOWING IT** or **MAYBE**.
+- **Fix Channel:** pick the right channel once, for one game, every game on that network, or every game for a team. It's remembered.
+- **Video window:** hold OK on a game to watch it on the Sports page while you keep browsing. Hold Back for full screen.
+- **Watch from the start** on channels with catch-up.
+- **Game pages:**
+  - the score by period, and the latest scoring as it happens
+  - race and golf leaderboards, tennis matches and fight cards
+- **Scores everywhere:**
+  - the score shows on Live TV's info bar when you're watching a game
+  - **scoring alerts** pop up in the corner when your team scores, wherever you are in the app
+- **Spoiler-free:** **Hide Scores** keeps results off the screen until you're ready.
+
+### Never miss it
+- **Remind me** on any game, and automatic reminders for your teams.
+- **Switch automatically:** a minute before kick-off, with 10 seconds to cancel.
+- **Record a game:** pick the channel and how long to record (1 to 6 hours, for overtime and extra time). Games set to record show **REC**.
+- **On every TV:** your teams, leagues and Sports settings sync with Google Drive.
 
 ---
 
@@ -150,56 +198,20 @@ Requires **Android 7.0 or newer** (Fire OS 6 or later). It installs **alongside*
 1. Open **Settings → Live TV**.
 2. Choose **Add M3U Playlist** or **Add Xtream Codes Login**. For Xtream, pick **Include TV channels** and/or **Include movies & series**.
 3. Optionally **Add EPG Source** for an extra TV guide.
-4. Open **Live TV** or **On Demand** from the side menu. The first load can take a minute on big providers; a small progress bubble shows what's happening.
+4. Open **Live TV**, **On Demand** or **Sports** from the side menu. The first load can take a minute on big providers; a small progress bubble shows what's happening.
 5. Optional, all in **Settings → Live TV**:
    - set a **Start page**
    - turn on the **home screen row**
    - choose where recordings are saved under **Recordings**
    - set a parental **PIN**
    - turn on **Google Drive sync**
+6. In **Sports**, press **✎ Follow Teams & Leagues** to pick your teams. Set your region and reminders under **Settings → Sports**.
 
 ---
 
 ## 🎮 Remote controls
 
-### In the guide
-| Button | Action |
-|---|---|
-| **OK** on what's on now | Play in the preview · again for full screen |
-| **OK** on a later show | Show info · **Remind me** · **Record** |
-| **OK** on an earlier show | Play from catch-up |
-| **◀** (tap) on what's on now | Open the groups |
-| **◀** (hold) | Scroll back through earlier shows (catch-up channels) |
-| **▲ / ▼** · **CH+ / CH−** | Channels · page up / down |
-| **0–9** | Jump to a channel number |
-| **Long-press OK** | Channel menu: favorites, **Remind me**, **Record**, **Watch from the beginning**, hide, **Manage visibility**, **Reorder**, **Copy**, rename, renumber, **Assign EPG** |
-| **Hold Back** or **Play/Pause** | Back to full screen on what's playing |
-| **Back** | Back to "now" → the group list → the side menu |
-
-### Full screen
-| Button | Action |
-|---|---|
-| **▲ / ▼**, **CH+ / CH−** | Next / previous channel |
-| **OK** | Info panel (catch-up: pause / play) |
-| **◀** | Overlay mode (catch-up: skip back) |
-| **▶** | Catch-up: skip forward (hold to skip faster) |
-| **Long-press OK** or **Menu** | Audio, subtitles, screen size, picture shape, stream info, sleep timer, record, watch from the beginning, find & stream |
-| **Back** | Back to the guide |
-
-### On Demand
-| Button | Action |
-|---|---|
-| **▲ / ▼** in the categories | Browse; each category opens as you highlight it |
-| **▶** from the categories | Into the posters (the categories slide away) |
-| **◀** from the first column, or **Back** | Categories again |
-| **Long-press a poster** | Details, library and watched options |
-| **Long-press a category** | Manage visibility · Lock with PIN |
-
-### Recordings
-| Button | Action |
-|---|---|
-| **OK** | Play (or resume) |
-| **Long-press OK** | Play from the beginning, stop recording, **Information**, delete |
+Every button for the guide, full screen, Sports, On Demand and Recordings: see **[CONTROLS.md](CONTROLS.md)**.
 
 ---
 
@@ -233,6 +245,24 @@ No. It only plays what you add yourself: your own playlists, guides, Xtream logi
 <summary><b>I don't see On Demand.</b></summary>
 
 Turn on movies & series for your Xtream login under **Settings → Live TV → On Demand**. On Demand appears in the side menu once the first import finishes.
+</details>
+
+<details>
+<summary><b>Sports shows the wrong channel for a game, or none at all.</b></summary>
+
+Open the game and press **Fix channel**. Pick the right channel for that game, for every game on that network, or for every game a team plays. It's remembered from then on. **MAYBE** means the app wasn't sure; a channel whose guide lists the game is marked **SHOWING IT**.
+</details>
+
+<details>
+<summary><b>I can't find my team or league in Sports.</b></summary>
+
+Search for it in **✎ Follow Teams & Leagues**: search covers every league, not just your region's. If it still isn't there, follow it as a name, and any show in your TV guide with that name in the title appears on My Sports.
+</details>
+
+<details>
+<summary><b>Where do the scores come from?</b></summary>
+
+Scores, schedules, team logos and colors come from ESPN's free public feed. Non-league football, rugby league, cricket, UK ice hockey, Gaelic games, netball, and the wrestling and boxing schedules come from TheSportsDB, and some event dates from sporting-events.org. Sports they don't cover are found in your own TV guide.
 </details>
 
 <details>
@@ -279,10 +309,19 @@ Your Live TV setup, in a private app folder in your own Google Drive that only t
 
 ---
 
+## ☕ Support the project
+
+Nuvio + IPTV is free. If it's made your TV better and you'd like to say thanks, you can buy me a coffee on **[Ko-fi](https://ko-fi.com/homelessbrian)**. It's completely optional, and every bit helps keep updates coming.
+
+[![Support me on Ko-fi](https://img.shields.io/badge/Buy%20me%20a%20coffee-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/homelessbrian)
+
+---
+
 ## 🙏 Credits
 
 - **[Nuvio](https://github.com/NuvioMedia/NuvioTV)** by the NuvioMedia team: Nuvio + IPTV is built on their work and follows their releases.
 - Guide and overlay design inspired by **TiviMate**.
+- Sports data from **ESPN**'s public feed, **[TheSportsDB](https://www.thesportsdb.com)** and **sporting-events.org**. Nuvio + IPTV isn't affiliated with any of them, and team and league names and logos belong to their owners.
 - Built with Kotlin, Jetpack Compose, TV Material 3 and Media3 / ExoPlayer.
 
 Nuvio + IPTV is an unofficial fork and is **not affiliated with or endorsed by NuvioMedia or TiviMate**. Please report issues here, not to the Nuvio team.

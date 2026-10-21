@@ -4,8 +4,8 @@
 
 **Everything in Nuvio, plus everything IPTV: a TiviMate-style Live TV guide, a Sports hub that finds every game on your own channels, catch-up, recordings, and your provider's movies and series, all in one app for Google TV, Android TV and Fire TV.**
 
-[![Latest release](https://img.shields.io/github/v/release/homelessbrian/NuvioTV?include_prereleases&label=latest&style=for-the-badge)](https://github.com/homelessbrian/NuvioTV/releases)
-[![Downloads](https://img.shields.io/github/downloads/homelessbrian/NuvioTV/total?style=for-the-badge)](https://github.com/homelessbrian/NuvioTV/releases)
+[![Latest release](https://img.shields.io/github/v/release/homelessbrian/NuvioPlusIPTV?include_prereleases&label=latest&style=for-the-badge)](https://github.com/homelessbrian/NuvioPlusIPTV/releases)
+[![Downloads](https://img.shields.io/github/downloads/homelessbrian/NuvioPlusIPTV/total?style=for-the-badge)](https://github.com/homelessbrian/NuvioPlusIPTV/releases)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=for-the-badge)](LICENSE)
 [![Based on Nuvio](https://img.shields.io/badge/based%20on-NuvioMedia%2FNuvioTV-8A2BE2?style=for-the-badge)](https://github.com/NuvioMedia/NuvioTV)
 [![Support on Ko-fi](https://img.shields.io/badge/support-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/homelessbrian)
@@ -176,7 +176,7 @@ Sports in the side menu shows scores and schedules, and works out **which of you
 
 The universal version works everywhere. The device-specific ones are smaller downloads.
 
-1. Open the **[latest release](https://github.com/homelessbrian/NuvioTV/releases)**.
+1. Open the **[latest release](https://github.com/homelessbrian/NuvioPlusIPTV/releases)**.
 2. Download the APK for your device:
 
    | Device | APK |
@@ -217,13 +217,13 @@ Every button for the guide, full screen, Sports, On Demand and Recordings: see *
 
 ## 🐞 Reporting bugs and requesting features
 
-Please search [existing issues](https://github.com/homelessbrian/NuvioTV/issues) first.
+Please search [existing issues](https://github.com/homelessbrian/NuvioPlusIPTV/issues) first.
 
 | | |
 |---|---|
-| 🐛 **Something isn't working** | [Report a bug](https://github.com/homelessbrian/NuvioTV/issues/new?template=live_tv_bug.yml) |
-| 📺 **An idea for a new feature** | [Request a feature](https://github.com/homelessbrian/NuvioTV/issues/new?template=live_tv_feature.yml) |
-| 🎨 **The look or layout could be better** | [Suggest a UI / UX improvement](https://github.com/homelessbrian/NuvioTV/issues/new?template=live_tv_ui.yml) |
+| 🐛 **Something isn't working** | [Report a bug](https://github.com/homelessbrian/NuvioPlusIPTV/issues/new?template=live_tv_bug.yml) |
+| 📺 **An idea for a new feature** | [Request a feature](https://github.com/homelessbrian/NuvioPlusIPTV/issues/new?template=live_tv_feature.yml) |
+| 🎨 **The look or layout could be better** | [Suggest a UI / UX improvement](https://github.com/homelessbrian/NuvioPlusIPTV/issues/new?template=live_tv_ui.yml) |
 
 **If the app crashes,** scan the QR code on the crash screen with your phone and paste the text into your report.
 

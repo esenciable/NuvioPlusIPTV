@@ -561,6 +561,8 @@ class LiveTvPlaybackController @Inject constructor(
             forcedMime = null
             formatGuess = 0
         }
+        // A channel whose "HLS" turned out to be plain TS: read it as TS from the start.
+        if (catchupTitle == null && channel.key in plainTs && overrideUrl == null) forcedMime = MimeTypes.VIDEO_MP2T
         fallbackUrls.clear()
         hlsCatchupFailedOn = null
         archiveStarted = false
@@ -679,8 +681,37 @@ class LiveTvPlaybackController @Inject constructor(
             }
             cause = cause.cause
         }
-        return error.errorCodeName.removePrefix("ERROR_CODE_").replace('_', ' ').lowercase()
-            .replaceFirstChar { it.uppercase() }
+        // Plain words on screen, saying whose end it is ("Parsing manifest malformed" made people
+        // think the app was broken). The exact error still goes in the Start-Up Report.
+        return when (error.errorCode) {
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ->
+                "The provider isn't sending this channel properly right now"
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
+                "Can't reach the provider right now"
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ->
+                "The provider doesn't have this channel's stream right now"
+            PlaybackException.ERROR_CODE_DRM_SYSTEM_ERROR,
+            PlaybackException.ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED,
+            PlaybackException.ERROR_CODE_DRM_PROVISIONING_FAILED,
+            PlaybackException.ERROR_CODE_DRM_CONTENT_ERROR,
+            PlaybackException.ERROR_CODE_DRM_DISALLOWED_OPERATION,
+            PlaybackException.ERROR_CODE_DRM_DEVICE_REVOKED,
+            PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED ->
+                "This channel is protected and couldn't be unlocked"
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
+            PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED ->
+                "This TV couldn't play this channel's picture or sound"
+            else -> "This channel isn't playing right now"
+        }
     }
 
     // ---------------------------------------------------------------- sleep timer
@@ -1392,7 +1423,7 @@ class LiveTvPlaybackController @Inject constructor(
             // also come as plain TS, which TiviMate-style players use. Switch once, and keep using
             // TS for this channel until the app restarts.
             if (ch != null && p != null && _state.value.catchupTitle == null && ch.key !in tsInstead && isMalformedManifest(error)) {
-                val ts = tsLinkFor(currentUrl ?: ch.url)
+                val ts = tsLinkFor(currentUrl ?: ch.url)?.takeIf { it != (currentUrl ?: ch.url) }
                 if (ts != null) {
                     tsInstead += ch.key
                     com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
@@ -1405,6 +1436,21 @@ class LiveTvPlaybackController @Inject constructor(
                     p.playWhenReady = true
                     return
                 }
+            }
+            // Still "malformed" (no TS link to switch to, or the TS link said the same): the
+            // provider is often sending plain TS on a link that looks like HLS. Read the same
+            // link as TS once before reconnecting over and over.
+            if (ch != null && p != null && _state.value.catchupTitle == null && ch.key !in plainTs && isMalformedManifest(error)) {
+                plainTs += ch.key
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                    "Channel ${ch.name}: still no readable HLS playlist (${error.errorCodeName}); reading the stream as plain TS"
+                )
+                forcedMime = MimeTypes.VIDEO_MP2T
+                val url = currentUrl ?: ch.url
+                p.setMediaSource(buildMediaSource(url, ch.headers, isLive = true))
+                p.prepare()
+                p.playWhenReady = true
+                return
             }
             if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && p != null) {
                 p.seekToDefaultPosition()
@@ -1427,13 +1473,20 @@ class LiveTvPlaybackController @Inject constructor(
 
     /** Live channels whose HLS playlist couldn't be read: played as TS instead (until the app restarts). */
     private val tsInstead: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
+    /** Live channels whose link looks like HLS but sends plain TS: read as TS (until the app restarts). */
+    private val plainTs: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
 
-    /** The TS version of an Xtream HLS link (".../123.m3u8" -> ".../123.ts"), or null if it isn't one. */
+    /**
+     * The TS version of an Xtream live link: ".../123.m3u8" -> ".../123.ts", and a link with no
+     * ending at all (".../user/pass/123", which the server answers as HLS) -> ".../123.ts".
+     * Null if it isn't one.
+     */
     private fun tsLinkFor(url: String): String? {
         val base = url.substringBefore('?')
-        if (!base.endsWith(".m3u8", ignoreCase = true)) return null
-        if (!XTREAM_HLS.containsMatchIn(base)) return null
-        return base.dropLast(5) + ".ts" + url.substring(base.length)
+        if (base.endsWith(".m3u8", ignoreCase = true) && XTREAM_HLS.containsMatchIn(base))
+            return base.dropLast(5) + ".ts" + url.substring(base.length)
+        if (XTREAM_BARE.containsMatchIn(base)) return base + ".ts" + url.substring(base.length)
+        return null
     }
 
     private fun isMalformedManifest(error: PlaybackException): Boolean {
@@ -1509,6 +1562,7 @@ class LiveTvPlaybackController @Inject constructor(
             }.orEmpty()
             com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
                 "Channel ${currentChannel?.name} failed (try $attempt): $reason" +
+                    (error?.let { " (${it.errorCodeName})" } ?: "") +
                     (if (detail.isNotBlank()) " [$detail]" else "") +
                     (currentUrl?.let { " · ${redact(it)}" } ?: "")
             )
@@ -1713,6 +1767,8 @@ class LiveTvPlaybackController @Inject constructor(
         private val FORMAT_GUESSES = listOf(MimeTypes.APPLICATION_M3U8, MimeTypes.APPLICATION_MPD)
         /** Xtream live links: ".../live/user/pass/123.m3u8" or "host/user/pass/123.m3u8". */
         private val XTREAM_HLS = Regex("""/(?:live/)?[^/]+/[^/]+/\d+\.m3u8$""", RegexOption.IGNORE_CASE)
+        /** An Xtream live link with no ending: ".../live/user/pass/123" or ".../user/pass/123". */
+        private val XTREAM_BARE = Regex("""/(?:live/)?[^/]+/[^/]+/\d+$""")
         /** No picture this long after the video moved to a new screen = stuck. */
         private const val FRAME_TIMEOUT_MS = 2_500L
         /** Still loading this long after the video moved to a new screen = stuck. */

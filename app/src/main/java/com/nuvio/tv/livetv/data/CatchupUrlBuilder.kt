@@ -156,8 +156,9 @@ object CatchupUrlBuilder {
 
     internal fun fill(template: String, start: Long, end: Long, now: Long, duration: Long): String {
         var out = template
-        // {utc:YmdHMS} / ${start:Y-m-d} style formatted dates.
-        out = Regex("""\$?\{(utc|start|utcend|end|lutc|now|timestamp):([^}]+)}""").replace(out) { m ->
+        // {utc:YmdHMS} / ${start:Y-m-d} style formatted dates. (Every "}" escaped: Android's regex
+        // engine rejects a bare one, which closed the app, though desktop Java accepts it.)
+        out = Regex("""\$?\{(utc|start|utcend|end|lutc|now|timestamp):([^}]+)\}""").replace(out) { m ->
             val epoch = when (m.groupValues[1]) {
                 "utcend", "end" -> end
                 "lutc", "now", "timestamp" -> now
@@ -165,11 +166,11 @@ object CatchupUrlBuilder {
             }
             formatPattern(m.groupValues[2], epoch)
         }
-        out = Regex("""\$?\{duration:(\d+)}""").replace(out) { m ->
+        out = Regex("""\$?\{duration:(\d+)\}""").replace(out) { m ->
             val divisor = m.groupValues[1].toLongOrNull()?.coerceAtLeast(1) ?: 1
             (duration / divisor).toString()
         }
-        out = Regex("""\$?\{offset:(\d+)}""").replace(out) { m ->
+        out = Regex("""\$?\{offset:(\d+)\}""").replace(out) { m ->
             val divisor = m.groupValues[1].toLongOrNull()?.coerceAtLeast(1) ?: 1
             ((now - start) / divisor).toString()
         }

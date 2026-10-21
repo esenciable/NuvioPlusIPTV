@@ -97,6 +97,9 @@ fun SportsPicker(viewModel: SportsViewModel, onClose: () -> Unit) {
     // Up from the sports list or the leagues: the Following bar (it was skipped, the highlight
     // went to "‹ Sports" instead).
     val followFirst = remember { FocusRequester() }
+    // Up from search results: the first league found, the Following bar, or the search box.
+    val searchReq = remember { FocusRequester() }
+    val resultFirst = remember { FocusRequester() }
     val hasFollows = !follows.isEmpty
     val leagueRowState = androidx.compose.foundation.lazy.rememberLazyListState()
     val leagueReqs = remember { HashMap<String, FocusRequester>() }
@@ -173,7 +176,7 @@ fun SportsPicker(viewModel: SportsViewModel, onClose: () -> Unit) {
                     )
                 }
                 Box(Modifier.width(280.dp)) {
-                    LiveTextField(value = query, onValueChange = { query = it }, hint = "Search teams and leagues")
+                    LiveTextField(value = query, onValueChange = { query = it }, hint = "Search teams and leagues", focusRequester = searchReq)
                 }
                 Spacer(Modifier.width(12.dp))
                 SportsAction("↕  Arrange", onClick = { arrange = true })
@@ -215,7 +218,8 @@ fun SportsPicker(viewModel: SportsViewModel, onClose: () -> Unit) {
                                 items(leagueResults.size, key = { "r" + leagueResults[it].id }) { i ->
                                     val l = leagueResults[i]
                                     LeagueCard(
-                                        modifier = Modifier.focusUp(if (hasFollows) followFirst else null),
+                                        modifier = (if (i == 0) Modifier.focusRequester(resultFirst) else Modifier)
+                                            .focusUp(if (hasFollows) followFirst else searchReq),
                                         league = l,
                                         selected = false,
                                         followed = l.id in follows.pins,
@@ -250,7 +254,10 @@ fun SportsPicker(viewModel: SportsViewModel, onClose: () -> Unit) {
                             }
                             return@Column
                         }
-                        TeamGrid(results.orEmpty(), follows, viewModel, showLeague = true, modifier = Modifier.weight(1f))
+                        TeamGrid(
+                            results.orEmpty(), follows, viewModel, showLeague = true, modifier = Modifier.weight(1f),
+                            upTarget = if (leagueResults.isNotEmpty()) resultFirst else if (hasFollows) followFirst else searchReq
+                        )
                         return@Column
                     }
                     // ---- leagues
@@ -506,12 +513,18 @@ private fun LeagueCard(
 }
 
 @Composable
-private fun TeamGrid(teams: List<TeamInfo>, follows: SportsFollows, viewModel: SportsViewModel, showLeague: Boolean, modifier: Modifier = Modifier) {
+private fun TeamGrid(
+    teams: List<TeamInfo>, follows: SportsFollows, viewModel: SportsViewModel, showLeague: Boolean, modifier: Modifier = Modifier,
+    /** Up from the top row of teams (search results): where the highlight goes. */
+    upTarget: FocusRequester? = null
+) {
     // Grouped A–Z by city / school, so long lists (134 college teams) are easy to get through.
     val groups = remember(teams) {
         teams.groupBy { (it.location ?: it.fullName).trim().firstOrNull()?.uppercaseChar()?.takeIf { c -> c.isLetter() } ?: '#' }
             .toSortedMap()
     }
+    // The teams in the first row (four across): Up from them leaves the list.
+    val topRow = remember(groups) { groups.values.firstOrNull()?.take(4)?.map { it.key }?.toSet().orEmpty() }
     LazyVerticalGrid(
         columns = GridCells.Fixed(4),
         modifier = modifier.keepFocusWhileHeld(),
@@ -524,7 +537,7 @@ private fun TeamGrid(teams: List<TeamInfo>, follows: SportsFollows, viewModel: S
                 LiveText(letter.toString(), color = NuvioTheme.colors.TextTertiary, size = 11.sp, weight = FontWeight.ExtraBold, modifier = Modifier.padding(top = 4.dp))
             }
             items(list, key = { it.key }) { t ->
-                TeamTile(t, follows.followsTeam(t.leagueId, t.id), showLeague) {
+                TeamTile(t, follows.followsTeam(t.leagueId, t.id), showLeague, Modifier.focusUp(if (t.key in topRow) upTarget else null)) {
                     viewModel.repo.toggleTeam(t)
                 }
             }
@@ -534,11 +547,11 @@ private fun TeamGrid(teams: List<TeamInfo>, follows: SportsFollows, viewModel: S
 
 /** A team in Pick Your Teams: on its band in its colour, like the game cards; ★ when followed. */
 @Composable
-private fun TeamTile(team: TeamInfo, followed: Boolean, showLeague: Boolean, onClick: () -> Unit) {
+private fun TeamTile(team: TeamInfo, followed: Boolean, showLeague: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val c = bandColor(teamColor(team))
     Box(
-        Modifier
+        modifier
             .fillMaxWidth()
             .height(62.dp)
             .sportsFrame(focused, playing = followed && !focused, accent = Color(0xFFF5C400), radius = 12.dp)

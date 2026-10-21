@@ -302,7 +302,7 @@ data class LiveTvSettings(
     /** On Demand posters from your own addons (off = the provider's images only). */
     val onDemandAddonPosters: Boolean = true,
     /** Several playlists: list each playlist's groups under a foldable heading. */
-    val groupPlaylistHeadings: Boolean = false,
+    val groupPlaylistHeadings: Boolean = true,
     /** Channel name editor (TiviMate style): prefixes/suffixes to remove, comma-separated. */
     val nameRemovals: String = "",
     /** Hidden developer tools (Test poster lookup). Turned on with a secret word. */

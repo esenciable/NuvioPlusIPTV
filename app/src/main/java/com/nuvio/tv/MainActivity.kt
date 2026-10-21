@@ -1876,8 +1876,10 @@ private fun LegacySidebarScaffold(
                             showSidebar &&
                             drawerState.currentValue == DrawerValue.Closed &&
                             currentRoute in rootRoutes &&
-                            // Live TV fork: in the guide, holding Back returns to full screen.
+                            // Live TV fork: in the guide and on Sports, holding Back returns to
+                            // full screen (Sports opens the menu itself when nothing's playing).
                             currentRoute != Screen.LiveTv.route &&
+                            currentRoute != Screen.Sports.route &&
                             keyEvent.nativeKeyEvent.isLongPress
                         ) {
                             if (!longPressBackHeld.value) {
@@ -2323,8 +2325,10 @@ private fun ModernSidebarScaffold(
                             !isSidebarExpanded &&
                             !sidebarCollapsePending &&
                             currentRoute in rootRoutes &&
-                            // Live TV fork: in the guide, holding Back returns to full screen.
+                            // Live TV fork: in the guide and on Sports, holding Back returns to
+                            // full screen (Sports opens the menu itself when nothing's playing).
                             currentRoute != Screen.LiveTv.route &&
+                            currentRoute != Screen.Sports.route &&
                             keyEvent.nativeKeyEvent.isLongPress
                         ) {
                             if (!longPressBackHeld.value) {

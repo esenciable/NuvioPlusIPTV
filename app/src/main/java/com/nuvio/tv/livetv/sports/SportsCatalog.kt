@@ -392,8 +392,33 @@ object SportsCatalog {
      * Lowercase with accents, punctuation and "&" sorted out, padded with spaces so whole words
      * can be looked for with [hasWord].
      */
+    /**
+     * Small raised letters some guides put in titles ("ᴸᴵⱽᴱ", "ᴺᴱᵂ", "ʟɪᴠᴇ"): superscript and
+     * small-capital letters, and the ordinary letter each one stands for.
+     */
+    private const val SMALL = "ᴬᴮᴰᴱᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᴿᵀᵁⱽᵂᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻᶦᶫᶰᶸᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘʀꜱᴛᴜᴠᴡʏᴢ⁰¹²³⁴⁵⁶⁷⁸⁹⁺"
+    private const val PLAIN = "abdeghijklmnoprtuvwabcdefghijklmnoprstuvwxyzilnuabcdefghijklmnoprstuvwyz0123456789+"
+    private val SMALL_RUN by lazy { Regex("[$SMALL]+(?:\\s*[$SMALL]+)*") }
+
+    /** The word a run of small raised letters spells ("ᴸᴵⱽᴱ" -> "live"). */
+    private fun plainOf(run: String): String = buildString {
+        run.forEach { ch -> val i = SMALL.indexOf(ch); if (i >= 0) append(PLAIN[i]) else if (ch.isWhitespace()) append(' ') }
+    }
+
+    /** Small raised letters as ordinary ones, as their own word ("Collision ᴸᴵⱽᴱ" -> "Collision live"). */
+    fun plainSmall(s: String): String =
+        if (s.none { it in SMALL }) s else s.replace(SMALL_RUN) { m -> " " + plainOf(m.value) + " " }
+
+    private val SMALL_MARKS = setOf("live", "new", "hd", "fhd", "uhd", "4k")
+
+    /** [s] without small raised "ᴸᴵⱽᴱ", "ᴺᴱᵂ" and "ᴴᴰ" (they're marks, not part of the name). */
+    fun withoutSmallMarks(s: String): String =
+        if (s.none { it in SMALL }) s
+        else s.replace(SMALL_RUN) { m -> if (plainOf(m.value).split(' ').filter { it.isNotBlank() }.all { it in SMALL_MARKS }) " " else m.value }
+            .replace(Regex("\\s+"), " ").trim()
+
     fun norm(s: String): String {
-        val plain = Normalizer.normalize(s, Normalizer.Form.NFD).replace(MARKS, "")
+        val plain = Normalizer.normalize(plainSmall(s), Normalizer.Form.NFD).replace(MARKS, "")
         return " " + plain.lowercase(Locale.ROOT).replace("&", " and ").replace(NOT_WORD, " ").trim().replace(SPACES, " ") + " "
     }
 
@@ -482,12 +507,31 @@ object SportsCatalog {
 }
 
 /**
+ * A show's name without the date some schedules put in it: "NXT - October 20th 2026" -> "NXT",
+ * "Raw: 20/10/2026" -> "Raw", "SmackDown (Oct 24, 2026)" -> "SmackDown". The card shows the date
+ * anyway. A name that's only a date is left as it is.
+ */
+internal fun withoutAirDate(title: String): String {
+    val month = """(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"""
+    val day = """\d{1,2}(?:st|nd|rd|th)?"""
+    val date = listOf(
+        """$month\s+$day,?\s+\d{4}""",        // October 20th 2026, Oct 20, 2026
+        """$day\s+$month,?\s+\d{4}""",        // 20th October 2026
+        """\d{4}-\d{2}-\d{2}""",              // 2026-10-20
+        """\d{1,2}[/.]\d{1,2}[/.]\d{2,4}"""   // 20/10/2026, 10.20.26
+    ).joinToString("|")
+    val trailing = Regex("""\s*(?:[\-–—:|,]\s*)?\(?(?:$date)\)?\s*$""", RegexOption.IGNORE_CASE)
+    val out = title.replace(trailing, "").trim().trimEnd('-', '–', '—', ':', '|', ',').trim()
+    return out.ifBlank { title }
+}
+
+/**
  * A wrestling show's headline: without the promotion in front (its logo is beside it) and without
  * the episode number. A special episode's own name wins: "Collision #168 Fright Night Collision"
  * -> "Fright Night Collision", "RAW #1743" -> "RAW", "WWE Friday Night SmackDown" -> "Friday Night SmackDown".
  */
 internal fun wrestlingHeadline(title: String): String {
-    val t = title.replace(Regex("""(?i)^\s*(wwe|aew|tna|njpw)\s*[:\-–]?\s*"""), "").trim()
+    val t = withoutAirDate(title).replace(Regex("""(?i)^\s*(wwe|aew|tna|njpw)\s*[:\-–]?\s*"""), "").trim()
     val m = Regex("""^(.*?)\s*#\s*\d+\s*(.*)$""").find(t)
     val out = if (m != null) m.groupValues[2].trim().ifBlank { m.groupValues[1].trim() } else t
     return out.ifBlank { title }

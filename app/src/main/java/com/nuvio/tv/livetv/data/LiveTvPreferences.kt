@@ -118,6 +118,8 @@ class LiveTvPreferences @Inject constructor(
         val searchPreview = booleanPreferencesKey("search_preview")
         val onDemandAddonPosters = booleanPreferencesKey("on_demand_addon_posters")
         val groupPlaylistHeadings = booleanPreferencesKey("group_playlist_headings")
+        /** This TV has had Group by Playlist turned on once (per TV, never synced). */
+        val groupPlaylistTurnedOn = booleanPreferencesKey("group_playlist_turned_on_once")
         val nameRemovals = stringPreferencesKey("name_removals")
         val developerTools = booleanPreferencesKey("developer_tools")
         val browseByChannelName = booleanPreferencesKey("browse_by_channel_name")
@@ -255,8 +257,22 @@ class LiveTvPreferences @Inject constructor(
 
     init {
         CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+            runCatching { turnOnPlaylistGroupsOnce() }
+        }
+        CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
             profileManager.activeProfileId.collect { id -> runCatching { seedProfile(id) } }
         }
+    }
+
+    /**
+     * Group by Playlist, switched on once for everyone (people with several playlists kept asking
+     * where it was): the first time this version starts on a TV. Turned off after that, it stays
+     * off: this TV remembers it's been done (kept per TV, not synced) and never does it again.
+     */
+    private suspend fun turnOnPlaylistGroupsOnce() {
+        if (deviceStore.data.first()[Keys.groupPlaylistTurnedOn] == true) return
+        store.edit { it[Keys.groupPlaylistHeadings] = true }
+        deviceStore.edit { it[Keys.groupPlaylistTurnedOn] = true }
     }
 
     val playlists: Flow<List<PlaylistSource>> = store.data

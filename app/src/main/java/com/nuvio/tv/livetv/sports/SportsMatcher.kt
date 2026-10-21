@@ -403,7 +403,15 @@ internal class SportsMatcher(private val db: EpgDatabase) {
         private val MATCHUP = Regex("""\s(?:at|vs|v|versus)\s""")
 
         private val LIVE_PREFIX = Regex("""^\s*(?:live\s*[:\-–|]?\s*)""", RegexOption.IGNORE_CASE)
-        fun cleanTitle(t: String): String = t.replace(LIVE_PREFIX, "").trim().ifBlank { t }
+        // Guides mark first showings: "New: AEW Collision", "AEW Collision (New)", "… - NEW". Only
+        // with the colon, dash or brackets ("New England Patriots" and "New York" stay as they are).
+        private val NEW_PREFIX = Regex("""^\s*\(?new\)?\s*[:\-–|]\s*""", RegexOption.IGNORE_CASE)
+        private val NEW_SUFFIX = Regex("""\s*(?:\(new\)|\[new]|[\-–|]\s*new)\s*$""", RegexOption.IGNORE_CASE)
+        fun cleanTitle(t: String): String {
+            var s = SportsCatalog.withoutSmallMarks(t)
+            repeat(2) { s = s.replace(LIVE_PREFIX, "").replace(NEW_PREFIX, "").replace(NEW_SUFFIX, "").trim() }
+            return s.ifBlank { t }
+        }
 
         /** A network as we key it ("ESPN+" -> "espn plus", "USA Net" -> "usa net"). */
         fun networkKey(name: String): String = norm(name.replace("+", " plus ")).trim()

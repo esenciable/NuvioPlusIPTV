@@ -180,12 +180,24 @@ class LiveTvViewModel @Inject constructor(
         buildUi(channels, user, s, groupIdRaw, query, hasSrc)
     }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Eagerly, LiveTvUiState())
 
+    /** Channels by backup name (see [backupName]); null until first worked out. Declared before
+     *  init, which fills it in the background. */
+    @Volatile private var backupIndex: Map<String, List<LiveChannel>>? = null
+
     init {
         // A provider whose catch-up only works as TS: ask for TS for a week (saves a failed
         // HLS try, about a second, on every replay), then try HLS again; if that fails too,
         // another week of TS, and so on.
         // A channel that won't play: another channel by the same name, if there is one.
         playback.onLiveFailure = { key -> switchToBackup(key) }
+        // Channels by their "backup name", worked out away from the screen whenever the list
+        // changes: looking through every channel when one failed ran on the main thread and,
+        // with a big playlist, froze the app until Android closed it.
+        viewModelScope.launch(Dispatchers.Default) {
+            repository.channels.collectLatest { list ->
+                backupIndex = list.groupBy { backupName(it.name) }
+            }
+        }
         // The audio track picked on each channel, remembered and used every time it plays.
         playback.onAudioChosen = { key, audio -> viewModelScope.launch { prefs.setChannelAudio(key, audio) } }
         viewModelScope.launch { userState.collect { playback.channelAudio = it.channelAudio } }
@@ -446,15 +458,17 @@ class LiveTvViewModel @Inject constructor(
      */
     private fun switchToBackup(failedKey: String): Boolean {
         if (!settings.value.autoBackupChannel) return false
-        val all = repository.channels.value
-        val failed = all.firstOrNull { it.key == failedKey } ?: return false
+        // Not worked out yet (just started): no backup this time, rather than a long search here.
+        val index = backupIndex ?: return false
+        val failed = playback.playingChannel?.takeIf { it.key == failedKey }
+            ?: repository.channels.value.firstOrNull { it.key == failedKey } ?: return false
         backupTried += failedKey
         val name = backupName(failed.name)
         if (name.length < 2) return false
         val s = settings.value
         val user = userState.value
-        val pick = all.asSequence()
-            .filter { it.key !in backupTried && backupName(it.name) == name }
+        val pick = index[name].orEmpty().asSequence()
+            .filter { it.key !in backupTried }
             // Local stations: "FOX (WNYW)" isn't a backup for "FOX (KTTV)".
             .filter { c -> val a = stationNote(failed.name); val b = stationNote(c.name); a == null || b == null || a == b }
             .filter { !com.nuvio.tv.livetv.parental.ParentalControls.isLocked(it.groupId, it.group, s, user.lockedGroups) }
@@ -1364,16 +1378,24 @@ private const val HLS_RETRY_MS = 7L * 24 * 3_600_000L
  * provider prefix ("US: ", "UK | "), bracketed notes and quality or backup words ("HD", "4K",
  * "Backup", "FHD"…). "US: ESPN HD" and "ESPN (Backup)" both give "espn".
  */
+// Made once (making a pattern is slow; this runs for every channel in the list).
+private val BACKUP_PREFIX = Regex("""^\s*[a-z]{2,4}\s*[:|]\s*""")
+private val BACKUP_PREFIX_DASH = Regex("""^\s*[a-z]{2,3}\s+-\s+""")
+private val BACKUP_BRACKETS = Regex("""[\[(][^\])]*[\])]""")
+private val BACKUP_NOISE = Regex("""\b(hd|fhd|uhd|sd|4k|8k|hevc|h\.?26[45]|1080[pi]?|720p?|2160p?|\d{2}\s?fps|backup|bkp|bk|alt|alternate|raw|ᴴᴰ)\b""")
+
 internal fun backupName(name: String): String {
     var s = name.lowercase()
-    s = s.replace(Regex("""^\s*[a-z]{2,4}\s*[:|]\s*"""), "")
-    s = s.replace(Regex("""^\s*[a-z]{2,3}\s+-\s+"""), "")
-    s = s.replace(Regex("""[\[(][^\])]*[\])]"""), " ")
-    s = s.replace(Regex("""\b(hd|fhd|uhd|sd|4k|8k|hevc|h\.?26[45]|1080[pi]?|720p?|2160p?|\d{2}\s?fps|backup|bkp|bk|alt|alternate|raw|ᴴᴰ)\b"""), " ")
+    s = s.replace(BACKUP_PREFIX, "")
+    s = s.replace(BACKUP_PREFIX_DASH, "")
+    s = s.replace(BACKUP_BRACKETS, " ")
+    s = s.replace(BACKUP_NOISE, " ")
     return s.filter { it.isLetterOrDigit() || it == ' ' }.split(' ').filter { it.isNotBlank() }.joinToString(" ")
 }
 
+private val STATION_NOTE = Regex("""[\[(]([^\])]*)[\])]""")
+
 /** The call sign or region in brackets ("FOX (WNYW)" -> "wnyw"), not quality notes like "(HD)". */
 internal fun stationNote(name: String): String? =
-    Regex("""[\[(]([^\])]*)[\])]""").findAll(name.lowercase()).map { it.groupValues[1].trim() }
+    STATION_NOTE.findAll(name.lowercase()).map { it.groupValues[1].trim() }
         .firstOrNull { it.isNotBlank() && backupName(it).isNotBlank() }

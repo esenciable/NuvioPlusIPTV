@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.nuvio.tv.livetv.sports
 
 import androidx.activity.compose.BackHandler
@@ -1064,17 +1066,22 @@ private fun GamePage(
             )
         }
         Spacer(Modifier.height(10.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)) {
+        // Wraps onto a second line instead of running off the side.
+        androidx.compose.foundation.layout.FlowRow(
+            Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             var firstSet = false
             fun f(): Modifier = if (!firstSet) { firstSet = true; Modifier.focusRequester(firstAction) } else Modifier
             val replay = matches.firstOrNull { it.catchup }
             if (replay != null && (ev.state == GameState.LIVE || ev.state == GameState.POST)) {
                 val m = f()
-                item { SportsAction("⏮  From the start", modifier = m, onClick = { onFromStart(replay) }) }
+                run { SportsAction("⏮  From the start", modifier = m, onClick = { onFromStart(replay) }) }
             }
             if (ev.state == GameState.PRE && ev.hasTime) {
                 val m = f()
-                item {
+                run {
                     val on = follows.reminders.any { it.eventId == ev.id }
                     SportsAction(if (on) "🔔  Reminder set" else "🔔  Remind me", modifier = m, selected = on, onClick = {
                         viewModel.repo.toggleReminder(ev)
@@ -1083,7 +1090,7 @@ private fun GamePage(
                 }
                 // With a reminder: switch to the game by itself just before it starts.
                 if (follows.reminders.any { it.eventId == ev.id }) {
-                    item(key = "autoswitch") {
+                    run {
                         val auto = follows.reminders.firstOrNull { it.eventId == ev.id }?.autoSwitch ?: settings.autoSwitch
                         SportsAction(if (auto) "⏩  Switches automatically" else "⏩  Switch automatically", selected = auto, onClick = {
                             viewModel.repo.setAutoSwitch(ev, !auto)
@@ -1095,7 +1102,7 @@ private fun GamePage(
             // Record: pick the channel and how long.
             if (ev.hasTime && (ev.state == GameState.PRE || ev.state == GameState.LIVE) && matches.isNotEmpty()) {
                 val m = f()
-                item(key = "record") {
+                run {
                     val rec = isRecording(ev)
                     SportsAction(if (rec) "●  Recording set" else "●  Record", modifier = m, selected = rec, onClick = {
                         if (rec) { viewModel.cancelRecording(ev); LiveTvNotice.show("Recording cancelled") } else askRecord = true
@@ -1104,7 +1111,7 @@ private fun GamePage(
             }
             sides.forEach { side ->
                 val m = f()
-                item(key = "follow_" + side.team.id) {
+                run {
                     val following = follows.followsTeam(ev.leagueId, side.team.id)
                     SportsAction(
                         if (following) "★  ${side.team.name}" else "☆  Follow ${side.team.name}",
@@ -1114,7 +1121,7 @@ private fun GamePage(
                 }
             }
             val m = f()
-            item { SportsAction(if (matches.isEmpty()) "Pick a channel" else "Fix channel", modifier = m, onClick = onFix) }
+            run { SportsAction(if (matches.isEmpty()) "Pick a channel" else "Fix channel", modifier = m, onClick = onFix) }
         }
     }
     val details: @Composable () -> Unit = {

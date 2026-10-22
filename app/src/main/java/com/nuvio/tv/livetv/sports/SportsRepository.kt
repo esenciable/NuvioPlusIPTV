@@ -61,6 +61,12 @@ class SportsRepository @Inject constructor(
     private val matcher = SportsMatcher(guideDb)
     private val dir = File(context.filesDir, "sports").apply { mkdirs() }
 
+    /** Esencial Sport's events: the fixtures whose stream we serve ourselves. Empty until loaded. */
+    private val addonFeed = SportsAddonFeed(dir)
+
+    @Volatile
+    private var addonCandidates: List<AddonEvent> = emptyList()
+
     val settings: StateFlow<SportsSettings> = prefs.sportsSettingsJson
         .map { SportsSettings.fromJson(it) }
         .stateIn(scope, SharingStarted.Eagerly, SportsSettings())
@@ -276,6 +282,7 @@ class SportsRepository @Inject constructor(
                 runCatching { updatePast(System.currentTimeMillis()) }.onFailure { Log.w(TAG, "Sports past days update failed", it) }
                 runCatching { updateTsdb(System.currentTimeMillis(), force) }.onFailure { Log.w(TAG, "Non-league update failed", it) }
                 runCatching { updateSchedules(System.currentTimeMillis(), force) }.onFailure { Log.w(TAG, "Team schedules update failed", it) }
+                runCatching { refreshAddonFeed(force) }.onFailure { Log.w(TAG, "Addon feed update failed", it) }
             }
             if (active && System.currentTimeMillis() - lastFixtures > 12 * HOUR) {
                 lastFixtures = System.currentTimeMillis()
@@ -285,6 +292,17 @@ class SportsRepository @Inject constructor(
             lastKick = kick.value
             withTimeoutOrNull(wait) { kick.first { it != lastKick } }
         }
+    }
+
+    /**
+     * Loads the addon's event feed beside the other sources. An empty answer keeps what we already
+     * had: a feed that is down or not deployed yet must not take away links the page was using, and
+     * `SportsAddonChannels.decorate` with an empty list changes nothing anyway.
+     */
+    private fun refreshAddonFeed(force: Boolean) {
+        val base = addonBaseUrl
+        if (base.isBlank()) return
+        addonFeed.events(base, force).let { if (it.isNotEmpty()) addonCandidates = it }
     }
 
     private suspend fun updateOnce(now: Long) {
@@ -800,7 +818,9 @@ class SportsRepository @Inject constructor(
                     now = now
                 )
             )
-            _matches.value = result.matches
+            _matches.value = SportsAddonChannels.decorate(
+                result.matches, events.value, addonCandidates, s.blocked
+            )
             if (result.summary != lastSummary) {
                 lastSummary = result.summary
                 LiveTvLoadReport.add(result.summary)
@@ -1038,6 +1058,12 @@ class SportsRepository @Inject constructor(
 
     companion object {
         private const val TAG = "Sports"
+
+        /**
+         * Where Esencial Sport's events come from. Blank disables the whole path, so a build
+         * without the addon behaves exactly as before this existed.
+         */
+        const val addonBaseUrl = "https://esencial.attendanceos.app/kt1gh2mfcxry"
         private const val MINUTE = 60_000L
         private const val HOUR = 60 * MINUTE
         private const val DAY = 24 * HOUR

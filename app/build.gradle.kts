@@ -118,6 +118,18 @@ android {
         buildConfigField("String", "TRAKT_CLIENT_SECRET", "\"${localProperties.getProperty("TRAKT_CLIENT_SECRET", "")}\"")
         buildConfigField("String", "TRAKT_API_URL", "\"${localProperties.getProperty("TRAKT_API_URL", "https://api.trakt.tv/")}\"")
         buildConfigField("String", "TRAKT_REDIRECT_URI", "\"${localProperties.getProperty("TRAKT_REDIRECT_URI", "urn:ietf:wg:oauth:2.0:oob")}\"")
+        // Native Magis VOD engine (ext/livetv/magis). These are deployment secrets, read from
+        // local.properties (gitignored) exactly like the fork: a build without them produces an
+        // INERT source (empty config ⇒ empty native-VOD list), never a broken one. The live
+        // values are also overridden at runtime by magis-config.json (see MagisRemoteConfig).
+        buildConfigField("String", "MAGIS_HOSTS", "\"${localProperties.getProperty("MAGIS_HOSTS", "")}\"")
+        buildConfigField("String", "MAGIS_APP_ID", "\"${localProperties.getProperty("MAGIS_APP_ID", "")}\"")
+        buildConfigField("String", "MAGIS_APK_VERSION", "\"${localProperties.getProperty("MAGIS_APK_VERSION", "")}\"")
+        // The wire headers rotate with the portal too, and they are the FALLBACK values: the live
+        // config comes from magis-config.json at runtime (see MagisRemoteConfig).
+        buildConfigField("String", "MAGIS_APK_VER_HEADER", "\"${localProperties.getProperty("MAGIS_APK_VER_HEADER", "43404")}\"")
+        buildConfigField("String", "MAGIS_SPKG_VER", "\"${localProperties.getProperty("MAGIS_SPKG_VER", "2025-08-07 05:40:11_36_16_")}\"")
+        buildConfigField("String", "MAGIS_3DES_KEY", "\"${localProperties.getProperty("MAGIS_3DES_KEY", "")}\"")
         buildConfigField("String", "SIMKL_CLIENT_ID", buildConfigString(resolveProperty(devProperties, localProperties, "SIMKL_CLIENT_ID")))
         buildConfigField("String", "SIMKL_APP_NAME", buildConfigString(resolveProperty(devProperties, localProperties, "SIMKL_APP_NAME", "nuvio")))
         buildConfigField("String", "MDBLIST_CLIENT_ID", buildConfigString(resolveProperty(devProperties, localProperties, "MDBLIST_CLIENT_ID")))
@@ -597,6 +609,9 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     testImplementation("io.mockk:mockk:1.13.12")
     testImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
+    // Real org.json (not the stubbed android.jar) for the native VOD tests that parse portal
+    // JSON blobs: selection, provider responses and the session/activation flow.
+    testImplementation("org.json:json:20240303")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

@@ -11,6 +11,9 @@ import com.nuvio.tv.domain.model.AddonResource
 import com.nuvio.tv.domain.model.ScraperInfo
 import com.nuvio.tv.domain.repository.AddonRepository
 import com.nuvio.tv.domain.repository.MetaRepository
+import com.nuvio.tv.ext.livetv.data.NativeVodSources
+import com.nuvio.tv.ext.livetv.domain.NativeVodSource
+import com.nuvio.tv.ext.livetv.domain.NativeVodStream
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -57,7 +60,8 @@ class PlaybackAvailabilityViewModelTest {
                 pluginDataStore,
                 metaRepository,
                 serverRepository,
-                serverStreams
+                serverStreams,
+                NativeVodSources(emptyList())
             )
             viewModelStore.put("availability", viewModel)
             backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
@@ -103,4 +107,65 @@ class PlaybackAvailabilityViewModelTest {
             Dispatchers.resetMain()
         }
     }
+
+    /**
+     * The gate that kept our native Magis VOD invisible on a real TV: the Play button reads this
+     * state, and a native source is neither an addon nor a scraper, so nothing else here can see
+     * it. Greyed button ⇒ the streams screen never opens ⇒ the pipeline is never called.
+     */
+    @Test
+    fun `a configured native VOD source allows playback with no addon and no scraper`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val viewModelStore = ViewModelStore()
+        try {
+            val addonRepository = mockk<AddonRepository>()
+            val pluginDataStore = mockk<PluginDataStore>()
+            val metaRepository = mockk<MetaRepository>()
+            every { addonRepository.getInstalledAddons() } returns MutableStateFlow(emptyList())
+            every { pluginDataStore.scrapers } returns MutableStateFlow(emptyList())
+            every { pluginDataStore.pluginsEnabled } returns MutableStateFlow(true)
+            every { metaRepository.getCachedMeta(any(), any()) } returns null
+            val serverRepository = mockk<ServerRepository> {
+                every { uiState } returns MutableStateFlow(ServersUiState())
+            }
+            val serverStreams = mockk<ServerStreams> {
+                every { canServe(any(), any()) } returns false
+            }
+            val viewModel = PlaybackAvailabilityViewModel(
+                addonRepository,
+                pluginDataStore,
+                metaRepository,
+                serverRepository,
+                serverStreams,
+                NativeVodSources(listOf(ConfiguredNativeVodSource())),
+            )
+            viewModelStore.put("availability", viewModel)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                viewModel.availability.collect {}
+            }
+            runCurrent()
+
+            val availability = viewModel.availability.value
+            assertTrue(availability.isLoaded)
+            assertTrue(availability.canStream("movie", "tt2380307"))
+            assertTrue(availability.canStream("series", "tt2380307:1:1"))
+            assertFalse(availability.canStream("tv", "ch1"))
+        } finally {
+            viewModelStore.clear()
+            runCurrent()
+            Dispatchers.resetMain()
+        }
+    }
+}
+
+/** A source that is present and configured but resolves nothing — availability is about sources. */
+private class ConfiguredNativeVodSource : NativeVodSource {
+    override val name: String = "Native Test VOD"
+    override val isConfigured: Boolean = true
+    override suspend fun resolve(
+        type: String,
+        videoId: String,
+        season: Int?,
+        episode: Int?,
+    ): List<NativeVodStream> = emptyList()
 }

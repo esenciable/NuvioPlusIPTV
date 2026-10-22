@@ -11,6 +11,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nuvio.tv.core.build.AppFeaturePolicy
 import com.nuvio.tv.core.streams.PlaybackAvailability
 import com.nuvio.tv.data.local.PluginDataStore
+import com.nuvio.tv.ext.livetv.data.NativeVodSources
 import com.nuvio.tv.data.mediaserver.ServerRepository
 import com.nuvio.tv.data.mediaserver.ServerStreams
 import com.nuvio.tv.domain.repository.AddonRepository
@@ -31,7 +32,8 @@ internal class PlaybackAvailabilityViewModel @Inject constructor(
     pluginDataStore: PluginDataStore,
     metaRepository: MetaRepository,
     serverRepository: ServerRepository,
-    serverStreams: ServerStreams
+    serverStreams: ServerStreams,
+    private val nativeVodSources: NativeVodSources,
 ) : ViewModel() {
     private val enabledScrapers = if (AppFeaturePolicy.pluginsEnabled) {
         combine(pluginDataStore.scrapers, pluginDataStore.pluginsEnabled) { scrapers, enabled ->
@@ -50,6 +52,9 @@ internal class PlaybackAvailabilityViewModel @Inject constructor(
             addons,
             scrapers,
             isLoaded = true,
+            // Re-evaluated per emission: a native source reports `isConfigured` from its live
+            // config, so a portal rotation lands on the next refresh without restarting the app.
+            nativeVodAvailable = nativeVodSources.configuredSources().isNotEmpty(),
             cachedMeta = metaRepository::getCachedMeta,
             serverStreams = serverStreams::canServe
         )

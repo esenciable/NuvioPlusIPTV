@@ -21,6 +21,22 @@ class PlaybackAvailabilityTest {
         assertFalse(PlaybackAvailability(addons = listOf(metaAddon)).canStream("movie", "tt123"))
     }
 
+    /**
+     * The native Magis VOD engine resolves inside the APK: no addon installed, no scraper toggle
+     * flipped, no media server. Without this clause the detail screen greys the Play button out
+     * ("Playback unavailable"), the streams screen never opens, and the native source is never
+     * asked — the feature is invisible no matter what the pipeline can do.
+     */
+    @Test
+    fun `a configured native VOD source makes movies and series playable with nothing else`() {
+        val nativeVod = PlaybackAvailability(nativeVodAvailable = true)
+        assertTrue(nativeVod.canStream("movie", "tt2380307"))
+        assertTrue(nativeVod.canStream("series", "tt2380307:1:1"))
+        // Live TV belongs to the IPTV path, never to the native VOD engine.
+        assertFalse(nativeVod.canStream("tv", "ch1"))
+        assertFalse(PlaybackAvailability().canStream("movie", "tt2380307"))
+    }
+
     @Test
     fun `addon must be enabled and match the type and video prefix`() {
         val available = PlaybackAvailability(addons = listOf(addon()))

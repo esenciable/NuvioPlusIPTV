@@ -31,6 +31,9 @@ import com.nuvio.tv.core.streams.supportsStreamResource
 import com.nuvio.tv.domain.model.enabledAddons
 import com.nuvio.tv.domain.repository.AddonRepository
 import com.nuvio.tv.domain.repository.StreamRepository
+import com.nuvio.tv.ext.livetv.data.NativeVodSources
+import com.nuvio.tv.ext.livetv.data.NativeVodStreams
+import com.nuvio.tv.ext.livetv.domain.NativeVodStream
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -59,7 +62,10 @@ class StreamRepositoryImpl @Inject constructor(
     private val tmdbService: TmdbService,
     private val debridStreamPresentation: DebridStreamPresentation,
     private val localDebridAvailabilityService: LocalDebridAvailabilityService,
-    private val serverStreams: ServerStreams
+    private val serverStreams: ServerStreams,
+    // Native VOD sources (e.g. Magis) resolve on-device beside the scrapers; the default keeps
+    // the constructor usable without the feature.
+    private val nativeVodSources: NativeVodSources = NativeVodSources(emptyList())
 ) : StreamRepository {
     private val streamSearchSessions = StreamSearchSessionCache()
     private val localPluginSearchPaused = MutableStateFlow(false)
@@ -210,8 +216,13 @@ class StreamRepositoryImpl @Inject constructor(
                 // Channel to receive results as they complete
                 val resultChannel = Channel<AddonStreams>(Channel.UNLIMITED)
                 
-                // Track number of pending jobs
-                val totalJobs = streamAddons.size + 1 + serverSources.size
+                // Track number of pending jobs. The native VOD sources add ONE job each, so their
+                // own count belongs here: an absent (unconfigured) source resolves no job and is
+                // not counted either — a count smaller than the number of jobs leaves the channel
+                // open and the streams screen waits forever, a bigger one closes it early and cuts
+                // the native group off. Silent either way.
+                val nativeSources = nativeVodSources.configuredSources()
+                val totalJobs = streamAddons.size + 1 + serverSources.size + nativeSources.size
                 val completedJobs = java.util.concurrent.atomic.AtomicInteger(0)
 
                 // Launch addon jobs
@@ -292,6 +303,41 @@ class StreamRepositoryImpl @Inject constructor(
                                 kind = StreamFailureKind.REQUEST_FAILED,
                                 detail = context.getString(e.serverFailure().messageRes())
                             )
+                        } finally {
+                            if (completedJobs.incrementAndGet() >= totalJobs) {
+                                resultChannel.close()
+                            }
+                        }
+                    }
+                }
+
+                // Native VOD sources resolve on-device, in PARALLEL with the scrapers and
+                // without blocking them: each source's streams enter the same resultChannel as
+                // their own AddonStreams group, named after the source. A native failure is
+                // logged and skipped — it can never break the stream screen. The native streams
+                // are direct portal CDN URLs emitted from here, so they never touch the
+                // scraper-only plugin path.
+                nativeSources.forEach { source ->
+                    launch {
+                        try {
+                            val streams = source.resolve(
+                                type = type,
+                                videoId = videoId,
+                                season = season,
+                                episode = episode,
+                            )
+                            if (streams.isNotEmpty()) {
+                                resultChannel.send(
+                                    NativeVodStreams(
+                                        sourceName = source.name,
+                                        streams = streams,
+                                    ).toAddonStreams()
+                                )
+                                Log.d(TAG, "Streamed ${streams.size} results from ${source.name}")
+                            }
+                        } catch (e: Exception) {
+                            if (e is CancellationException) throw e
+                            Log.e(TAG, "Native source ${source.name} failed: ${e.message}")
                         } finally {
                             if (completedJobs.incrementAndGet() >= totalJobs) {
                                 resultChannel.close()
@@ -482,6 +528,43 @@ class StreamRepositoryImpl @Inject constructor(
         incoming.forEach { stream -> streamsByKey[stream.dedupKey()] = stream }
         return streamsByKey.values.toList()
     }
+
+    /** The source's resolved streams as their own `AddonStreams` group, named after the source. */
+    private fun NativeVodStreams.toAddonStreams(): AddonStreams =
+        AddonStreams(
+            addonName = sourceName,
+            addonLogo = null,
+            streams = streams.map { it.toStream(sourceName) }
+        )
+
+    /**
+     * The source's own stream model mapped onto the app's [Stream]: a direct URL with the CDN
+     * headers riding `proxyHeaders.request`, the same way scraper header maps travel.
+     */
+    private fun NativeVodStream.toStream(sourceName: String) = Stream(
+        name = sourceName,
+        title = sourceName,
+        description = null,
+        url = url,
+        ytId = null,
+        infoHash = null,
+        fileIdx = null,
+        externalUrl = null,
+        // The plugin this replaces answers quality "Auto" for the same stream, so the row reads
+        // the same and the quality-aware ranking treats it the same. A null quality would render
+        // bare and could rank the stream below its peers in auto-play.
+        quality = "Auto",
+        behaviorHints = headers.takeIf { it.isNotEmpty() }?.let { headers ->
+            StreamBehaviorHints(
+                notWebReady = null,
+                bingeGroup = null,
+                countryWhitelist = null,
+                proxyHeaders = ProxyHeaders(request = headers, response = null)
+            )
+        },
+        addonName = sourceName,
+        addonLogo = null,
+    )
 
     /**
      * Stream local plugin results - each scraper sends results individually

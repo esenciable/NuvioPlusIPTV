@@ -47,8 +47,16 @@ internal class SportsMatcher(private val db: EpgDatabase) {
 
         val wanted = input.events.filter { ev ->
             ev.state != GameState.OFF && ev.hasTime &&
-                ev.startMs in (input.now - 8 * HOUR)..(input.now + 56 * HOUR)
+                ev.startMs in (input.now - 8 * HOUR)..(input.now + AHEAD_MS)
         }
+        // A channel you picked yourself shows straight away, however far off the game is (the
+        // search above only looks a couple of days ahead).
+        val picked = input.events.filter { ev ->
+            ev.state != GameState.OFF && ev.hasTime && ev.startMs >= input.now - 8 * HOUR &&
+                (ev.id in input.settings.eventChannels ||
+                    (input.settings.teamChannels.isNotEmpty() && ev.sides.any { teamChannelKey(ev.leagueId, it.team.id) in input.settings.teamChannels }))
+        }
+        val byId = (wanted + picked).associateBy { it.id }
         var byGuide = 0; var byName = 0; var byNetwork = 0
 
         // Shows found in the guide already know their channels.
@@ -153,7 +161,7 @@ internal class SportsMatcher(private val db: EpgDatabase) {
         }
 
         // ---- 4. Your own fixes: this game, then every game of a team.
-        for (ev in wanted) {
+        for (ev in byId.values) {
             input.settings.eventChannels[ev.id]?.substringBefore('|')?.let { add(ev.id, it, 200, "Your pick", null) }
             if (input.settings.teamChannels.isNotEmpty()) for (side in ev.sides) {
                 input.settings.teamChannels[teamChannelKey(ev.leagueId, side.team.id)]?.let { add(ev.id, it, 150, "Your channel for ${side.team.name}", null) }
@@ -162,7 +170,7 @@ internal class SportsMatcher(private val db: EpgDatabase) {
 
         val out = HashMap<String, List<ChannelMatch>>()
         for ((eventId, m) in found) {
-            val ev = wanted.firstOrNull { it.id == eventId } ?: continue
+            val ev = byId[eventId] ?: continue
             val list = m.values
                 .filter { "$eventId|${it.key}" !in input.settings.blocked }
                 .mapNotNull { f ->
@@ -377,6 +385,8 @@ internal class SportsMatcher(private val db: EpgDatabase) {
     companion object {
         private const val MINUTE = 60_000L
         private const val HOUR = 60 * MINUTE
+        /** How far ahead games are looked for in your channels (most guides cover 2–3 days). */
+        const val AHEAD_MS = 56 * HOUR
 
         private val NAME_PREFIX = Regex("""^\s*[A-Za-z]{2,3}\s*[:|\-]\s*""")
         private val NAME_NOISE = Regex(""" (fhd|uhd|hd|sd|4k|hevc|raw|backup|vip) """)

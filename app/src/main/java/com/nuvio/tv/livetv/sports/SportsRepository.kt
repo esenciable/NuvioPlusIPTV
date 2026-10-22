@@ -85,6 +85,8 @@ class SportsRepository @Inject constructor(
     /** Non-league football (nuvio-data files): whole seasons, by league id. */
     private val tsdbData = MutableStateFlow<Map<String, LeagueData>>(emptyMap())
     private val tsdbTeams = java.util.concurrent.ConcurrentHashMap<String, List<TeamInfo>>()
+    /** Games of teams looked up on a table (their card), by team key: so their game pages open. */
+    private val lookedUp = MutableStateFlow<Map<String, LeagueData>>(emptyMap())
     /** Shows found in the guide, by day (the day's start). */
     private val guideData = MutableStateFlow<Map<Long, List<SportsEvent>>>(emptyMap())
 
@@ -127,10 +129,11 @@ class SportsRepository @Inject constructor(
      * Everything we know, for My Teams: the page's days plus your teams' whole seasons and the
      * non-league seasons. A game in both counts once (the fresher copy, from the page's days).
      */
-    val known: StateFlow<List<SportsEvent>> = combine(events, scheduleData, tsdbData, aheadData) { ev, s, t, a ->
+    val known: StateFlow<List<SportsEvent>> = combine(events, scheduleData, tsdbData, aheadData, lookedUp) { ev, s, t, a, lu ->
         val seen = HashSet<String>(ev.size * 2)
         ev.forEach { seen += dedupeKey(it) }
-        val extra = (a.values.flatMap { it.events } + s.values.flatMap { it.events } + t.values.flatMap { it.events }).filter { seen.add(dedupeKey(it)) }
+        val extra = (a.values.flatMap { it.events } + s.values.flatMap { it.events } + t.values.flatMap { it.events } + lu.values.flatMap { it.events })
+            .filter { seen.add(dedupeKey(it)) }
         ev + extra
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
@@ -853,6 +856,165 @@ class SportsRepository @Inject constructor(
     private val teamCache = HashMap<String, List<TeamInfo>>()
 
     /** A league's teams (for Pick Your Teams): saved for a week, then fetched again. */
+    // ------------------------------------------------------------------ tables
+
+    private val _standings = MutableStateFlow<Map<String, Standings>>(emptyMap())
+    /** League tables looked at (or needed for My Sports' row headers), by league id. */
+    val standings: StateFlow<Map<String, Standings>> = _standings.asStateFlow()
+    /** Leagues without a table (a cup, golf…): when we found out, so they aren't asked again for a while. */
+    private val noTable = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val tableLocks = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.sync.Mutex>()
+
+    /** Whether [league] might have a table (it's asked once; one without is left out after that). */
+    fun mayHaveTable(league: League): Boolean {
+        if (noTable.containsKey(league.id) && System.currentTimeMillis() - (noTable[league.id] ?: 0L) < 12 * HOUR) return false
+        if (league.guideOnly) return false
+        if (league.id.startsWith("tsdb/")) return true
+        if (league.espnPath == null) return false
+        if (league.kind == LeagueKind.EVENT) return league.sport == Sport.RACING && league.id in RACING_TABLES
+        return league.sport !in setOf(Sport.GOLF, Sport.TENNIS, Sport.FIGHTING, Sport.WRESTLING, Sport.DARTS, Sport.SNOOKER)
+    }
+
+    /**
+     * Leagues for the Tables page, in My Sports' order: your teams' leagues (and the European
+     * club competitions they play in), the leagues you follow and the ones on your top bar.
+     */
+    fun tableLeagues(f: SportsFollows = follows.value): List<League> {
+        val ids = LinkedHashSet<String>()
+        for (key in SportsRows.rowKeys(f)) {
+            when {
+                key.startsWith("t:") -> f.teams.firstOrNull { "t:${it.key}" == key }?.let { t ->
+                    ids += t.leagueId
+                    SportsCatalog.relatedLeagues(t.leagueId).filter { it in EUROPEAN_TABLES }.forEach { ids += it }
+                }
+                key.startsWith("l:") -> ids += key.removePrefix("l:")
+            }
+        }
+        return ids.mapNotNull { SportsCatalog.league(it) }.filter { mayHaveTable(it) }
+    }
+
+    /**
+     * [leagueId]'s table: from memory when it's under an hour old ([force]: fetched again),
+     * otherwise from ESPN or the nuvio-data file, with recent form and places moved since the
+     * last round. Null when the league has no table (or it can't be had right now).
+     */
+    suspend fun standings(leagueId: String, force: Boolean = false): Standings? = withContext(Dispatchers.IO) {
+        val league = SportsCatalog.league(leagueId) ?: return@withContext null
+        val lock = tableLocks.getOrPut(leagueId) { kotlinx.coroutines.sync.Mutex() }
+        lock.lock()
+        try {
+            val now = System.currentTimeMillis()
+            _standings.value[leagueId]?.let { if (!force && now - it.fetchedAt < HOUR) return@withContext it }
+            if (!mayHaveTable(league)) return@withContext null
+            val file = File(dir, "table_${safe(leagueId)}.json")
+            val raw = runCatching {
+                if (leagueId.startsWith("tsdb/")) feeds.footballLeagueRaw(leagueId.removePrefix("tsdb/"))
+                else feeds.standingsRaw(Standings.espnUrl(league) ?: return@withContext null)
+            }.getOrElse { e ->
+                Log.w(TAG, "Table for $leagueId failed: ${describe(e)}")
+                // No connection: the last copy (it says how old it is on the page).
+                val old = runCatching { file.takeIf { it.exists() }?.readText() }.getOrNull()
+                val at = old?.substringBefore('\n')?.toLongOrNull() ?: return@withContext _standings.value[leagueId]
+                return@withContext (parseTable(league, old!!.substringAfter('\n'), at) ?: _standings.value[leagueId])
+                    ?.also { st -> _standings.update { it + (leagueId to st) } }
+            }
+            var table = parseTable(league, raw, now)
+            if (table == null) {
+                noTable[leagueId] = now
+                return@withContext null
+            }
+            runCatching { file.writeText("$now\n$raw") }
+            // Form (the last five as squares): ESPN's tables don't have it, so it comes from the last
+            // six weeks' results (one request).
+            if (table.kind != StandingsKind.RACING && table.source == "ESPN") {
+                val recent = known.value.filter { it.leagueId == leagueId }
+                val past = runCatching {
+                    val fmt = SimpleDateFormat("yyyyMMdd", Locale.US).apply { timeZone = TimeZone.getTimeZone("America/New_York") }
+                    SportsFeeds.parseScoreboard(league, feeds.scoreboardRaw(league, fmt.format(now - 42 * DAY), fmt.format(now)))
+                }.getOrDefault(emptyList())
+                table = Standings.withForm(table, Standings.formFrom((past + recent).distinctBy { it.espnId ?: it.id }, leagueId))
+            }
+            // Team colours for the rows: the league's team list (kept for a week), else games we know.
+            if (table.kind != StandingsKind.RACING) {
+                val listed = if (league.espnPath != null) runCatching { leagueTeams(league) }.getOrDefault(emptyList()).associateBy { it.id } else emptyMap()
+                val fam = SportsCatalog.teamFamily(leagueId)
+                val seen = HashMap<String, TeamInfo>()
+                if (listed.size < table.groups.sumOf { it.rows.size }) known.value.forEach { ev ->
+                    ev.sides.forEach { sd -> if (sd.team.color != null && SportsCatalog.teamFamily(sd.team.leagueId) == fam) seen.putIfAbsent(sd.team.id, sd.team) }
+                }
+                table = table.copy(groups = table.groups.map { g ->
+                    g.copy(rows = g.rows.map { r ->
+                        val t = listed[r.id]?.takeIf { it.color != null || it.altColor != null } ?: seen[r.id]
+                        if (t == null) r else r.copy(color = t.color, altColor = t.altColor, logo = r.logo ?: t.logo)
+                    })
+                })
+            }
+            // Places moved since the last round (remembered on this TV).
+            val mem = File(dir, "table_moves_${safe(leagueId)}.json")
+            val (moved, save) = Standings.withChanges(table, runCatching { mem.takeIf { it.exists() }?.readText() }.getOrNull())
+            runCatching { mem.writeText(save) }
+            _standings.update { it + (leagueId to moved) }
+            moved
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    private fun parseTable(league: League, raw: String, at: Long): Standings? = runCatching {
+        if (league.id.startsWith("tsdb/")) Standings.parseTsdb(league, raw, at) else Standings.parseEspn(league, raw, at)
+    }.getOrNull()?.takeIf { s -> s.groups.any { it.rows.isNotEmpty() } }
+
+    /** The tables My Sports' row headers need ("2nd in Premier League"): your teams' own leagues. */
+    suspend fun loadTeamTables() {
+        val ids = follows.value.teams.map { it.leagueId }.distinct()
+        for (id in ids) {
+            val l = SportsCatalog.league(id) ?: continue
+            if (!mayHaveTable(l)) continue
+            runCatching { standings(id) }
+        }
+    }
+
+    /**
+     * A team as the app knows it (colours and logo from its league's team list), for a row of a
+     * table: so following it from the table is the same as following it anywhere else.
+     */
+    fun teamFor(leagueId: String, row: StandingsRow): TeamInfo {
+        val league = SportsCatalog.league(leagueId)
+        val info = league?.let { l -> (synchronized(teamCache) { teamCache[l.id] } ?: cachedTeams(l)).firstOrNull { it.id == row.id } }
+            ?: tsdbTeams[leagueId]?.firstOrNull { it.id == row.id }
+            ?: known.value.asSequence().flatMap { it.sides.asSequence() }.map { it.team }
+                .firstOrNull { it.id == row.id && SportsCatalog.teamFamily(it.leagueId) == SportsCatalog.teamFamily(leagueId) }
+        return info?.copy(leagueId = leagueId, logo = info.logo ?: row.logo)
+            ?: TeamInfo(leagueId, row.id, row.shortName, row.name, row.abbr, null, null, null, row.logo)
+    }
+
+    /**
+     * A team's games for its card: results and games to come. A followed team's season is
+     * already here; another team's is fetched (and kept for an hour, so its games open).
+     */
+    suspend fun teamGames(team: TeamInfo): List<SportsEvent> = withContext(Dispatchers.IO) {
+        val fam = SportsCatalog.teamFamily(team.leagueId)
+        fun mine(ev: SportsEvent) = ev.sides.any { it.team.id == team.id && SportsCatalog.teamFamily(it.team.leagueId) == fam }
+        val now = System.currentTimeMillis()
+        val league = SportsCatalog.league(team.leagueId)
+        val followed = follows.value.teams.any { it.leagueId == team.leagueId && it.teamId == team.id }
+        val cur = lookedUp.value[team.key]
+        val path = league?.espnPath
+        if (!followed && league != null && path != null && (cur == null || now - cur.fetchedAt > HOUR)) {
+            val raws = ArrayList<Pair<League, String>>()
+            runCatching { feeds.teamScheduleRaw(path, team.id, fixtures = false) }.getOrNull()?.let { raws += league to it }
+            if (path.startsWith("soccer/") || league.national) {
+                runCatching { feeds.teamScheduleRaw(path, team.id, fixtures = true) }.getOrNull()?.let { raws += league to it }
+            }
+            if (raws.isNotEmpty()) {
+                val list = mergeSchedule(raws)
+                // Only a few teams at a time (the most recent ones).
+                lookedUp.update { m -> (m + (team.key to LeagueData(list, now, null))).entries.sortedByDescending { it.value.fetchedAt }.take(6).associate { it.key to it.value } }
+            }
+        }
+        known.value.filter(::mine).distinctBy { dedupeKey(it) }.sortedBy { it.startMs }
+    }
+
     suspend fun teams(league: League): List<TeamInfo> = withContext(Dispatchers.IO) {
         if (league.id.startsWith("tsdb/")) {
             if (tsdbTeams[league.id] == null) runCatching { feeds.footballIndexRaw() }.getOrNull()?.let { raw ->
@@ -890,22 +1052,34 @@ class SportsRepository @Inject constructor(
         return list
     }
 
-    /** Event id -> when asked, the score then, the plays. A new score asks again straight away. */
-    private val playsCache = HashMap<String, Triple<Long, String, List<ScoringPlay>>>()
+    /** A game's summary as last asked: when, the score then, its scoring plays and the rest. */
+    private class GameSummary(val at: Long, val sig: String, val plays: List<ScoringPlay>, val extras: GameExtras)
+    private val summaryCache = HashMap<String, GameSummary>()
+
+    /**
+     * The game's ESPN summary, one request for the latest scoring and everything under it (team
+     * stats, leaders, form, the table…). Asked again after 25 seconds while it's on (straight away
+     * when the score changes), otherwise after half an hour.
+     */
+    private suspend fun summaryFor(ev: SportsEvent): GameSummary? = withContext(Dispatchers.IO) {
+        val league = SportsCatalog.league(ev.leagueId) ?: return@withContext null
+        val id = ev.espnId ?: return@withContext null
+        if (league.kind != LeagueKind.TEAMS || league.espnPath == null) return@withContext null
+        val sig = "${ev.away?.score}-${ev.home?.score}-${ev.state}"
+        val cached = synchronized(summaryCache) { summaryCache[ev.id] }
+        if (cached != null && cached.sig == sig && System.currentTimeMillis() - cached.at < (if (ev.state == GameState.LIVE) 25_000 else 30 * MINUTE)) return@withContext cached
+        val root = runCatching { feeds.summaryJson(league, id) }.getOrNull() ?: return@withContext cached
+        val plays = if (ev.state == GameState.PRE) emptyList() else runCatching { SportsFeeds.parseSummary(root) }.getOrDefault(emptyList())
+        val extras = runCatching { SportsExtras.parse(root, ev, league.sport) }.getOrDefault(GameExtras())
+        GameSummary(System.currentTimeMillis(), sig, plays, extras).also { synchronized(summaryCache) { summaryCache[ev.id] = it } }
+    }
 
     /** The game's scoring plays (touchdowns, goals…), when ESPN has them. */
-    suspend fun scoringPlays(ev: SportsEvent): List<ScoringPlay> = withContext(Dispatchers.IO) {
-        val league = SportsCatalog.league(ev.leagueId) ?: return@withContext emptyList()
-        val id = ev.espnId ?: return@withContext emptyList()
-        if (ev.state == GameState.PRE || league.kind != LeagueKind.TEAMS) return@withContext emptyList()
-        val sig = "${ev.away?.score}-${ev.home?.score}-${ev.state}"
-        synchronized(playsCache) { playsCache[ev.id] }?.let { (at, was, list) ->
-            if (was == sig && System.currentTimeMillis() - at < (if (ev.state == GameState.LIVE) 25_000 else 30 * MINUTE)) return@withContext list
-        }
-        val list = runCatching { feeds.summary(league, id) }.getOrNull() ?: return@withContext synchronized(playsCache) { playsCache[ev.id]?.third }.orEmpty()
-        synchronized(playsCache) { playsCache[ev.id] = Triple(System.currentTimeMillis(), sig, list) }
-        list
-    }
+    suspend fun scoringPlays(ev: SportsEvent): List<ScoringPlay> =
+        if (ev.state == GameState.PRE) emptyList() else summaryFor(ev)?.plays.orEmpty()
+
+    /** Everything else about the game ESPN has (see [GameExtras]); null when there's nothing to ask. */
+    suspend fun gameExtras(ev: SportsEvent): GameExtras? = summaryFor(ev)?.extras
 
     // ------------------------------------------------------------------ your choices
 
@@ -1038,6 +1212,10 @@ class SportsRepository @Inject constructor(
 
     companion object {
         private const val TAG = "Sports"
+        /** Racing series with a drivers' table on ESPN. */
+        private val RACING_TABLES = setOf("racing/f1", "racing/nascar-premier", "racing/nascar-secondary", "racing/nascar-truck", "racing/irl")
+        /** Club competitions with a table of their own (the league phase), shown with your team's league. */
+        private val EUROPEAN_TABLES = setOf("soccer/uefa.champions", "soccer/uefa.europa", "soccer/uefa.europa.conf")
         private const val MINUTE = 60_000L
         private const val HOUR = 60 * MINUTE
         private const val DAY = 24 * HOUR

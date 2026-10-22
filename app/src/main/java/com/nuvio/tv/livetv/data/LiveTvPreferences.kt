@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
 import com.nuvio.tv.livetv.model.ChannelSort
+import com.nuvio.tv.livetv.model.matchFrameRate
 import com.nuvio.tv.livetv.model.CustomGroup
 import com.nuvio.tv.livetv.model.EpgSource
 import com.nuvio.tv.livetv.model.LiveTvSettings
@@ -109,6 +110,7 @@ class LiveTvPreferences @Inject constructor(
         val showQualityBadges = booleanPreferencesKey("show_quality_badges")
         val showFrameRate = booleanPreferencesKey("show_frame_rate")
         val matchFrameRate = booleanPreferencesKey("match_frame_rate")
+        val frameRateMode = stringPreferencesKey("frame_rate_mode")
         val onDemandInSidebar = booleanPreferencesKey("on_demand_in_sidebar")
         val recordingsInSidebar = booleanPreferencesKey("recordings_in_sidebar")
         val onDemandInStreams = booleanPreferencesKey("on_demand_in_streams")
@@ -338,7 +340,8 @@ class LiveTvPreferences @Inject constructor(
             lockAdultContent = p[Keys.lockAdultContent] ?: d.lockAdultContent,
             showQualityBadges = p[Keys.showQualityBadges] ?: d.showQualityBadges,
             showFrameRate = p[Keys.showFrameRate] ?: d.showFrameRate,
-            matchFrameRate = p[Keys.matchFrameRate] ?: d.matchFrameRate,
+            // Before the three choices it was on or off; on worked like "On start/stop".
+            frameRateMode = p[Keys.frameRateMode] ?: if (p[Keys.matchFrameRate] == true) "START_STOP" else d.frameRateMode,
             onDemandInSidebar = p[Keys.onDemandInSidebar] ?: d.onDemandInSidebar,
             recordingsInSidebar = p[Keys.recordingsInSidebar] ?: d.recordingsInSidebar,
             onDemandInStreams = p[Keys.onDemandInStreams] ?: d.onDemandInStreams,
@@ -525,6 +528,7 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.lockAdultContent] = s.lockAdultContent
         p[Keys.showQualityBadges] = s.showQualityBadges
         p[Keys.showFrameRate] = s.showFrameRate
+        p[Keys.frameRateMode] = s.frameRateMode
         p[Keys.matchFrameRate] = s.matchFrameRate
         p[Keys.onDemandInSidebar] = s.onDemandInSidebar
         p[Keys.recordingsInSidebar] = s.recordingsInSidebar

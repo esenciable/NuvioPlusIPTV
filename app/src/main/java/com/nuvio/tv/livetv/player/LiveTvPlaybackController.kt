@@ -560,6 +560,8 @@ class LiveTvPlaybackController @Inject constructor(
         if (currentChannel?.key != channel.key || currentUrl != url) {
             forcedMime = null
             formatGuess = 0
+            // A new stream (catch-up, another link): ask for the saved audio language again.
+            audioPrefPending = true
         }
         // A channel whose "HLS" turned out to be plain TS: read it as TS from the start.
         if (catchupTitle == null && channel.key in plainTs && overrideUrl == null) forcedMime = MimeTypes.VIDEO_MP2T
@@ -1035,7 +1037,10 @@ class LiveTvPlaybackController @Inject constructor(
         audioHandled = true
         selectTrack(C.TRACK_TYPE_AUDIO, option)
         val key = currentChannel?.key ?: return
-        val saved = listOf(option.language.orEmpty(), option.label, option.channels.toString()).joinToString("|")
+        // Its place in the list too: streams often have several tracks with the same name and no
+        // language ("AAC 2ch" twice), and the name alone picked the first of them every time.
+        val position = tracksOf(C.TRACK_TYPE_AUDIO).indexOfFirst { it.groupIndex == option.groupIndex && it.trackIndex == option.trackIndex }
+        val saved = listOf(option.language.orEmpty(), option.label, option.channels.toString(), position.toString()).joinToString("|")
         channelAudio = channelAudio + (key to saved)
         _player?.let { p ->
             // Later streams on this channel (catch-up, a reconnect) start in this language too.
@@ -1052,21 +1057,28 @@ class LiveTvPlaybackController @Inject constructor(
      * main or audio description), by its label and number of channels.
      */
     private fun applySavedAudio() {
-        if (audioHandled) return
         val key = currentChannel?.key ?: return
         val options = tracksOf(C.TRACK_TYPE_AUDIO)
         if (options.isEmpty()) return
+        // Checked every time the tracks change, not just once per channel: a reconnect or a
+        // catch-up brings new tracks, and the player went back to the stream's default audio.
         audioHandled = true
         val parts = channelAudio[key]?.split('|') ?: return
         val lang = parts.getOrNull(0).orEmpty()
         val label = parts.getOrNull(1).orEmpty()
         val chans = parts.getOrNull(2)?.toIntOrNull() ?: 0
+        val position = parts.getOrNull(3)?.toIntOrNull() ?: -1
         fun sameLang(o: LiveTrackOption) = lang.isNotBlank() && o.language != null &&
             java.util.Locale.forLanguageTag(o.language).language == java.util.Locale.forLanguageTag(lang).language
-        val pick = options.firstOrNull { it.label == label }
-            ?: options.firstOrNull { sameLang(it) && it.channels == chans }
-            ?: options.firstOrNull { sameLang(it) }
-            ?: return
+        val sameName = options.filter { it.label == label }
+        val pick = when {
+            sameName.size == 1 -> sameName[0]
+            // Several with that name: the one in the same place as before.
+            sameName.size > 1 -> options.getOrNull(position)?.takeIf { it.label == label } ?: sameName[0]
+            else -> options.firstOrNull { sameLang(it) && it.channels == chans }
+                ?: options.firstOrNull { sameLang(it) }
+                ?: options.getOrNull(position)?.takeIf { lang.isBlank() && (chans == 0 || it.channels == chans) }
+        } ?: return
         if (!pick.selected) selectTrack(C.TRACK_TYPE_AUDIO, pick)
     }
     /**

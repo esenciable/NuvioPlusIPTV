@@ -229,13 +229,9 @@ fun LiveTvGuideScreen(
     val status by viewModel.status.collectAsStateWithLifecycle()
     val playback by viewModel.playbackState.collectAsStateWithLifecycle()
     // A channel playing in the preview window: keep the TV awake (no screen saver), like full
-    // screen does. Also set again when full screen closes (it clears it on the way out).
-    val awakeView = androidx.compose.ui.platform.LocalView.current
+    // screen does (full screen keeps it awake too; see KeepScreenAwake).
     val previewPlaying = playback.channelKey != null && (playback.isPlaying || playback.isBuffering) && !playback.userPaused
-    DisposableEffect(previewPlaying, fullscreen) {
-        if (previewPlaying) awakeView.keepScreenOn = true
-        onDispose { if (!fullscreen) awakeView.keepScreenOn = false }
-    }
+    KeepScreenAwake(previewPlaying)
     val now by viewModel.now.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
@@ -2080,13 +2076,20 @@ private fun GuideHeader(
                         Spacer(Modifier.height(if (small) 2.dp else 4.dp))
                     }
                 }
-                LiveText(
-                    text = about?.description?.takeIf { it.isNotBlank() }
-                        ?: p?.description ?: if (p == null) "No program information" else "",
-                    color = NuvioTheme.colors.TextSecondary,
-                    size = if (small) 13.sp else 14.sp,
-                    maxLines = if (small) 1 else 2
-                )
+                // As many lines as fit in the space left (it was one line on the small panel and
+                // two on the standard one, however much room there was).
+                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                    val textSize = if (small) 13.sp else 14.sp
+                    val lineHeight = with(androidx.compose.ui.platform.LocalDensity.current) { textSize.toDp() } * 1.45f
+                    val lines = (maxHeight / lineHeight).toInt().coerceIn(1, 8)
+                    LiveText(
+                        text = about?.description?.takeIf { it.isNotBlank() }
+                            ?: p?.description ?: if (p == null) "No program information" else "",
+                        color = NuvioTheme.colors.TextSecondary,
+                        size = textSize,
+                        maxLines = lines
+                    )
+                }
             } else if (status != null) {
                 LiveText(status, color = NuvioTheme.colors.TextSecondary)
             }

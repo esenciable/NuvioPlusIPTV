@@ -107,6 +107,8 @@ private val ROW_TOP_INSET = 33.dp
 @Composable
 internal fun MyTeamsRows(
     page: MyTeamsPage,
+    /** Team key -> where it stands ("2nd in Premier League"), shown by its row's name. */
+    places: Map<String, String> = emptyMap(),
     /** The sport picked on the top bar (null: everything you follow). */
     sport: Sport?,
     follows: SportsFollows,
@@ -244,7 +246,7 @@ internal fun MyTeamsRows(
             ) {
                 items(page.rows, key = { it.key }) { row ->
                     Column {
-                        RowHeader(row, follows)
+                        RowHeader(row, follows, row.team?.let { places[it.key] })
                         if (row.events.isEmpty()) {
                             LiveText(
                                 "No games found for ${row.title} yet. They show here as soon as the schedule has them.",
@@ -299,7 +301,7 @@ internal fun MyTeamsRows(
 
 /** A row's heading: the team's badge (or the league's mark), its name, and how many games. */
 @Composable
-private fun RowHeader(row: SportsRow, follows: SportsFollows) {
+private fun RowHeader(row: SportsRow, follows: SportsFollows, place: String? = null) {
     Row(Modifier.fillMaxWidth().height(30.dp).padding(top = 6.dp, bottom = 2.dp, start = 4.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         when (row.kind) {
             SportsRow.Kind.UPCOMING -> Box(Modifier.size(10.dp).clip(RoundedCornerShape(5.dp)).background(SportsLook.Live))
@@ -311,6 +313,8 @@ private fun RowHeader(row: SportsRow, follows: SportsFollows) {
         }
         Spacer(Modifier.width(9.dp))
         LiveText(row.title, size = 15.sp, weight = FontWeight.Black)
+        // Just to read (not a stop): where the team stands, from its league's table.
+        place?.let { LiveText("  ·  $it", color = SportsLook.Dim, size = 12.sp, weight = FontWeight.Bold) }
         Spacer(Modifier.weight(1f))
         val ahead = row.events.count { it.state != GameState.POST }
         LiveText(

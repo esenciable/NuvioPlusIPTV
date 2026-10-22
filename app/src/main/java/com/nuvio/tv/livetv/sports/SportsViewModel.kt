@@ -140,4 +140,5 @@ class SportsViewModel @Inject constructor(
 
     suspend fun teams(league: League): List<TeamInfo> = repo.teams(league)
     suspend fun plays(ev: SportsEvent): List<ScoringPlay> = repo.scoringPlays(ev)
+    suspend fun extras(ev: SportsEvent): GameExtras? = repo.gameExtras(ev)
 }

@@ -89,6 +89,30 @@ class LiveTvDriveSync @Inject constructor(
     private var accessTokenExpiresAt = 0L
     /** True while a restored setup is being written, so it isn't backed up straight back. */
     @Volatile private var applying = false
+    /** When a restore or sync last wrote this TV's setup (its own changes come after that). */
+    @Volatile private var appliedAtMs = 0L
+
+    /** The copy in Google Drive: when it was saved, on which TV, and whether that was this one. */
+    data class BackupInfo(val savedAtMs: Long, val device: String, val fromThisTv: Boolean)
+
+    /** About the saved copy, for the restore prompt (null: none, or Drive couldn't be reached). */
+    suspend fun backupInfo(): BackupInfo? = withContext(Dispatchers.IO) {
+        runCatching {
+            val token = token() ?: return@runCatching null
+            val fileId = fileId(token) ?: return@runCatching null
+            val json = JSONObject(execute(
+                Request.Builder()
+                    .url("https://www.googleapis.com/drive/v3/files/$fileId?alt=media")
+                    .header("Authorization", "Bearer $token")
+                    .get()
+                    .build()
+            ))
+            BackupInfo(json.optLong("savedAt"), json.optString("device").ifBlank { "another TV" }, json.optString("deviceId") == deviceId)
+        }.getOrNull()
+    }
+
+    /** When this TV's setup was last changed on this TV (0: not since this version). */
+    fun localChangedAt(): Long = store.getLong(KEY_LOCAL_CHANGED_AT, 0L)
 
     private val deviceId: String
         get() = store.getString(KEY_DEVICE_ID, null) ?: UUID.randomUUID().toString().also {
@@ -110,6 +134,14 @@ class LiveTvDriveSync @Inject constructor(
         started = true
         scope.launch {
             if (_state.value.connected && _state.value.autoSync) pull(force = false)
+        }
+        // When this TV's own setup last changed (not by a restore or sync): the restore prompt
+        // warns when the saved copy is older than that.
+        scope.launch {
+            prefs.changes.drop(1).collect {
+                val now = System.currentTimeMillis()
+                if (!applying && now - appliedAtMs > 20_000) store.edit().putLong(KEY_LOCAL_CHANGED_AT, now).apply()
+            }
         }
         scope.launch {
             prefs.changes.drop(1).debounce(8_000).collect {
@@ -354,6 +386,7 @@ class LiveTvDriveSync @Inject constructor(
 
     private suspend fun applyLocally(data: JSONObject) {
         applying = true
+        appliedAtMs = System.currentTimeMillis()
         try {
             val before = prefs.exportForSync()
             val changed = prefs.importFromSync(data)
@@ -373,6 +406,7 @@ class LiveTvDriveSync @Inject constructor(
             delay(500)
         } finally {
             applying = false
+            appliedAtMs = System.currentTimeMillis()
         }
     }
 
@@ -606,6 +640,7 @@ class LiveTvDriveSync @Inject constructor(
         const val KEY_LAST_HASH = "last_hash"
         const val KEY_LAST_SYNC = "last_sync"
         const val KEY_APPLIED_AT = "applied_at"
+        const val KEY_LOCAL_CHANGED_AT = "local_changed_at"
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_MODE = "mode"
     }

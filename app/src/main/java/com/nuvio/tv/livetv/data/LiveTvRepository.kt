@@ -71,6 +71,7 @@ class LiveTvRepository @Inject constructor(
         .followRedirects(true)
         .followSslRedirects(true)
         .retryOnConnectionFailure(true)
+        .apply { ForgivingTls.trustManager?.let { tm -> ForgivingTls.socketFactory?.let { sslSocketFactory(it, tm) } } }
         .build()
 
     private val baseDir = File(context.filesDir, "livetv")

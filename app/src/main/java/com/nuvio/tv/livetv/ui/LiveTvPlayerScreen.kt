@@ -61,6 +61,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.C
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.nuvio.tv.livetv.model.LiveChannel
+import com.nuvio.tv.livetv.model.matchFrameRate
 import com.nuvio.tv.livetv.player.LiveTrackOption
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.delay
@@ -102,12 +103,9 @@ fun LiveTvPlayerScreen(
 
     DisposableEffect(Unit) {
         viewModel.playback.attach()
-        view.keepScreenOn = true
-        onDispose {
-            view.keepScreenOn = false
-            viewModel.playback.detach()
-        }
+        onDispose { viewModel.playback.detach() }
     }
+    KeepScreenAwake(true)
 
     val rootFocus = remember { FocusRequester() }
     val listFocus = remember { FocusRequester() }
@@ -197,7 +195,7 @@ fun LiveTvPlayerScreen(
             delay(3_000)
         }
     }
-    MatchFrameRate(enabled = settings.matchFrameRate, fps = videoFps)
+    MatchFrameRate(enabled = settings.matchFrameRate, fps = videoFps, restore = settings.frameRateMode == "START_STOP")
 
     // Sleep timer: the controller stops playback (on any screen); full screen then closes.
     val sleepAt by viewModel.sleepAtMs.collectAsStateWithLifecycle()
@@ -310,6 +308,24 @@ fun LiveTvPlayerScreen(
                 }
                 val archive = playback.catchupTitle != null
                 val shifting = shiftStartedAt != null
+                // ---- the remote's Fast Forward and Rewind: 30 seconds on (or back) in catch-up
+                // and in Rewind Anytime, wherever the highlight is.
+                val mediaCode = e.nativeKeyEvent.keyCode
+                if (mediaCode == AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD || mediaCode == AndroidKeyEvent.KEYCODE_MEDIA_REWIND ||
+                    mediaCode == AndroidKeyEvent.KEYCODE_MEDIA_SKIP_FORWARD || mediaCode == AndroidKeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD
+                ) {
+                    if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent true
+                    val forward = mediaCode == AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD || mediaCode == AndroidKeyEvent.KEYCODE_MEDIA_SKIP_FORWARD
+                    when {
+                        // Each press 30 seconds; held, faster (as with ◀ / ▶).
+                        archive -> scrub(forward = forward, repeat = e.nativeKeyEvent.repeatCount)
+                        shifting && viewModel.playback.shiftCanSeek() -> {
+                            viewModel.playback.shiftSeekBy(if (forward) 30_000L else -30_000L); showBanner()
+                        }
+                        else -> Unit
+                    }
+                    return@onPreviewKeyEvent true
+                }
                 // ---- the Recent row (Down from the panel's buttons)
                 val rf = recentFocus
                 if (rf != null && controlFocus != null) {
@@ -1450,10 +1466,11 @@ private fun SleepTimerDialog(onPick: (Int?) -> Unit, onDismiss: () -> Unit) {
 
 /**
  * Match frame rate: while the player is on screen, asks the TV for a display mode whose refresh
- * rate fits the video (24 → 24 Hz, 25 → 50 Hz, 30 → 60 Hz…). Puts the original mode back after.
+ * rate fits the video (24 → 24 Hz, 25 → 50 Hz, 30 → 60 Hz…). [restore] ("On start/stop"): puts
+ * the original mode back when the player closes; otherwise ("On start") the TV stays switched.
  */
 @Composable
-private fun MatchFrameRate(enabled: Boolean, fps: Float) {
+private fun MatchFrameRate(enabled: Boolean, fps: Float, restore: Boolean) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val activity = remember(context) {
         var c: android.content.Context? = context
@@ -1461,8 +1478,10 @@ private fun MatchFrameRate(enabled: Boolean, fps: Float) {
         c as? android.app.Activity
     } ?: return
     val originalMode = remember { activity.window.attributes.preferredDisplayModeId }
+    val restoreNow = androidx.compose.runtime.rememberUpdatedState(restore)
     DisposableEffect(Unit) {
         onDispose {
+            if (!restoreNow.value) return@onDispose
             val attrs = activity.window.attributes
             if (attrs.preferredDisplayModeId != originalMode) {
                 attrs.preferredDisplayModeId = originalMode

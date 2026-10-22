@@ -13,7 +13,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -174,6 +177,16 @@ class OnDemandRepository @Inject constructor(
                 _version.value++
             }
             refresh(force = false)
+        }
+        // A login with movies and series that arrives or is switched on later (from Google Drive
+        // sync or a restore, which used to leave On Demand empty until "Update now" or a restart):
+        // import it straight away. One that's gone is dropped the same way.
+        scope.launch {
+            prefs.playlists
+                .map { list -> list.filter { it.enabled && it.isXtream && it.importVod }.map { it.id }.toSet() }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { refreshSoon() }
         }
     }
 

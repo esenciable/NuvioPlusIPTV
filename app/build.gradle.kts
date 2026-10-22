@@ -416,6 +416,18 @@ androidComponents {
         }
         variant.sources.assets?.addGeneratedSourceDirectory(embedTask, EmbedUpdateDexMetadataTask::outputDirectory)
     }
+    // Only the full flavor ships the in-app updater.
+    onVariants(selector().withFlavor("distribution" to "full")) { variant ->
+        val variantName = variant.name.replaceFirstChar { it.uppercase() }
+        val embedTask = tasks.register<EmbedUpdateDexMetadataTask>("embed${variantName}UpdateDexMetadata") {
+            dexMetadataDirectory.from(provider {
+                tasks.withType<CompileArtProfileTask>()
+                    .matching { it.name == "compile${variantName}ArtProfile" }
+                    .map { it.dexMetadataDirectory }
+            })
+        }
+        variant.sources.assets?.addGeneratedSourceDirectory(embedTask, EmbedUpdateDexMetadataTask::outputDirectory)
+    }
 }
 
 afterEvaluate {

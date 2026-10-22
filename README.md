@@ -4,8 +4,8 @@
 
 **Everything in Nuvio, plus everything IPTV: a TiviMate-style Live TV guide, a Sports hub that finds every game on your own channels, catch-up, recordings, and your provider's movies and series, all in one app for Google TV, Android TV and Fire TV.**
 
-[![Latest release](https://img.shields.io/github/v/release/homelessbrian/NuvioPlusIPTV?include_prereleases&label=latest&style=for-the-badge)](https://github.com/homelessbrian/NuvioPlusIPTV/releases)
-[![Downloads](https://img.shields.io/github/downloads/homelessbrian/NuvioPlusIPTV/total?style=for-the-badge)](https://github.com/homelessbrian/NuvioPlusIPTV/releases)
+[![Latest release](https://img.shields.io/github/v/release/esenciable/NuvioPlusIPTV?include_prereleases&label=latest&style=for-the-badge)](https://github.com/esenciable/NuvioPlusIPTV/releases)
+[![Downloads](https://img.shields.io/github/downloads/esenciable/NuvioPlusIPTV/total?style=for-the-badge)](https://github.com/esenciable/NuvioPlusIPTV/releases)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=for-the-badge)](LICENSE)
 [![Based on Nuvio](https://img.shields.io/badge/based%20on-NuvioMedia%2FNuvioTV-8A2BE2?style=for-the-badge)](https://github.com/NuvioMedia/NuvioTV)
 [![Support on Ko-fi](https://img.shields.io/badge/support-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/homelessbrian)
@@ -15,6 +15,24 @@
 [What's new](#-whats-new) · [Sports hub](#-sports-hub) · [Download](#-installation) · [Features](#-features) · [Setup](#-getting-started) · [Remote controls](CONTROLS.md) · [Report a bug](#-reporting-bugs-and-requesting-features) · [Support](#-support-the-project)
 
 </div>
+
+---
+
+## About this fork
+
+This is the **NuvioES** build of [homelessbrian/NuvioPlusIPTV](https://github.com/homelessbrian/NuvioPlusIPTV)
+— and through it [NuvioMedia/NuvioTV](https://github.com/NuvioMedia/NuvioTV) — maintained by `esenciable` for
+Spanish-language devices. It stays GPL-3.0 like both sources, and the upstream commit history is preserved.
+
+What we change here:
+
+- **In-app updates are served from this repository's releases**, not upstream. The release stream is chosen at
+  build time (`NUVIO_UPDATE_OWNER` / `NUVIO_UPDATE_REPO`, defaulting to `esenciable` / `NuvioPlusIPTV`).
+- Our providers ride on the seams that already exist — Magis VOD and Magis live as generated playlists, PremiumTV
+  as an M3U feed carrying EPG ids. The guide and the Sports hub screens stay as they are.
+- Sports data files (`football/`, `wrestling.json`) are still read from `homelessbrian/nuvio-data`, read-only.
+
+Upstream's support links (Ko-fi, the downloader code) are his, not ours.
 
 ---
 

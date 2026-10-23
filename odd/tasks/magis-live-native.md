@@ -36,7 +36,7 @@ and the TS reference (`esencial-play/src/magis/live.ts`).
 - [x] WU3 — Merge native channels into `LiveTvRepository.channels`; resolve the `magis-live://`
       marker in `LiveTvPlaybackController` (play + reconnect re-sign).
 - [x] WU4 — Build, install, verify on a device: Magis groups appear, a channel plays,
-      reconnect works, no server involved.
+      reconnect works, no server involved. Verified on the Android TV emulator AND on the Mi Box 4.
 
 ## Evidence
 
@@ -58,8 +58,10 @@ and the TS reference (`esencial-play/src/magis/live.ts`).
   - `TELEONCE PR HD` played in fullscreen and was still advancing 3+ minutes later (different
     programme, `/tmp/magis-after3min.png`); zapping to `TELEMETRO PAN HD` resolved a fresh signal
     (`/tmp/magis-pan.png`). Zero `PlaybackException`, zero 401/403 in logcat.
-  - The Mi Box 4 (`192.168.18.6:5555`) was offline during this pass — the same APK still needs a
-    confirmation run on the box itself.
+  - The Mi Box 4 (`192.168.18.6:5555`, `armeabi-v7a`, fork build 12 installed over the box's own
+    playlists): `I/NuvioNativeLive: loaded=1033 in 25968 ms` — the same 1033 channels, walked in
+    26 s on the box's slower CPU instead of the emulator's 10 s. The owner confirmed it installs
+    and plays correctly there.
 
 ## Follow-ups (deliberately not in this change)
 
@@ -72,3 +74,12 @@ and the TS reference (`esencial-play/src/magis/live.ts`).
   re-minted for the recording's whole duration — a different piece of work.
 - **Per-request re-signing inside the player**: not needed for what was measured (minutes of live
   on a resolve-time signature), and the fork's live path makes the same cut.
+
+## Environment notes
+
+- **Installing over adb on the Mi Box**: `adb install` fails with `device offline` mid-stream on
+  this box's Wi-Fi. What works: `adb push` the APK to `/data/local/tmp/` (verify the byte count),
+  then `adb shell pm install -r <path>`. The box also drops adb when it sleeps, so
+  `settings put global stay_on_while_plugged_in 7` helps during a long push.
+- **Fork versionCode**: the box had build 10 installed, so a plain debug build (…00) is refused as
+  a downgrade. Pass `-PlivetvBuildNumber=12` (or higher) to `assembleFullDebug`.

@@ -4,12 +4,18 @@ import android.content.Context
 import com.nuvio.tv.BuildConfig
 import com.nuvio.tv.data.remote.api.TmdbApi
 import com.nuvio.tv.core.tmdb.TmdbService
+import com.nuvio.tv.ext.livetv.data.MagisChannelLoader
+import com.nuvio.tv.ext.livetv.data.MagisStreamResolver
+import com.nuvio.tv.ext.livetv.data.NativeLiveSources
 import com.nuvio.tv.ext.livetv.data.NativeVodSources
 import com.nuvio.tv.ext.livetv.magis.DataStoreMagisConfigStore
 import com.nuvio.tv.ext.livetv.magis.DataStoreMagisSessionStore
 import com.nuvio.tv.ext.livetv.magis.MagisConfigProvider
 import com.nuvio.tv.ext.livetv.magis.MagisConfigStore
 import com.nuvio.tv.ext.livetv.magis.MagisCryptoHolder
+import com.nuvio.tv.ext.livetv.magis.MagisLiveCatalogApi
+import com.nuvio.tv.ext.livetv.magis.MagisLiveClient
+import com.nuvio.tv.ext.livetv.magis.MagisLivePlaybackApi
 import com.nuvio.tv.ext.livetv.magis.MagisPortalClient
 import com.nuvio.tv.ext.livetv.magis.MagisVodClient
 import com.nuvio.tv.ext.livetv.magis.MagisVodSource
@@ -29,17 +35,14 @@ import kotlinx.coroutines.SupervisorJob
 import javax.inject.Singleton
 
 /**
- * DI for the native Magis VOD source.
- *
- * PORT NOTE: the fork's module also wires the native LIVE gateway (`MagisLiveClient`,
- * `MagisChannelLoader`, `MagisStreamResolver`); native live is a non-goal of this port (P3), so
- * only the VOD side is wired here and the portal stack it needs.
+ * DI for the native Magis sources: VOD in the stream pipeline, LIVE in the Live TV tab, over ONE
+ * portal stack (one rate limiter, one anonymous device session, one remote config).
  *
  * The whole portal stack is built HERE — config, crypto, session store, portal, session — ONCE,
- * shared by every native source (one rate limiter, one session): a build without usable MAGIS_*
- * values must produce a DISABLED stack, not a crash: [MagisCrypto] rejects an incomplete key at
- * construction, so an invalid configuration falls back to an EMPTY native-VOD list, whose
- * consumers simply report the sources as unconfigured.
+ * shared by every native source: a build without usable MAGIS_* values must produce a DISABLED
+ * stack, not a crash: [MagisCrypto] rejects an incomplete key at construction, so an invalid
+ * configuration falls back to an EMPTY native-source list, whose consumers simply report the
+ * sources as unconfigured.
  *
  * The runtime config is REMOTE-first (`magis-config.json`, see [MagisRemoteConfig]): startup
  * uses the disk cache or the `BuildConfig` fallback immediately and adopts the remote document
@@ -132,6 +135,55 @@ object LiveTvMagisModule {
         }
         return NativeVodSources(listOfNotNull(source))
     }
+
+    // --- native LIVE source -----------------------------------------------------
+
+    /**
+     * The portal's live API over the SAME stack as VOD: one rate limiter, one anonymous session,
+     * one config. Null when the build carries no usable Magis configuration — every live consumer
+     * treats that as "the source does not exist".
+     */
+    @Provides
+    @Singleton
+    internal fun provideMagisLiveClient(
+        provider: MagisConfigProvider,
+        stack: MagisPortalStack?,
+    ): MagisLiveClient? = stack?.let {
+        MagisLiveClient(
+            portal = it.portal,
+            session = it.session,
+            configProvider = { provider.current },
+        )
+    }
+
+    @Provides
+    @Singleton
+    internal fun provideMagisLiveCatalogApi(client: MagisLiveClient?): MagisLiveCatalogApi? = client
+
+    @Provides
+    @Singleton
+    internal fun provideMagisLivePlaybackApi(client: MagisLiveClient?): MagisLivePlaybackApi? = client
+
+    /**
+     * The native live sources the Live TV tab and the player consult. One entry per configured
+     * source; the disabled-config contract (a null client adds nothing and crashes nothing) is
+     * carried by [NativeLiveSources] itself.
+     */
+    @Provides
+    @Singleton
+    internal fun provideNativeLiveSources(
+        catalogApi: MagisLiveCatalogApi?,
+        playbackApi: MagisLivePlaybackApi?,
+    ): NativeLiveSources = NativeLiveSources(
+        listOfNotNull(
+            if (catalogApi != null && playbackApi != null) {
+                NativeLiveSources.NativeLiveEntry(
+                    loader = MagisChannelLoader(catalogApi),
+                    resolver = MagisStreamResolver(playbackApi),
+                )
+            } else null,
+        ),
+    )
 }
 
 /**

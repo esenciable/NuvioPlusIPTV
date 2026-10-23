@@ -1,6 +1,7 @@
 package com.nuvio.tv.livetv.sports
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -285,5 +286,59 @@ class SportsAddonFeedTest {
         } finally {
             dir.deleteRecursively()
         }
+    }
+
+    @Test
+    fun `a live event carries every source the addon lists`() {
+        val json = """
+            {"events":[{"id":"rb_445_1","kickoffMs":1761148800000,
+              "streamUrl":"https://addon.test/rblive/match/445_1.m3u8",
+              "teams":[{"side":1,"name":"Flamengo"},{"side":2,"name":"Estudiantes"}],
+              "sources":[
+                {"streamId":11,"label":"HD","verified":true,"url":"https://addon.test/rblive/match/445_1.m3u8?s=11"},
+                {"streamId":12,"label":null,"verified":false,"url":"https://addon.test/rblive/match/445_1.m3u8?s=12"}
+              ]}]}
+        """.trimIndent()
+
+        val ev = SportsAddonFeed.parseEvents(json).single()
+
+        assertEquals(2, ev.sources.size)
+        assertEquals(11L, ev.sources[0].streamId)
+        assertEquals("HD", ev.sources[0].label)
+        assertTrue(ev.sources[0].verified)
+        assertEquals("https://addon.test/rblive/match/445_1.m3u8?s=11", ev.sources[0].url)
+        // A source the upstream does not name is still a source; only our knowledge of it is missing.
+        assertNull(ev.sources[1].label)
+        assertFalse(ev.sources[1].verified)
+    }
+
+    @Test
+    fun `a missing or null sources field leaves the single stable link alone`() {
+        val nullSources = """{"events":[{"id":"rb_1_1","kickoffMs":1,"streamUrl":"https://addon.test/m",
+            "teams":[{"side":1,"name":"A"},{"side":2,"name":"B"}],"sources":null}]}""".trimIndent()
+        val noField = """{"events":[{"id":"rb_1_1","kickoffMs":1,"streamUrl":"https://addon.test/m",
+            "teams":[{"side":1,"name":"A"},{"side":2,"name":"B"}]}]}""".trimIndent()
+
+        // Both mean "one link for this match", which is what an older addon answer says too.
+        assertEquals(emptyList<AddonSource>(), SportsAddonFeed.parseEvents(nullSources).single().sources)
+        assertEquals(emptyList<AddonSource>(), SportsAddonFeed.parseEvents(noField).single().sources)
+        assertEquals("https://addon.test/m", SportsAddonFeed.parseEvents(nullSources).single().streamUrl)
+    }
+
+    @Test
+    fun `a source with no address is dropped instead of becoming an empty channel`() {
+        val json = """{"events":[{"id":"rb_1_1","kickoffMs":1,"streamUrl":"https://addon.test/m",
+          "teams":[{"side":1,"name":"A"},{"side":2,"name":"B"}],
+          "sources":[{"streamId":7,"label":"HD","verified":true,"url":""},
+                    {"label":"sin streamId","url":"https://addon.test/s"}]}]}""".trimIndent()
+
+        val ev = SportsAddonFeed.parseEvents(json).single()
+
+        // The first has no address, so it cannot be a channel at all. The second has no upstream id
+        // to key on: it still travels, keyed by position, because refusing to show a working feed
+        // would hide a signal the viewer can actually watch.
+        assertEquals(emptyList<AddonSource>(), ev.sources.filter { it.url.isBlank() })
+        assertEquals(1, ev.sources.size)
+        assertEquals(0L, ev.sources[0].streamId)
     }
 }

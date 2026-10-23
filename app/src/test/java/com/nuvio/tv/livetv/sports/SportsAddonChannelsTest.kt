@@ -181,4 +181,60 @@ class SportsAddonChannelsTest {
         assertFalse(out.containsKey(arsenal.id))
         assertEquals(listOf("ext:rb_446_1"), out.getValue(villa.id).map { it.channel.key })
     }
+
+    private val twoSources = listOf(
+        AddonSource(11, "HD", true, "https://addon.test/rblive/match/445_1.m3u8?s=11"),
+        AddonSource(12, null, false, "https://addon.test/rblive/match/445_1.m3u8?s=12"),
+    )
+
+    @Test
+    fun `every source of an event becomes its own channel, above the guide's guesses`() {
+        val ev = event(team("Arsenal"), team("Chelsea"))
+
+        val out = SportsAddonChannels.decorate(
+            mapOf(ev.id to listOf(guideMatch("ch1"))),
+            listOf(ev),
+            listOf(addon("Arsenal", "Chelsea").copy(sources = twoSources)),
+        )
+
+        val matches = out.getValue(ev.id)
+        assertEquals(listOf("ext:rb_445_1#11", "ext:rb_445_1#12", "ch1"), matches.map { it.channel.key })
+        // Each one plays its own feed, not the match's generic address.
+        assertEquals("https://addon.test/rblive/match/445_1.m3u8?s=12", matches[1].channel.url)
+        assertEquals("Esencial Sport · HD", matches[0].channel.name)
+        // An unnamed source is still pickable: the position says which of the two it is.
+        assertEquals("Esencial Sport · 2", matches[1].channel.name)
+        assertEquals(listOf(200, 200, 90), matches.map { it.score })
+    }
+
+    @Test
+    fun `refusing one source does not refuse the match's other feeds`() {
+        val ev = event(team("Arsenal"), team("Chelsea"))
+        val candidates = listOf(addon("Arsenal", "Chelsea").copy(sources = twoSources))
+
+        val out = SportsAddonChannels.decorate(
+            mapOf(ev.id to listOf(guideMatch("ch1"))),
+            listOf(ev),
+            candidates,
+            blocked = setOf("espn:x:1|ext:rb_445_1#11"),
+        )
+
+        // The user said the HD feed isn't showing this game. That is not a verdict on the other one.
+        assertEquals(listOf("ext:rb_445_1#12", "ch1"), out.getValue(ev.id).map { it.channel.key })
+    }
+
+    @Test
+    fun `an event with no sources keeps the key the feature shipped with`() {
+        val ev = event(team("Arsenal"), team("Chelsea"))
+
+        val out = SportsAddonChannels.decorate(
+            mapOf(ev.id to listOf(guideMatch("ch1"))),
+            listOf(ev),
+            listOf(addon("Arsenal", "Chelsea")),
+        )
+
+        // Older addon answers, and a live match we could not resolve, must not silently move the
+        // key: favourites and refusals persist by it.
+        assertEquals(listOf("ext:rb_445_1", "ch1"), out.getValue(ev.id).map { it.channel.key })
+    }
 }

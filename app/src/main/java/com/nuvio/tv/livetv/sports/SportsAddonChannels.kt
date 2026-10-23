@@ -34,6 +34,40 @@ internal object SportsAddonChannels {
     fun keyOf(addon: AddonEvent) = "ext:${addon.id}"
 
     /**
+     * The key of one source of an event.
+     *
+     * The upstream's own id when it sent one. Only when it did not do we fall back to the position,
+     * and only there — a position is not stable across refreshes, so a refusal remembered against
+     * one could otherwise land on a different feed next time.
+     */
+    fun keyOf(addon: AddonEvent, source: AddonSource, index: Int) =
+        "${keyOf(addon)}#${if (source.streamId != 0L) source.streamId.toString() else "i$index"}"
+
+    /**
+     * Every channel an event offers: one per source when the feed named them, and the match's single
+     * stable link when it did not.
+     *
+     * The ones we watched answer with a real playlist come first. These channels all carry the same
+     * score, so the order here is what `bestChannel()` ends up playing automatically — it should be
+     * a signal we saw working, not one the upstream merely claims to have.
+     */
+    fun channelsFor(addon: AddonEvent): List<LiveChannel> {
+        if (addon.sources.isEmpty()) return listOf(channelFor(addon))
+        return addon.sources.mapIndexed { i, s -> i to s }
+            .sortedWith(compareBy({ !it.second.verified }, { it.first }))
+            .map { (index, source) -> channelFor(addon, source, index) }
+    }
+
+    /** One source as a channel, named so the two are tellable apart in the picker. */
+    fun channelFor(addon: AddonEvent, source: AddonSource, index: Int): LiveChannel = channelFor(addon).copy(
+        key = keyOf(addon, source, index),
+        // The upstream's own name for the feed when it gave one; its place in the list when it
+        // did not. "Esencial Sport" alone would render ten identical rows.
+        name = "$SOURCE_NAME · " + (source.label?.takeIf { it.isNotBlank() } ?: (index + 1).toString()),
+        url = source.url,
+    )
+
+    /**
      * A channel that exists only to be played. It is deliberately NOT added to the channel store:
      * it has no place in the guide or the channel list, and nothing that reads a `ChannelMatch`
      * re-resolves the channel by key — they use the object we hand them.
@@ -56,14 +90,15 @@ internal object SportsAddonChannels {
     )
 
     /**
-     * Puts the feed's link in front of every game it can serve.
+     * Puts the feed's links in front of every game it can serve.
      *
      * Returns [matches] itself when there is nothing to do, so a feed that never loaded (or a build
      * with the addon off) leaves the page exactly as it was.
      *
      * @param blocked the user's `"eventId|channelKey"` refusals, same shape as
      *   [SportsSettings.blocked] — a channel the user said isn't showing a game stays out, whether
-     *   the guide suggested it or we did.
+     *   the guide suggested it or we did. Refusing one of our sources refuses that source only: the
+     *   match's other feeds are different signals and stay pickable.
      */
     fun decorate(
         matches: Map<String, List<ChannelMatch>>,
@@ -75,20 +110,23 @@ internal object SportsAddonChannels {
         var out: HashMap<String, List<ChannelMatch>>? = null
         for (ev in events) {
             val addon = SportsAddonMatcher.find(ev, SportsCatalog.league(ev.leagueId), candidates) ?: continue
-            val channel = channelFor(addon)
-            if ("${ev.id}|${channel.key}" in blocked) continue
             val existing = matches[ev.id].orEmpty()
-            if (existing.any { it.channel.key == channel.key }) continue
-            val ours = ChannelMatch(
-                channel = channel,
-                score = SCORE,
-                how = HOW,
-                program = null,
-                quality = null,
-                catchup = false,
-            )
+            val channels = SportsAddonChannels.channelsFor(addon)
+                .filterNot { "${ev.id}|${it.key}" in blocked }
+                .filterNot { ch -> existing.any { it.channel.key == ch.key } }
+            if (channels.isEmpty()) continue
+            val ours = channels.map {
+                ChannelMatch(
+                    channel = it,
+                    score = SCORE,
+                    how = HOW,
+                    program = null,
+                    quality = null,
+                    catchup = false,
+                )
+            }
             if (out === null) out = HashMap(matches)
-            out[ev.id] = listOf(ours) + existing
+            out[ev.id] = ours + existing
         }
         return out ?: matches
     }

@@ -15,6 +15,16 @@ import java.util.concurrent.TimeUnit
 data class AddonTeam(val side: Int, val name: String, val logo: String)
 
 /**
+ * One of the feeds a match is offered on.
+ *
+ * These are different signals, not qualities of one another: a second language's commentary, a
+ * different CDN, a broadcaster's own feed. A match's first source is routinely the one that is
+ * down, so the list is the point — [streamId] is the upstream's own id and stays put across
+ * refreshes, unlike a position. 0 means the feed did not name one and the position keys it instead.
+ */
+data class AddonSource(val streamId: Long, val label: String?, val verified: Boolean, val url: String)
+
+/**
  * One event of the addon feed (`GET {baseUrl}/events.json`), with the feed's own field names.
  * [streamUrl] is the address it sent: it is never rebuilt from [id] or [matchId].
  */
@@ -34,7 +44,14 @@ data class AddonEvent(
     val countryId: Int = 0,
     val live: Boolean = false,
     /** "live", "scheduled" or "finished". */
-    val status: String = ""
+    val status: String = "",
+    /**
+     * Every feed this match is offered on, as the addon listed them. Empty when the addon sent no
+     * `sources` — an older answer, or a match that is not live yet — which is not the same claim as
+     * an empty list from a feed that looked and found none, but plays the same way: [streamUrl]
+     * still stands on its own.
+     */
+    val sources: List<AddonSource> = emptyList()
 ) {
     /** On now, by either the flag or the status line. */
     val isLive: Boolean get() = live || status.equals("live", ignoreCase = true)
@@ -151,7 +168,22 @@ internal class SportsAddonFeed(
                 country = o.str("country") ?: "",
                 countryId = o.int("countryId") ?: 0,
                 live = (o["live"] as? JsonPrimitive)?.booleanOrNull ?: false,
-                status = o.str("status") ?: ""
+                status = o.str("status") ?: "",
+                sources = (o["sources"] as? JsonArray)?.mapNotNull { s -> source(s as? JsonObject ?: return@mapNotNull null) }.orEmpty(),
+            )
+        }
+
+        /**
+         * One source. An address is the one thing a source cannot be without: a channel that opens
+         * nothing is worse than one that is not offered.
+         */
+        private fun source(o: JsonObject): AddonSource? {
+            val url = o.str("url") ?: return null
+            return AddonSource(
+                streamId = o.long("streamId") ?: 0L,
+                label = o.str("label"),
+                verified = (o["verified"] as? JsonPrimitive)?.booleanOrNull ?: false,
+                url = url,
             )
         }
 

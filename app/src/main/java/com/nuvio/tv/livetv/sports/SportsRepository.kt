@@ -1062,8 +1062,12 @@ class SportsRepository @Inject constructor(
         /**
          * Where Esencial Sport's events come from. Blank disables the whole path, so a build
          * without the addon behaves exactly as before this existed.
+         *
+         * The sports addon's own public host, with no path: `GET {base}/events.json` answers for
+         * everyone. A path would be an installation token, and baking one into the app would hand
+         * every device that installation's configured sports.
          */
-        const val addonBaseUrl = "https://esencial.attendanceos.app/kt1gh2mfcxry"
+        const val addonBaseUrl = "https://esencialsport.attendanceos.app"
         private const val MINUTE = 60_000L
         private const val HOUR = 60 * MINUTE
         private const val DAY = 24 * HOUR

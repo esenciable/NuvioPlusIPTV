@@ -159,8 +159,14 @@ class LiveTvViewModel @Inject constructor(
         }
     }.flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
-    private val hasSources: StateFlow<Boolean> = prefs.playlists.map { it.isNotEmpty() }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    /**
+     * Live TV has something to show: a playlist, or a configured native source (Magis) whose
+     * channels come from the portal instead of a file. Without the second half the guide would
+     * show its "add a playlist" screen over a list that already has channels in it.
+     */
+    private val hasSources: StateFlow<Boolean> = prefs.playlists
+        .map { it.isNotEmpty() || repository.hasNativeSources }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, repository.hasNativeSources)
 
     /**
      * Channels with the user's renames and renumbering applied. Worked out once for the whole
@@ -1218,6 +1224,12 @@ class LiveTvViewModel @Inject constructor(
         recorder.activeFor(channel.key)?.let { running ->
             recorder.stop(running.id)
             return "Recording stopped. It's in Recordings."
+        }
+        // A native source's link is signed for the seconds around playback and carries headers the
+        // recorder would have to re-mint for hours. Saying so beats a recording that 403s in
+        // silence and leaves an empty file in Recordings.
+        if (repository.nativeResolverFor(channel)?.owns(channel) == true) {
+            return "${channel.name}'s provider signs its link per viewing, so this channel can't be recorded."
         }
         val now = System.currentTimeMillis()
         val show = currentProgram(channel.key, now)?.takeIf { !LiveTvRepository.isPlaceholderTitle(it.title) }

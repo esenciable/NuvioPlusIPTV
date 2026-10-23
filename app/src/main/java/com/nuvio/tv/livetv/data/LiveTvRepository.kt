@@ -20,6 +20,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.async
@@ -56,7 +57,13 @@ data class LiveTvStatus(
 class LiveTvRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val prefs: LiveTvPreferences,
-    private val guideDb: EpgDatabase
+    private val guideDb: EpgDatabase,
+    /**
+     * The native live sources' catalog (Magis today): channels the device mints for itself, with
+     * no playlist and no proxy behind them. Contributes nothing on a build without a usable
+     * configuration, so Live TV behaves exactly like a build without the feature.
+     */
+    private val nativeLive: com.nuvio.tv.ext.livetv.data.NativeLiveCatalog,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -77,8 +84,21 @@ class LiveTvRepository @Inject constructor(
     private val playlistDir = File(baseDir, "playlists")
     private val epgDir = File(baseDir, "epg")
 
-    private val _channels = MutableStateFlow<List<LiveChannel>>(emptyList())
-    val channels: StateFlow<List<LiveChannel>> = _channels.asStateFlow()
+    private val _playlistChannels = MutableStateFlow<List<LiveChannel>>(emptyList())
+
+    /**
+     * Everything the Live TV tab shows: the playlist channels, then the native sources'. The
+     * pipeline behind the playlists (channel cache, fingerprint, guide matching, recordings) reads
+     * the playlist list alone and never sees a native channel — one is not in a playlist file, has
+     * no tvg-id, and must not be written to the channel cache as if it were.
+     *
+     * The merge happens HERE, in one flow, so the guide, the search, the home rows, favorites and
+     * recents all treat a native source's categories as ordinary groups without a special case.
+     */
+    val channels: StateFlow<List<LiveChannel>> =
+        kotlinx.coroutines.flow.combine(_playlistChannels, nativeLive.channels) { playlist, native ->
+            if (native.isEmpty()) playlist else playlist + native
+        }.stateIn(scope, kotlinx.coroutines.flow.SharingStarted.Eagerly, emptyList())
 
     /** Programs keyed by [LiveChannel.key], sorted by start. Offset is not applied here. */
     private val _programs = MutableStateFlow<Map<String, List<EpgProgram>>>(emptyMap())
@@ -99,10 +119,25 @@ class LiveTvRepository @Inject constructor(
     /** The start-up update check has run (later checks may start). */
     @Volatile private var firstCheckDone = false
 
+    /** Whether this build carries a configured native live source (Magis), playlist or not. */
+    val hasNativeSources: Boolean get() = !nativeLive.isEmpty
+
+    /**
+     * The native resolver that owns [channel], or null for a playlist channel. The UI needs it to
+     * know when a channel's link is minted per viewing instead of stored in a playlist file — a
+     * recording or a catch-up built on that placeholder would silently download nothing.
+     */
+    fun nativeResolverFor(channel: LiveChannel): com.nuvio.tv.ext.livetv.domain.NativeLiveResolver? =
+        nativeLive.resolverFor(channel)
+
     /** Loads cached data immediately, then refreshes anything older than the configured interval. */
     fun ensureLoaded(updateCheckDelayMs: Long = 0L) {
         if (initialized) return
         initialized = true
+        // The native sources (Magis) walk the portal for their catalog: a few calls of their own,
+        // started here so their channels are in the list before the first screen draws. An
+        // unconfigured build does nothing at all (the catalog has no source to walk).
+        nativeLive.ensureLoaded()
         scope.launch {
             // Saved channels and guide first: reading them only uses the device's storage.
             loadFromCache()
@@ -140,7 +175,12 @@ class LiveTvRepository @Inject constructor(
     }
 
     fun refreshAll(force: Boolean = true) {
-        scope.launch { refreshInternal(forcePlaylists = force, forceEpg = force) }
+        scope.launch {
+            refreshInternal(forcePlaylists = force, forceEpg = force)
+            // "Update now" means the native catalog too: the portal paces itself, and a user who
+            // asks for an update gets the categories as they are now, not as they were at startup.
+            if (force) runCatching { nativeLive.refresh(force = true) }
+        }
     }
 
     /** After a restore from Google Drive: rebuild from the new sources, downloading what's missing. */
@@ -232,10 +272,10 @@ class LiveTvRepository @Inject constructor(
      * waiting for the full rebuild (which can be queued behind a long guide download).
      */
     private fun dropPlaylistNow(id: String) {
-        val remaining = _channels.value.filterNot { it.sourceId == id }
-        if (remaining.size == _channels.value.size) return
+        val remaining = _playlistChannels.value.filterNot { it.sourceId == id }
+        if (remaining.size == _playlistChannels.value.size) return
         val keys = remaining.mapTo(HashSet()) { it.key }
-        _channels.value = remaining
+        _playlistChannels.value = remaining
         _programs.value = _programs.value.filterKeys { it in keys }
     }
 
@@ -584,7 +624,7 @@ class LiveTvRepository @Inject constructor(
         }
 
         // Build channels first so EPG matching knows which channels exist.
-        if (changed || _channels.value.isEmpty()) {
+        if (changed || _playlistChannels.value.isEmpty()) {
             outOfTheWay()
             setStatus(loading = true, message = "Reading channels…")
             buildChannels()
@@ -655,9 +695,9 @@ class LiveTvRepository @Inject constructor(
             setStatus(loading = true, message = "Loading channels…")
             buildChannels()
             saveChannels()
-            LIVE_REPORT.add("Channels re-read from playlists: ${_channels.value.size} in ${System.currentTimeMillis() - t0} ms")
+            LIVE_REPORT.add("Channels re-read from playlists: ${_playlistChannels.value.size} in ${System.currentTimeMillis() - t0} ms")
         } else {
-            LIVE_REPORT.add("Saved channel list used: ${_channels.value.size} channels in ${System.currentTimeMillis() - t0} ms")
+            LIVE_REPORT.add("Saved channel list used: ${_playlistChannels.value.size} channels in ${System.currentTimeMillis() - t0} ms")
         }
         val targets = collectEpgTargets()
         val settings = prefs.currentSettings()
@@ -753,7 +793,7 @@ class LiveTvRepository @Inject constructor(
                 }
                 embeddedEpgUrls.clear()
                 embeddedEpgUrls.putAll(epg)
-                _channels.value = list
+                _playlistChannels.value = list
                 true
             }
         }.getOrElse {
@@ -765,7 +805,7 @@ class LiveTvRepository @Inject constructor(
     private suspend fun saveChannels() = withContext(Dispatchers.IO) {
         val fingerprint = channelsFingerprint()
         runCatching {
-            val list = _channels.value
+            val list = _playlistChannels.value
             // Text shared by many channels, stored once.
             val index = LinkedHashMap<String, Int>()
             fun id(v: String): Int = index.getOrPut(v) { index.size }
@@ -860,7 +900,7 @@ class LiveTvRepository @Inject constructor(
      */
     private suspend fun syncHidden() = withContext(Dispatchers.IO) {
         if (!guideInDb) return@withContext
-        val channels = _channels.value
+        val channels = _playlistChannels.value
         if (channels.isEmpty()) return@withContext
         val hidden = prefs.currentHiddenEverywhere()
         val nowHidden = channels.filter { hidden.hides(it.key, it.groupId) }.mapTo(HashSet()) { it.key }
@@ -974,7 +1014,7 @@ class LiveTvRepository @Inject constructor(
      * the others in the background. Instant, however big the guide is.
      */
     private suspend fun loadGuideFromDb(settings: LiveTvSettings, targets: List<EpgTarget>, pre: GuidePreRead?): Boolean = withContext(Dispatchers.IO) {
-        if (_channels.value.isEmpty()) return@withContext false
+        if (_playlistChannels.value.isEmpty()) return@withContext false
         runCatching { savedGuideFile.delete() } // the old single-file copy isn't used any more
         val expected = guideFingerprint(settings, targets)
         val stored = pre?.fingerprint ?: runCatching { guideDb.fingerprint() }.getOrNull()
@@ -1016,7 +1056,7 @@ class LiveTvRepository @Inject constructor(
             // all of it has run out): it was still taken as up to date, so the guide stayed
             // empty until a playlist or guide changed. Match the guide files again now (and
             // download them again if they're old too).
-            if (_programs.value.isEmpty() && _channels.value.isNotEmpty() && targets.isNotEmpty()) {
+            if (_programs.value.isEmpty() && _playlistChannels.value.isNotEmpty() && targets.isNotEmpty()) {
                 storedGuideEmpty = true
                 LIVE_REPORT.add("Stored guide has no listings for now: reading the guides again")
                 scope.launch { runCatching { refreshStale() } }
@@ -1326,7 +1366,7 @@ class LiveTvRepository @Inject constructor(
             sb.append(t.fileId).append(':').append(f.length()).append(':').append(contentStamp(f)).append(',')
         }
         sb.append('|').append(overrides.hashCode())
-        sb.append('|').append(_channels.value.size).append(':').append(_channels.value.sumOf { it.key.hashCode().toLong() })
+        sb.append('|').append(_playlistChannels.value.size).append(':').append(_playlistChannels.value.sumOf { it.key.hashCode().toLong() })
         return sb.toString()
     }
 
@@ -1345,7 +1385,7 @@ class LiveTvRepository @Inject constructor(
     private suspend fun guideParts(settings: LiveTvSettings, targets: List<EpgTarget>, fingerprint: String): String {
         val overrides = prefs.userState.first().epgOverrides
         val playlists = JSONObject()
-        _channels.value.groupBy { it.sourceId }.forEach { (id, list) ->
+        _playlistChannels.value.groupBy { it.sourceId }.forEach { (id, list) ->
             playlists.put(id, "${list.size}:${list.sumOf { it.key.hashCode().toLong() }}")
         }
         return JSONObject()
@@ -1368,7 +1408,7 @@ class LiveTvRepository @Inject constructor(
      * matched to it). Otherwise (or for a guide stored by an older version) false: read it all.
      */
     private suspend fun dropRemovedPlaylistsFromGuide(settings: LiveTvSettings, targets: List<EpgTarget>): Boolean = withContext(Dispatchers.IO) {
-        val channels = _channels.value
+        val channels = _playlistChannels.value
         if (channels.isEmpty()) return@withContext false
         val stored = runCatching { guideDb.fingerprint() }.getOrNull() ?: return@withContext false
         val old = runCatching { guideDb.parts()?.let { JSONObject(it) } }.getOrNull() ?: return@withContext false
@@ -1456,7 +1496,7 @@ class LiveTvRepository @Inject constructor(
 
     private suspend fun loadSavedGuide(settings: LiveTvSettings, targets: List<EpgTarget>): Boolean = withContext(Dispatchers.IO) {
         val file = savedGuideFile
-        if (!file.exists() || _channels.value.isEmpty()) return@withContext false
+        if (!file.exists() || _playlistChannels.value.isEmpty()) return@withContext false
         val expected = guideFingerprint(settings, targets)
         runCatching {
             java.io.DataInputStream(java.io.BufferedInputStream(java.util.zip.GZIPInputStream(file.inputStream()), 64 * 1024)).use { input ->
@@ -1634,7 +1674,7 @@ class LiveTvRepository @Inject constructor(
             }
             prefs.updatePlaylists { list -> list.map { if (it.id == pl.id) it.copy(channelCount = parsed.entries.size) else it } }
         }
-        _channels.value = out
+        _playlistChannels.value = out
     }
 
     private suspend fun buildPrograms(settings: LiveTvSettings, targets: List<EpgTarget>) {
@@ -1644,7 +1684,7 @@ class LiveTvRepository @Inject constructor(
     }
 
     private suspend fun buildProgramsInner(settings: LiveTvSettings, targets: List<EpgTarget>) = withContext(Dispatchers.IO) {
-        val all = _channels.value
+        val all = _playlistChannels.value
         if (all.isEmpty()) {
             _programs.value = emptyMap()
             return@withContext
@@ -1967,7 +2007,7 @@ class LiveTvRepository @Inject constructor(
         if (autoBack.isNotEmpty()) {
             val lists = _epgSources.value
             if (lists.isEmpty()) return@withContext false
-            val chans = _channels.value.filter { it.key in autoBack }
+            val chans = _playlistChannels.value.filter { it.key in autoBack }
             targets.forEachIndexed { order, t ->
                 val list = lists.firstOrNull { it.sourceId == t.fileId } ?: return@forEachIndexed
                 chans.forEach { c ->

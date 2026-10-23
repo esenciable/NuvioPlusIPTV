@@ -225,6 +225,12 @@ class LiveTvRecordingScheduler @Inject constructor(
      */
     fun add(channel: LiveChannel, program: EpgProgram, seriesId: String? = null): String {
         val now = System.currentTimeMillis()
+        // A native source's link is signed for the seconds around playback: a schedule would hold
+        // the catalog placeholder (or an expired pair) and record nothing hours later, far from
+        // any reason the user could see. Refuse it where it is asked for.
+        if (repository.nativeResolverFor(channel)?.owns(channel) == true) {
+            return "${channel.name}'s provider signs its link per viewing, so this channel can't be recorded."
+        }
         val useCatchup = channel.catchup != null && (channel.catchup.days > 0)
         val title = cleanTitle(program.title)
         if (!useCatchup && now >= program.startMs && now < program.stopMs) {

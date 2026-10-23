@@ -71,7 +71,15 @@ data class LiveTrackOption(
 @OptIn(UnstableApi::class)
 @Singleton
 class LiveTvPlaybackController @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    /**
+     * The native live sources (Magis today). A native channel's catalog URL is a placeholder the
+     * player cannot open: it is turned into a real URL plus the headers the CDN demands here, at
+     * the single point every playback path funnels through, so the guide, the search, the zap, the
+     * home row, the sports screen and the reminders all get resolution without knowing about it.
+     * A build with no configured source never owns a channel and changes nothing.
+     */
+    private val nativeLive: com.nuvio.tv.ext.livetv.data.NativeLiveSources,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -198,12 +206,63 @@ class LiveTvPlaybackController @Inject constructor(
     }
 
     /** Drops the buffer and plays the channel again from now (a new buffer, if it's on). */
+    /**
+     * Plays a native channel by resolving its placeholder URL first. Resolution is a portal round
+     * trip (session, playCode, CDN, signature), so the channel the screen is on must show as
+     * loading rather than as the previous channel still playing.
+     *
+     * The resolved copy carries the same key, group and name: favorites, recents, the info panel
+     * and the guide's current-row all key off [LiveChannel.key], which survives resolution exactly
+     * so a native channel behaves like any other one to everything downstream.
+     */
+    private fun playResolved(
+        channel: LiveChannel,
+        resolver: com.nuvio.tv.ext.livetv.domain.NativeLiveResolver,
+    ) {
+        nativeResolveJob?.cancel()
+        if (currentChannel?.key != channel.key) {
+            currentChannel = channel
+            LiveWatching.sourceId = channel.sourceId
+            _state.value = LivePlaybackState(channelKey = channel.key, isBuffering = true)
+        }
+        nativeResolveJob = scope.launch {
+            val resolved = runCatching { resolver.resolve(channel) }.getOrNull()
+            if (resolved == null) {
+                // Nothing to play, and saying so: a native channel that cannot be resolved is a
+                // failure the retry can clear (a fresh session, host and signature), not a hang.
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Native channel ${channel.name}: the source gave no playable signal")
+                _state.value = _state.value.copy(error = "${channel.name}: the source gave no playable signal", isBuffering = false)
+                return@launch
+            }
+            play(resolved)
+        }
+    }
+
+    private var nativeResolveJob: Job? = null
+
     private fun goLiveFresh() {
         val ch = currentChannel ?: return
         val url = currentUrl
         stopShift()
         currentUrl = null
+        if (playInsteadReSigned(ch)) return
         play(ch, overrideUrl = url.takeIf { it != ch.url })
+    }
+
+    /**
+     * "Live again" on a native channel means more than dropping the buffer: the headers it played
+     * with were signed when the channel started, and minutes of pause or rewind have gone by.
+     * Putting the placeholder back on makes the next [play] resolve a fresh session, host and
+     * signature — the alternative is a 403 that looks exactly like a dead channel.
+     *
+     * True when the channel was handed over for re-resolution, so the caller plays nothing else.
+     * A playlist channel keeps its provider link and comes back false, untouched.
+     */
+    private fun playInsteadReSigned(ch: LiveChannel): Boolean {
+        val resolver = nativeLive.resolverFor(ch) ?: return false
+        if (!resolver.owns(ch)) return false
+        play(resolver.reMarker(ch))
+        return true
     }
 
     /** Going full screen with Rewind Anytime on: switch the channel over to the buffer. */
@@ -422,6 +481,7 @@ class LiveTvPlaybackController @Inject constructor(
         stopShift()
         if (ch != null) {
             currentUrl = null
+            if (playInsteadReSigned(ch)) return
             play(ch, overrideUrl = url.takeIf { it != ch.url })
         }
     }
@@ -491,7 +551,9 @@ class LiveTvPlaybackController @Inject constructor(
             val title = _state.value.catchupTitle
             val wasPlaying = p.playWhenReady
             release()
-            if (ch != null && wasPlaying) play(ch, overrideUrl = url.takeIf { it != ch.url }, catchupTitle = title)
+            if (ch != null && wasPlaying && !playInsteadReSigned(ch)) {
+                play(ch, overrideUrl = url.takeIf { it != ch.url }, catchupTitle = title)
+            }
         }
 
     var audioPassthrough: Boolean = true
@@ -504,7 +566,9 @@ class LiveTvPlaybackController @Inject constructor(
             val title = _state.value.catchupTitle
             val wasPlaying = p.playWhenReady
             release()
-            if (ch != null && wasPlaying) play(ch, overrideUrl = url.takeIf { it != ch.url }, catchupTitle = title)
+            if (ch != null && wasPlaying && !playInsteadReSigned(ch)) {
+                play(ch, overrideUrl = url.takeIf { it != ch.url }, catchupTitle = title)
+            }
         }
 
     @Volatile private var watchingFullscreen = false
@@ -542,6 +606,15 @@ class LiveTvPlaybackController @Inject constructor(
         /** Catch-up: the real time the replay should start at (the show's start). */
         catchupStartMs: Long? = null
     ) {
+        // A placeholder URL is not a stream: resolve it first, then play the resolved copy. Every
+        // playback entry point comes through here, so no screen has to know a channel is native.
+        if (overrideUrl == null) {
+            val resolver = nativeLive.resolverFor(channel)
+            if (resolver != null && resolver.needsResolution(channel)) {
+                playResolved(channel, resolver)
+                return
+            }
+        }
         if (_shiftStartedAt.value != null) stopShift()
         if (_recordingPlayback.value != null) { _recordingPlayback.value = null; shiftJob?.cancel() }
         archiveStartWallMs = if (catchupTitle != null) catchupStartMs else null
@@ -1577,9 +1650,19 @@ class LiveTvPlaybackController @Inject constructor(
         reconnectJob = scope.launch {
             delay((attempt * 2_000L).coerceAtMost(10_000L))
             val ch = currentChannel ?: return@launch
-            val url = currentUrl ?: return@launch
+            var url = currentUrl ?: return@launch
+            var headers = ch.headers
+            // A native channel's signature is signed at resolve time and expires: replaying the
+            // frozen pair would 401/403 on every attempt and the loop would spin until it gave up.
+            // Re-resolving lands a fresh session, a fresh host and a fresh signature — which is the
+            // whole point of a placeholder URL.
+            val resolver = nativeLive.resolverFor(ch)
+            if (resolver != null && resolver.owns(ch)) {
+                val fresh = runCatching { resolver.resolve(ch) }.getOrNull()
+                if (fresh != null) { currentChannel = fresh; url = fresh.url; headers = fresh.headers }
+            }
             val p = _player ?: return@launch
-            p.setMediaSource(buildMediaSource(url, ch.headers, isLive = _state.value.catchupTitle == null))
+            p.setMediaSource(buildMediaSource(url, headers, isLive = _state.value.catchupTitle == null))
             p.prepare()
             p.playWhenReady = true
         }

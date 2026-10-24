@@ -819,7 +819,7 @@ class SportsRepository @Inject constructor(
                 )
             )
             _matches.value = SportsAddonChannels.decorate(
-                result.matches, events.value, addonCandidates, s.blocked
+                addonBaseUrl, result.matches, events.value, addonCandidates, s.blocked
             )
             if (result.summary != lastSummary) {
                 lastSummary = result.summary

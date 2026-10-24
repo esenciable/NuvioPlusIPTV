@@ -18,6 +18,9 @@ import org.junit.Test
  */
 class SportsAddonChannelsTest {
 
+    /** Where the feed came from: the addon answers with paths relative to this. */
+    private val BASE = "https://addon.test/kt"
+
     private val kickoff = 1_761_148_800_000L
 
     private val epl = League(
@@ -74,7 +77,7 @@ class SportsAddonChannelsTest {
 
     @Test
     fun `the addon channel carries the feed url and a stable key`() {
-        val ch = SportsAddonChannels.channelFor(addon("Arsenal", "Chelsea"))
+        val ch = SportsAddonChannels.channelFor(BASE, addon("Arsenal", "Chelsea"))
 
         assertEquals("ext:rb_445_1", ch.key)
         assertEquals("https://addon.test/kt/rblive/match/445_1.m3u8", ch.url)
@@ -83,15 +86,15 @@ class SportsAddonChannelsTest {
         assertNull(ch.tvgId)
         assertNull(ch.catchup)
         // Rebuilding it must produce the same key: favourites and blocked channels persist by key.
-        assertEquals(ch.key, SportsAddonChannels.channelFor(addon("Arsenal", "Chelsea")).key)
-        assertEquals(ch.key, SportsAddonChannels.channelFor(addon("Different", "Names", matchId = 445)).key)
+        assertEquals(ch.key, SportsAddonChannels.channelFor(BASE, addon("Arsenal", "Chelsea")).key)
+        assertEquals(ch.key, SportsAddonChannels.channelFor(BASE, addon("Different", "Names", matchId = 445)).key)
     }
 
     @Test
     fun `our link is the automatic pick and keeps the guide's guesses`() {
         val ev = event(team("Arsenal"), team("Chelsea"))
 
-        val out = SportsAddonChannels.decorate(
+        val out = SportsAddonChannels.decorate(BASE, 
             mapOf(ev.id to listOf(guideMatch("ch1"))),
             listOf(ev),
             listOf(addon("Arsenal", "Chelsea")),
@@ -112,7 +115,7 @@ class SportsAddonChannelsTest {
     fun `an event the guide never placed becomes watchable`() {
         val ev = event(team("Arsenal"), team("Chelsea"))
 
-        val out = SportsAddonChannels.decorate(emptyMap(), listOf(ev), listOf(addon("Arsenal", "Chelsea")))
+        val out = SportsAddonChannels.decorate(BASE, emptyMap(), listOf(ev), listOf(addon("Arsenal", "Chelsea")))
 
         assertEquals(1, out.getValue(ev.id).size)
         assertEquals("ext:rb_445_1", out.getValue(ev.id).first().channel.key)
@@ -123,7 +126,7 @@ class SportsAddonChannelsTest {
         val ev = event(team("Arsenal"), team("Chelsea"))
         val before = mapOf(ev.id to listOf(guideMatch("ch1")))
 
-        val out = SportsAddonChannels.decorate(before, listOf(ev), listOf(addon("Real Madrid", "Barcelona")))
+        val out = SportsAddonChannels.decorate(BASE, before, listOf(ev), listOf(addon("Real Madrid", "Barcelona")))
 
         assertEquals(before, out)
     }
@@ -133,14 +136,14 @@ class SportsAddonChannelsTest {
         val ev = event(team("Arsenal"), team("Chelsea"))
         val before = mapOf(ev.id to listOf(guideMatch("ch1")))
 
-        assertEquals(before, SportsAddonChannels.decorate(before, listOf(ev), emptyList()))
+        assertEquals(before, SportsAddonChannels.decorate(BASE, before, listOf(ev), emptyList()))
     }
 
     @Test
     fun `the guide's own order is preserved below ours`() {
         val ev = event(team("Arsenal"), team("Chelsea"))
 
-        val out = SportsAddonChannels.decorate(
+        val out = SportsAddonChannels.decorate(BASE, 
             mapOf(ev.id to listOf(guideMatch("chA", 150), guideMatch("chB", 80))),
             listOf(ev),
             listOf(addon("Arsenal", "Chelsea")),
@@ -155,7 +158,7 @@ class SportsAddonChannelsTest {
         // The same "eventId|channelKey" shape SportsMatcher.kt:167 and blockChannel() already use.
         val blocked = setOf("${ev.id}|${SportsAddonChannels.keyOf(addon("Arsenal", "Chelsea"))}")
 
-        val out = SportsAddonChannels.decorate(
+        val out = SportsAddonChannels.decorate(BASE, 
             mapOf(ev.id to listOf(guideMatch("ch1"))),
             listOf(ev),
             listOf(addon("Arsenal", "Chelsea")),
@@ -171,7 +174,7 @@ class SportsAddonChannelsTest {
         val villa = event(team("Aston Villa"), team("Brighton"), id = "espn:x:2")
         val candidates = listOf(addon("Arsenal", "Chelsea", matchId = 445), addon("Aston Villa", "Brighton", matchId = 446))
 
-        val out = SportsAddonChannels.decorate(
+        val out = SportsAddonChannels.decorate(BASE, 
             emptyMap(),
             listOf(arsenal, villa),
             candidates,
@@ -191,7 +194,7 @@ class SportsAddonChannelsTest {
     fun `every source of an event becomes its own channel, above the guide's guesses`() {
         val ev = event(team("Arsenal"), team("Chelsea"))
 
-        val out = SportsAddonChannels.decorate(
+        val out = SportsAddonChannels.decorate(BASE, 
             mapOf(ev.id to listOf(guideMatch("ch1"))),
             listOf(ev),
             listOf(addon("Arsenal", "Chelsea").copy(sources = twoSources)),
@@ -212,7 +215,7 @@ class SportsAddonChannelsTest {
         val ev = event(team("Arsenal"), team("Chelsea"))
         val candidates = listOf(addon("Arsenal", "Chelsea").copy(sources = twoSources))
 
-        val out = SportsAddonChannels.decorate(
+        val out = SportsAddonChannels.decorate(BASE, 
             mapOf(ev.id to listOf(guideMatch("ch1"))),
             listOf(ev),
             candidates,
@@ -227,7 +230,7 @@ class SportsAddonChannelsTest {
     fun `an event with no sources keeps the key the feature shipped with`() {
         val ev = event(team("Arsenal"), team("Chelsea"))
 
-        val out = SportsAddonChannels.decorate(
+        val out = SportsAddonChannels.decorate(BASE, 
             mapOf(ev.id to listOf(guideMatch("ch1"))),
             listOf(ev),
             listOf(addon("Arsenal", "Chelsea")),
@@ -236,5 +239,61 @@ class SportsAddonChannelsTest {
         // Older addon answers, and a live match we could not resolve, must not silently move the
         // key: favourites and refusals persist by it.
         assertEquals(listOf("ext:rb_445_1", "ch1"), out.getValue(ev.id).map { it.channel.key })
+    }
+
+    // The feed's own links are relative to wherever the addon is mounted; the player is not —
+    // handing it "/rblive/match/445_1.m3u8" is how the Sports tab showed games it could not open.
+
+    @Test
+    fun `a relative feed link is joined with the addon base`() {
+        val ev = event(team("Arsenal"), team("Chelsea"))
+
+        val out = SportsAddonChannels.decorate(BASE, emptyMap(), listOf(ev), listOf(
+            addon("Arsenal", "Chelsea").copy(streamUrl = "/rblive/match/445_1.m3u8"),
+        ))
+
+        assertEquals("https://addon.test/kt/rblive/match/445_1.m3u8", out.getValue(ev.id).first().channel.url)
+    }
+
+    @Test
+    fun `joining a relative link leaves exactly one slash`() {
+        // A base with a trailing slash and a path with a leading one must not meet in the middle:
+        // "//rblive/..." is a different resource to a strict upstream.
+        val ch = SportsAddonChannels.channelFor("https://addon.test/kt/", addon("A", "B").copy(streamUrl = "/rblive/match/445_1.m3u8"))
+        assertEquals("https://addon.test/kt/rblive/match/445_1.m3u8", ch.url)
+
+        val noSlash = SportsAddonChannels.channelFor(BASE, addon("A", "B").copy(streamUrl = "rblive/match/445_1.m3u8"))
+        assertEquals("https://addon.test/kt/rblive/match/445_1.m3u8", noSlash.url)
+    }
+
+    @Test
+    fun `an absolute link from the feed is left alone`() {
+        val ch = SportsAddonChannels.channelFor(BASE, addon("A", "B").copy(streamUrl = "https://other.test/live/x.m3u8"))
+        assertEquals("https://other.test/live/x.m3u8", ch.url)
+    }
+
+    @Test
+    fun `every source of a feed joins its own base`() {
+        val ev = event(team("Arsenal"), team("Chelsea"))
+        val withSources = addon("Arsenal", "Chelsea").copy(
+            streamUrl = "/rblive/match/445_1.m3u8",
+            sources = listOf(
+                AddonSource(11, "HD", verified = true, url = "/rblive/match/445_1.m3u8?sid=11"),
+                AddonSource(12, "SD", verified = false, url = "https://other.test/sd.m3u8"),
+            ),
+        )
+
+        val out = SportsAddonChannels.decorate(BASE, emptyMap(), listOf(ev), listOf(withSources))
+
+        assertEquals(
+            listOf("https://addon.test/kt/rblive/match/445_1.m3u8?sid=11", "https://other.test/sd.m3u8"),
+            out.getValue(ev.id).map { it.channel.url },
+        )
+    }
+
+    @Test
+    fun `a feed link with no base to join is passed through as it came`() {
+        val ch = SportsAddonChannels.channelFor("", addon("A", "B").copy(streamUrl = "/rblive/match/445_1.m3u8"))
+        assertEquals("/rblive/match/445_1.m3u8", ch.url)
     }
 }

@@ -51,20 +51,20 @@ internal object SportsAddonChannels {
      * score, so the order here is what `bestChannel()` ends up playing automatically — it should be
      * a signal we saw working, not one the upstream merely claims to have.
      */
-    fun channelsFor(addon: AddonEvent): List<LiveChannel> {
-        if (addon.sources.isEmpty()) return listOf(channelFor(addon))
+    fun channelsFor(baseUrl: String, addon: AddonEvent): List<LiveChannel> {
+        if (addon.sources.isEmpty()) return listOf(channelFor(baseUrl, addon))
         return addon.sources.mapIndexed { i, s -> i to s }
             .sortedWith(compareBy({ !it.second.verified }, { it.first }))
-            .map { (index, source) -> channelFor(addon, source, index) }
+            .map { (index, source) -> channelFor(baseUrl, addon, source, index) }
     }
 
     /** One source as a channel, named so the two are tellable apart in the picker. */
-    fun channelFor(addon: AddonEvent, source: AddonSource, index: Int): LiveChannel = channelFor(addon).copy(
+    fun channelFor(baseUrl: String, addon: AddonEvent, source: AddonSource, index: Int): LiveChannel = channelFor(baseUrl, addon).copy(
         key = keyOf(addon, source, index),
         // The upstream's own name for the feed when it gave one; its place in the list when it
         // did not. "Esencial Sport" alone would render ten identical rows.
         name = "$SOURCE_NAME · " + (source.label?.takeIf { it.isNotBlank() } ?: (index + 1).toString()),
-        url = source.url,
+        url = resolveUrl(baseUrl, source.url),
     )
 
     /**
@@ -72,7 +72,7 @@ internal object SportsAddonChannels {
      * it has no place in the guide or the channel list, and nothing that reads a `ChannelMatch`
      * re-resolves the channel by key — they use the object we hand them.
      */
-    fun channelFor(addon: AddonEvent): LiveChannel = LiveChannel(
+    fun channelFor(baseUrl: String, addon: AddonEvent): LiveChannel = LiveChannel(
         key = keyOf(addon),
         sourceId = SOURCE_ID,
         sourceName = SOURCE_NAME,
@@ -86,8 +86,26 @@ internal object SportsAddonChannels {
         group = SOURCE_NAME,
         // The matcher sorts a tie by channel number; 0 keeps ours first, which is what we want.
         number = 0,
-        url = addon.streamUrl,
+        url = resolveUrl(baseUrl, addon.streamUrl),
     )
+
+    /**
+     * Builds the full URL to the addon's playable address.
+     *
+     * The addon's `/events.json` answers paths relative to the addon's own base (`streamUrl` and
+     * `sources[].url`), because the same build serves `/` and `/kt` equally. The player needs a
+     * fully-qualified address, so the base travels with the feed and is joined here — keeping one
+     * slash where the path already brought one, or a strict upstream reads `//rblive/...` as a
+     * different resource and answers 404 to a signal that is there.
+     */
+    private fun resolveUrl(baseUrl: String, relativeUrl: String): String {
+        val trimmed = relativeUrl.trim()
+        if (trimmed.isBlank()) return trimmed
+        if (trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true)) return trimmed
+        val base = baseUrl.trim().trimEnd('/')
+        if (base.isBlank()) return trimmed
+        return if (trimmed.startsWith("/")) base + trimmed else "$base/$trimmed"
+    }
 
     /**
      * Puts the feed's links in front of every game it can serve.
@@ -101,6 +119,7 @@ internal object SportsAddonChannels {
      *   match's other feeds are different signals and stay pickable.
      */
     fun decorate(
+        baseUrl: String,
         matches: Map<String, List<ChannelMatch>>,
         events: List<SportsEvent>,
         candidates: List<AddonEvent>,
@@ -111,7 +130,7 @@ internal object SportsAddonChannels {
         for (ev in events) {
             val addon = SportsAddonMatcher.find(ev, SportsCatalog.league(ev.leagueId), candidates) ?: continue
             val existing = matches[ev.id].orEmpty()
-            val channels = SportsAddonChannels.channelsFor(addon)
+            val channels = SportsAddonChannels.channelsFor(baseUrl, addon)
                 .filterNot { "${ev.id}|${it.key}" in blocked }
                 .filterNot { ch -> existing.any { it.channel.key == ch.key } }
             if (channels.isEmpty()) continue

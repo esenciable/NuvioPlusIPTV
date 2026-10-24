@@ -45,6 +45,19 @@ scope), `MagisNativeLiveTest`, `SportsAddonChannelsTest`.
   progress on a device that hasn't refreshed.
 - No per-user local override yet; shared only.
 
+## Test rows cleaned out of production (2026-10-24)
+
+The two fake `Boca Juniors vs River Plate` slots used to prove the pipeline on devices were
+deleted through the API — `DELETE /api/epg/lineup/{id}` with the `x-epg-token` header — and
+`/epg.xml` now renders a single `<programme>`. The one row left, `WIN Sports COL HD · Junior vs
+Aguila` (tz `America/Bogota`, 115 min), was published by the operator from the admin page, not by
+this work, so it stays: deleting a listing somebody authored is not what "clean up your test
+rows" asked for.
+
+Worth noting for the next person at a terminal: the header is **`x-epg-token`**. A wrong header name
+comes back as `401 {"error":"missing token"}`, which reads like a bad token and sends you looking in
+the wrong place.
+
 ## Files
 
 - `app/src/main/java/com/nuvio/tv/livetv/data/NuvioGuideSources.kt`

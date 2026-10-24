@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
@@ -369,33 +370,60 @@ class SportsAddonFeedTest {
         // The base arrives with a trailing slash from the build config sometimes; a double slash
         // is a different resource to the upstream and answers 404.
         assertEquals(listOf("https://addon.example/kt1gh2mfcxry/stream/tv/rb_4441324_1.json"), asked)
+        // A readable answer with rows in it is a list, never `null`: `null` is reserved for "the
+        // addon could not ask", which the tab must not cache as a fact about the match.
+        val got = sources ?: return fail("a stream list must be an answer, got null")
         assertEquals(
             listOf("8X VN", "ESPN MX", null),
-            sources.map { it.label },
+            got.map { it.label },
         )
         // The route says `resolution` where the feed says `label`, and `verified` only when it
         // probed: an absent flag is "not verified", never an unknown drawn as a working feed.
-        assertEquals(listOf(888011L, 888012L, 0L), sources.map { it.streamId })
-        assertEquals(listOf(true, false, false), sources.map { it.verified })
+        assertEquals(listOf(888011L, 888012L, 0L), got.map { it.streamId })
+        assertEquals(listOf(true, false, false), got.map { it.verified })
     }
 
     @Test
-    fun `an answer that is not a stream list is no sources, not a failure`() {
-        for (body in listOf("<html>502 Bad Gateway</html>", "", "{}", """{"streams":[]}""")) {
+    fun `an empty list is the addon answering that this match has no feeds`() {
+        val dir = Files.createTempDirectory("addon").toFile()
+        val feed = SportsAddonFeed(dir = dir, now = { 0L })
+
+        assertEquals(emptyList<AddonSource>(),
+            feed.sources("https://addon.example", "rb_1_1", httpGet = { """{"streams":[]}""" }))
+    }
+
+    @Test
+    fun `a body we cannot read is no answer at all`() {
+        for (body in listOf("<html>502 Bad Gateway</html>", "", "{}")) {
             val dir = Files.createTempDirectory("addon").toFile()
             val feed = SportsAddonFeed(dir = dir, now = { 0L })
-            assertEquals("body: $body", emptyList<AddonSource>(), feed.sources("https://addon.example", "rb_1_1", httpGet = { body }))
+            // `null`, not the empty list: an empty list claims the fixture was asked about and has
+            // nothing, which is a fact about the match this reply does not establish.
+            assertNull("body: $body", feed.sources("https://addon.example", "rb_1_1", httpGet = { body }))
         }
     }
 
     @Test
-    fun `a route we cannot reach leaves the match on its own link`() {
+    fun `the addon saying it could not ask is not an answer`() {
+        val dir = Files.createTempDirectory("addon").toFile()
+        val feed = SportsAddonFeed(dir = dir, now = { 0L })
+
+        // `failed` is the server's rate limit, not the fixture's. Reading it as "no feeds" is what
+        // made a viewer keep seeing one row for minutes after the upstream recovered: the tab
+        // stored the silence as an answer about that match.
+        assertNull(feed.sources("https://addon.example", "rb_1_1", httpGet = { """{"failed":true,"streams":[]}""" }))
+        // A real list with the flag set is still the odd case worth surviving: the rows it names
+        // came from somewhere, so they are the answer.
+        assertEquals(3, feed.sources("https://addon.example", "rb_1_1", httpGet = { """{"failed":true,"streams":[{"url":"https://a/m","resolution":"HD"},{"url":"https://b/m","resolution":"SD"},{"url":"https://c/m"}]}""" })?.size)
+    }
+
+    @Test
+    fun `a route we cannot reach is no answer, and leaves the match on its own link`() {
         val dir = Files.createTempDirectory("addon").toFile()
         val feed = SportsAddonFeed(dir = dir, now = { 0L })
 
         // The caller keeps `sources` empty, which `decorate` answers with the single stable
         // streamUrl: a rate limit must cost the viewer the extra feeds, never the match.
-        assertEquals(emptyList<AddonSource>(),
-            feed.sources("https://addon.example", "rb_1_1", httpGet = { throw java.io.IOException("HTTP 429") }))
+        assertNull(feed.sources("https://addon.example", "rb_1_1", httpGet = { throw java.io.IOException("HTTP 429") }))
     }
 }

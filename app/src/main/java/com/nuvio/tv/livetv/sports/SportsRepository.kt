@@ -331,8 +331,12 @@ class SportsRepository @Inject constructor(
         val now = System.currentTimeMillis()
         // The feed named them, or we asked a moment ago and it had nothing: do not go back out.
         if (addon.sources.isNotEmpty() || now - (askedAt[addon.id] ?: 0L) < SOURCE_ASK_MS) return
+        val got = withContext(Dispatchers.IO) { runCatching { addonFeed.sources(base, addon.id) }.getOrNull() }
+        // `null` is the addon saying it could not ask — its rate limit, a cold route. Stamping that
+        // as an answer about this fixture is what left a viewer with one row for five minutes on a
+        // match the upstream carries eight feeds for, so the next open asks again.
+        if (got == null) return
         askedAt[addon.id] = now
-        val got = withContext(Dispatchers.IO) { runCatching { addonFeed.sources(base, addon.id) }.getOrDefault(emptyList()) }
         if (got.isEmpty()) return
         addonCandidates = addonCandidates.map { if (it.id == addon.id) it.copy(sources = got) else it }
         // `decorate` reads the candidate list and rebuilds the whole match map, so the rows for this

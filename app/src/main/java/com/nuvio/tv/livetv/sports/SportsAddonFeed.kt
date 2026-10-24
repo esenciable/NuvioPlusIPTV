@@ -101,18 +101,29 @@ internal class SportsAddonFeed(
      * fixture on every poll without cooling the client every viewer shares.
      *
      * The route's shape differs from the feed's: `resolution` where the feed says `label`, and the
-     * address is already absolute. An answer we cannot read is no sources, which plays the same as
-     * the match link — never an error the screen has to carry.
+     * address is already absolute.
+     *
+     * `null` means *no answer*, and an empty list means the addon asked and the fixture has no
+     * feeds — the difference is the whole point. The server sets `failed` when it could not ask the
+     * upstream (its rate limit, a cold cache); so does a body that is not JSON, and so does a route
+     * we could not reach. Call those "no feeds" and the tab stores a minute of someone else's
+     * congestion as a fact about this match, which is how a viewer ends up looking at one row for a
+     * game the upstream carries eight feeds for, minutes after the upstream recovered.
      */
     fun sources(
         baseUrl: String,
         eventId: String,
         httpGet: (url: String) -> String = ::downloadShort,
-    ): List<AddonSource> {
-        val body = runCatching { httpGet(sourceUrl(baseUrl, eventId)) }.getOrNull()?.takeIf { it.isNotBlank() } ?: return emptyList()
-        val root = runCatching { json.parseToJsonElement(body) }.getOrNull() as? JsonObject ?: return emptyList()
-        val streams = root["streams"] as? JsonArray ?: return emptyList()
-        return streams.mapNotNull { s -> streamSource(s as? JsonObject ?: return@mapNotNull null) }.take(MAX_SOURCES)
+    ): List<AddonSource>? {
+        val body = runCatching { httpGet(sourceUrl(baseUrl, eventId)) }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
+        val root = runCatching { json.parseToJsonElement(body) }.getOrNull() as? JsonObject ?: return null
+        val streams = root["streams"] as? JsonArray ?: return null
+        val list = streams.mapNotNull { s -> streamSource(s as? JsonObject ?: return@mapNotNull null) }.take(MAX_SOURCES)
+        // `failed` with rows in it is a contradiction the server does not produce today; if it ever
+        // did, the rows it handed over are worth more than the flag. Empty *and* failed is the case
+        // that must not be stored as an answer about this fixture.
+        if (list.isNotEmpty()) return list
+        return if ((root["failed"] as? JsonPrimitive)?.booleanOrNull == true) null else list
     }
 
     private fun streamSource(o: JsonObject): AddonSource? {

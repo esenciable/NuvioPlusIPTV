@@ -460,10 +460,20 @@ object SportsCatalog {
         "crystal palace" to listOf("palace"),
         "paris saint germain" to listOf("psg", "paris sg", "paris st germain"),
         "internazionale" to listOf("inter milan", "internazionale milano"),
-                "bayern munich" to listOf("bayern", "fc bayern", "bayern munchen"),
+                "bayern munich" to listOf("bayern", "fc bayern", "bayern munchen", "bayern de munich", "fc bayern munchen"),
         "borussia dortmund" to listOf("dortmund", "bvb"),
         "bayer leverkusen" to listOf("leverkusen"),
         "atletico madrid" to listOf("atletico", "atleti"),
+        // The sports feed writes some foreign clubs by their Spanish name, and folding accents does
+        // not undo it: "Fráncfort" is "francfort" once the accent is gone, which is not the word
+        // "Frankfurt". Measured in its feed on 2026-10-24 (940 distinct names); these are the ones
+        // it uses today. Without them the join finds nothing and the match shows no source at all.
+        "eintracht frankfurt" to listOf("frankfurt", "eintracht francfort", "francfort"),
+        "frankfurt" to listOf("eintracht frankfurt", "eintracht francfort", "francfort"),
+        "nuremberg" to listOf("nurnberg", "1 fc nurnberg", "1. fc nurnberg"),
+        "club brugge" to listOf("brugge", "club brujas", "brujas"),
+        "brugge" to listOf("club brugge", "club brujas", "brujas"),
+        "porto" to listOf("oporto", "fc oporto", "futebol clube porto"),
         "barcelona" to listOf("barca", "fc barcelona"),
         "celtic" to listOf("celtic fc"),
         "rangers" to listOf("rangers fc"),

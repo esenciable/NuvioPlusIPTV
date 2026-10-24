@@ -127,6 +127,34 @@ class SportsAddonMatcherTest {
     }
 
     @Test
+    fun `the feed's Spanish spellings of a foreign club still join`() {
+        // Measured in production `/events.json` (2026-10-24, 940 distinct team names): the feed
+        // writes some foreign clubs by their Spanish name. Stripping accents does not undo that —
+        // "Fráncfort" becomes "francfort", which is not the word "Frankfurt" is — so the join fails
+        // and the viewer who opened that match sees no Esencial row at all, not one source fewer.
+        // These four are the ones the feed actually uses today.
+        val frankfurt = team("Eintracht Frankfurt", nick = "Frankfurt", location = "Frankfurt")
+        val dortmund = team("Borussia Dortmund", nick = "Dortmund", location = "Dortmund")
+        val bundesliga = addon(first = "Borussia Dortmund", second = "Eintracht Fráncfort", id = "bvb")
+        assertEquals(bundesliga, SportsAddonMatcher.find(event(home = dortmund, away = frankfurt), epl, listOf(bundesliga)))
+
+        val nuremberg = team("1. FC Nuremberg", nick = "Nuremberg", location = "Nuremberg")
+        val ingolstadt = team("FC Ingolstadt", nick = "Ingolstadt", location = "Ingolstadt")
+        val secondBundesliga = addon(first = "Núremberg", second = "Ingolstadt", id = "fcn")
+        assertEquals(secondBundesliga, SportsAddonMatcher.find(event(home = nuremberg, away = ingolstadt), epl, listOf(secondBundesliga)))
+
+        val brugge = team("Club Brugge", nick = "Club Brugge", location = "Bruges")
+        val genk = team("KRC Genk", nick = "Genk", location = "Genk")
+        val belgian = addon(first = "Club Brujas", second = "Genk", id = "brujas")
+        assertEquals(belgian, SportsAddonMatcher.find(event(home = brugge, away = genk), epl, listOf(belgian)))
+
+        val porto = team("FC Porto", nick = "Porto", location = "Porto")
+        val braga = team("SC Braga", nick = "Braga", location = "Braga")
+        val portuguese = addon(first = "Oporto", second = "Braga", id = "oporto")
+        assertEquals(portuguese, SportsAddonMatcher.find(event(home = porto, away = braga), epl, listOf(portuguese)))
+    }
+
+    @Test
     fun `keeps the twenty minute kick-off window`() {
         val game = event(home = brighton, away = arsenal)
 

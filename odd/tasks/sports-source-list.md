@@ -75,6 +75,37 @@ to tune, no load on matches nobody is looking at, and nothing added to the ten-s
 `decorate` **replaces** the rows for that fixture instead of leaving the single link behind as an
 eleventh row.
 
+## What the operator's own device test found (build 16 → 17)
+
+The viewer checked three live matches on the TiVo. That report separated two defects the emulator
+could not show, because the emulator's one fixture happened to be a big one:
+
+| Match | feed published | route answered | what the tab showed | defect |
+| --- | --- | --- | --- | --- |
+| Chelsea vs Tottenham | 10 sources | — | several, **after a few minutes** | the ask was cached as empty on the first `failed` answer |
+| Valencia vs Villarreal | `null` (outside the poll budget) | `failed: true`, 0 streams | one row | `failed` read as "this match has no feeds" and stored 5 min |
+| Dortmund vs Frankfurt | **6 sources** | 6 streams | **no row at all** | the join never found the event |
+
+Dortmund was the interesting one: the server had the feeds and named them, and the tab still showed
+nothing. The feed writes that club as `Eintracht Fráncfort`; the guide says `Frankfurt`. Folding
+accents gives `francfort`, which is not the word `Frankfurt`, so both-teams matching failed and the
+match got no Esencial row — a missing row, not a shorter list. Four aliases went into
+`SportsCatalog.ALIASES` (Frankfurt, Nuremberg, Club Brugge, Porto — the Spanish forms the feed uses
+today, taken from its 940 distinct names), and `Bayern de Múnich` was folded into the existing
+`bayern munich` entry instead of added as a second key: `mapOf` lets a duplicate key silently drop
+the first entry's values, which would have deleted `"bayern"` and `"fc bayern"`.
+
+The other fix is in `SportsAddonFeed.sources()`: it returned an empty list for every failure, so the
+tab stored a rate limit as a fact about the fixture. `null` now means "no answer" and caches
+nothing; an empty list means the addon asked and the match has no feeds.
+
+Both came from one observation the emulator could not make on its own: the fixture the viewer chose
+is the one that tests the join, not the one the poll happened to resolve.
+
+Full suite: 2378 tests, 3 failed — `SettingsCatalogTest`, `TraktAuthServiceTest`,
+`TraktProgressServiceRefreshTest`, the same three that fail on clean `HEAD` with these changes
+stashed (verified by re-running them without the working tree), so not caused by this work.
+
 ## Device evidence (build 16, emulator `emulator-5554`)
 
 Napoli vs AS Roma, Serie A, LIVE at 66'. `WATCH ON YOUR CHANNELS` before this change: one row,

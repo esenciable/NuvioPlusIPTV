@@ -55,6 +55,8 @@ class LiveTvPreferences @Inject constructor(
     private object Keys {
         val playlists = stringPreferencesKey("playlists")
         val epgs = stringPreferencesKey("epg_sources")
+        /** Which round of built-in guides this install has already been through. */
+        val guideSeed = intPreferencesKey("guide_seed_version")
 
         val showInSidebar = booleanPreferencesKey("show_in_sidebar")
         val showNames = booleanPreferencesKey("show_channel_names")
@@ -463,6 +465,21 @@ class LiveTvPreferences @Inject constructor(
 
     suspend fun updateEpgSources(transform: (List<EpgSource>) -> List<EpgSource>) {
         store.edit { p -> p[Keys.epgs] = encodeEpgs(transform(decodeEpgs(p[Keys.epgs]))) }
+    }
+
+    /**
+     * Adds the guides the product ships with (the shared sports guide), once per seed version.
+     *
+     * Called before anything reads the guide list, so a fresh install has the guide on its first
+     * update check and an owner who deleted it is left alone: [NuvioGuideSources.seed] answers
+     * null once the stamp is in place, and the write is skipped entirely.
+     */
+    suspend fun seedBuiltInGuides() {
+        store.edit { p ->
+            val seed = NuvioGuideSources.seed(decodeEpgs(p[Keys.epgs]), p[Keys.guideSeed] ?: 0) ?: return@edit
+            p[Keys.epgs] = encodeEpgs(seed.sources)
+            p[Keys.guideSeed] = seed.version
+        }
     }
 
     // ---------- settings ----------

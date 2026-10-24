@@ -118,6 +118,10 @@ android {
         buildConfigField("String", "TRAKT_CLIENT_SECRET", "\"${localProperties.getProperty("TRAKT_CLIENT_SECRET", "")}\"")
         buildConfigField("String", "TRAKT_API_URL", "\"${localProperties.getProperty("TRAKT_API_URL", "https://api.trakt.tv/")}\"")
         buildConfigField("String", "TRAKT_REDIRECT_URI", "\"${localProperties.getProperty("TRAKT_REDIRECT_URI", "urn:ietf:wg:oauth:2.0:oob")}\"")
+        // The shared sports guide (the server behind the Sports tab) ships as a built-in guide
+        // source: a listing published there reaches every install's TV guide without anybody
+        // typing a URL. Empty disables the feature (see NuvioGuideSources).
+        buildConfigField("String", "SPORTS_GUIDE_URL", "\"${localProperties.getProperty("SPORTS_GUIDE_URL", "https://esencialsport.attendanceos.app/epg.xml")}\"")
         // Native Magis VOD engine (ext/livetv/magis). These are deployment secrets, read from
         // local.properties (gitignored) exactly like the fork: a build without them produces an
         // INERT source (empty config ⇒ empty native-VOD list), never a broken one. The live

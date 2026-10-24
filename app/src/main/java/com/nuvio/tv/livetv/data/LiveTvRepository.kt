@@ -526,6 +526,9 @@ class LiveTvRepository @Inject constructor(
     ) {
         if (!automatic) manualQueued.value = false
         val t0Update = System.currentTimeMillis()
+        // The built-in guides are added before anything reads the list, so the shared sports
+        // guide is downloaded and matched on the same pass that discovers it.
+        runCatching { prefs.seedBuiltInGuides() }.onFailure { Log.w(TAG, "Built-in guide seed failed", it) }
         LIVE_REPORT.add(if (automatic) "Update check started" else "Update started")
         try { refreshBody(forcePlaylists, forceEpg, forceIds, automatic) }
         finally { LIVE_REPORT.add("Update finished in ${(System.currentTimeMillis() - t0Update) / 1000} s") }

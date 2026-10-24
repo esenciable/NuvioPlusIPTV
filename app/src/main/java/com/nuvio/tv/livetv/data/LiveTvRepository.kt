@@ -903,7 +903,7 @@ class LiveTvRepository @Inject constructor(
      */
     private suspend fun syncHidden() = withContext(Dispatchers.IO) {
         if (!guideInDb) return@withContext
-        val channels = _playlistChannels.value
+        val channels = this@LiveTvRepository.channels.value
         if (channels.isEmpty()) return@withContext
         val hidden = prefs.currentHiddenEverywhere()
         val nowHidden = channels.filter { hidden.hides(it.key, it.groupId) }.mapTo(HashSet()) { it.key }
@@ -1017,7 +1017,9 @@ class LiveTvRepository @Inject constructor(
      * the others in the background. Instant, however big the guide is.
      */
     private suspend fun loadGuideFromDb(settings: LiveTvSettings, targets: List<EpgTarget>, pre: GuidePreRead?): Boolean = withContext(Dispatchers.IO) {
-        if (_playlistChannels.value.isEmpty()) return@withContext false
+        // The merged list: a device whose channels come from a native source (no playlist at all)
+        // still has a guide to read.
+        if (channels.value.isEmpty()) return@withContext false
         runCatching { savedGuideFile.delete() } // the old single-file copy isn't used any more
         val expected = guideFingerprint(settings, targets)
         val stored = pre?.fingerprint ?: runCatching { guideDb.fingerprint() }.getOrNull()
@@ -1059,7 +1061,7 @@ class LiveTvRepository @Inject constructor(
             // all of it has run out): it was still taken as up to date, so the guide stayed
             // empty until a playlist or guide changed. Match the guide files again now (and
             // download them again if they're old too).
-            if (_programs.value.isEmpty() && _playlistChannels.value.isNotEmpty() && targets.isNotEmpty()) {
+            if (_programs.value.isEmpty() && channels.value.isNotEmpty() && targets.isNotEmpty()) {
                 storedGuideEmpty = true
                 LIVE_REPORT.add("Stored guide has no listings for now: reading the guides again")
                 scope.launch { runCatching { refreshStale() } }
@@ -1369,7 +1371,10 @@ class LiveTvRepository @Inject constructor(
             sb.append(t.fileId).append(':').append(f.length()).append(':').append(contentStamp(f)).append(',')
         }
         sb.append('|').append(overrides.hashCode())
-        sb.append('|').append(_playlistChannels.value.size).append(':').append(_playlistChannels.value.sumOf { it.key.hashCode().toLong() })
+        // Every channel the guide is matched over (playlists and the sources the app loads itself):
+        // a portal catalog that gained or lost channels must not keep serving the stored guide.
+        val guideChannels = channels.value
+        sb.append('|').append(guideChannels.size).append(':').append(guideChannels.sumOf { it.key.hashCode().toLong() })
         return sb.toString()
     }
 
@@ -1411,7 +1416,7 @@ class LiveTvRepository @Inject constructor(
      * matched to it). Otherwise (or for a guide stored by an older version) false: read it all.
      */
     private suspend fun dropRemovedPlaylistsFromGuide(settings: LiveTvSettings, targets: List<EpgTarget>): Boolean = withContext(Dispatchers.IO) {
-        val channels = _playlistChannels.value
+        val channels = this@LiveTvRepository.channels.value
         if (channels.isEmpty()) return@withContext false
         val stored = runCatching { guideDb.fingerprint() }.getOrNull() ?: return@withContext false
         val old = runCatching { guideDb.parts()?.let { JSONObject(it) } }.getOrNull() ?: return@withContext false
@@ -1687,11 +1692,21 @@ class LiveTvRepository @Inject constructor(
     }
 
     private suspend fun buildProgramsInner(settings: LiveTvSettings, targets: List<EpgTarget>) = withContext(Dispatchers.IO) {
-        val all = _playlistChannels.value
+        // The guide is matched over every channel the Live TV tab shows: the playlist's own and the
+        // ones the app loads for itself (a native source's portal channels). A playlist channel
+        // carries a tvg-id from its file; a native channel has only its name — which is how a
+        // published sports listing reaches "NBA TV 04" without anybody editing a playlist.
+        val all = channels.value
         if (all.isEmpty()) {
             _programs.value = emptyMap()
             return@withContext
         }
+        val nativeKeys = nativeLive.channels.value.mapTo(HashSet()) { it.key }
+        // Guides the product ships (the shared sports guide). A portal's thousand channel names
+        // are matched only against these: name-only matching against somebody's big XMLTV would
+        // duplicate listings for channels whose playlist already carries a tvg-id, and grow the
+        // guide database for signals nobody published anything for.
+        val builtInIds = NuvioGuideSources.builtIn().mapTo(HashSet()) { it.id }
         // Channels no profile shows (hidden, or in a hidden group, in every profile) get no
         // listings: nobody sees them, and big providers' hidden groups made the guide database
         // many times bigger than what's watched. Showing them again reads their listings back.
@@ -1700,7 +1715,8 @@ class LiveTvRepository @Inject constructor(
         val channels = all.filter { c -> (!hidden.hides(c.key, c.groupId)).also { shown -> if (!shown) skipped += c.key } }
         LIVE_REPORT.add(
             "Guide matching: ${channels.size} of ${all.size} channels shown somewhere" +
-                " (${channels.count { !it.tvgId.isNullOrBlank() }} with a tvg-id)"
+                " (${channels.count { !it.tvgId.isNullOrBlank() }} with a tvg-id," +
+                " ${channels.count { it.key in nativeKeys }} loaded by the app itself)"
         )
         val now = System.currentTimeMillis()
         val windowStart = now - settings.epgPastHours.coerceAtLeast(1) * HOUR
@@ -1710,13 +1726,16 @@ class LiveTvRepository @Inject constructor(
         val overrides = prefs.userState.first().epgOverrides
             .filterKeys { key -> channels.any { it.key == key } }
 
-        val byTvgId = HashMap<String, MutableList<LiveChannel>>()
-        val byName = HashMap<String, MutableList<LiveChannel>>()
-        channels.forEach { c ->
-            if (c.key in overrides) return@forEach
-            c.tvgId?.lowercase()?.let { byTvgId.getOrPut(it) { ArrayList() }.add(c) }
-            normalize(c.tvgName ?: "").takeIf { it.isNotEmpty() }?.let { byName.getOrPut(it) { ArrayList() }.add(c) }
-            normalize(c.name).takeIf { it.isNotEmpty() }?.let { byName.getOrPut(it) { ArrayList() }.add(c) }
+        fun indexChannels(list: List<LiveChannel>): Pair<HashMap<String, MutableList<LiveChannel>>, HashMap<String, MutableList<LiveChannel>>> {
+            val byTvgId = HashMap<String, MutableList<LiveChannel>>()
+            val byName = HashMap<String, MutableList<LiveChannel>>()
+            list.forEach { c ->
+                if (c.key in overrides) return@forEach
+                c.tvgId?.lowercase()?.let { byTvgId.getOrPut(it) { ArrayList() }.add(c) }
+                normalize(c.tvgName ?: "").takeIf { it.isNotEmpty() }?.let { byName.getOrPut(it) { ArrayList() }.add(c) }
+                normalize(c.name).takeIf { it.isNotEmpty() }?.let { byName.getOrPut(it) { ArrayList() }.add(c) }
+            }
+            return byTvgId to byName
         }
 
         // Every guide is read; each channel keeps its best candidate:
@@ -1745,6 +1764,9 @@ class LiveTvRepository @Inject constructor(
                 }
             }
             val pinnedHere = overrides.filterValues { it.sourceId == target.fileId }
+            val (byTvgId, byName) = indexChannels(
+                NuvioGuideSources.matchable(channels, { it.key }, nativeKeys, builtIn = target.sourceId in builtInIds)
+            )
             val idHits = HashMap<String, MutableSet<LiveChannel>>()
             val nameHits = HashMap<String, MutableSet<LiveChannel>>()
             val parsed = runCatching {
@@ -2010,7 +2032,7 @@ class LiveTvRepository @Inject constructor(
         if (autoBack.isNotEmpty()) {
             val lists = _epgSources.value
             if (lists.isEmpty()) return@withContext false
-            val chans = _playlistChannels.value.filter { it.key in autoBack }
+            val chans = channels.value.filter { it.key in autoBack }
             targets.forEachIndexed { order, t ->
                 val list = lists.firstOrNull { it.sourceId == t.fileId } ?: return@forEachIndexed
                 chans.forEach { c ->

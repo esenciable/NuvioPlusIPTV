@@ -47,4 +47,17 @@ object NuvioGuideSources {
     }
 
     data class Seed(val sources: List<EpgSource>, val version: Int = SEED_VERSION)
+
+    /**
+     * Which channels a guide may fill.
+     *
+     * The guides the product ships exist for the channels the app loads for itself: a portal's
+     * "NBA TV 04" carries no tvg-id, so its name is the only thing a listing can attach to. Any
+     * other guide — a user's XMLTV, a playlist's built-in one — keeps matching playlist channels
+     * alone. A portal's thousand names matched by name against somebody's big guide would
+     * duplicate listings their playlists already provide, and grow the guide database for signals
+     * nobody published anything for.
+     */
+    fun <T> matchable(channels: List<T>, keyOf: (T) -> String, nativeKeys: Set<String>, builtIn: Boolean): List<T> =
+        if (builtIn) channels else channels.filterNot { keyOf(it) in nativeKeys }
 }

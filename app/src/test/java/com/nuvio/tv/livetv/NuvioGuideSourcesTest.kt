@@ -72,4 +72,31 @@ class NuvioGuideSourcesTest {
         assertTrue(NuvioGuideSources.builtIn(url = "").isEmpty())
         assertEquals(1, NuvioGuideSources.builtIn(url = url).size)
     }
+
+    // Which channels a guide may fill. The app's own channels (a portal's, the Sports tab's) have
+    // no tvg-id: the published guide is what gives them listings, and no other guide is allowed to
+    // guess at them by name.
+
+    private val playlist = listOf("pl|ESPN", "pl|TyC Sports")
+    private val native = listOf("magis:8123", "magis:8124")
+    private val all = playlist + native
+    private val nativeKeys = native.toSet()
+
+    @Test
+    fun `a built-in guide may fill every channel the Live TV tab shows`() {
+        val filled = NuvioGuideSources.matchable(all, { it }, nativeKeys, builtIn = true)
+        assertEquals(all, filled)
+    }
+
+    @Test
+    fun `any other guide fills playlist channels only`() {
+        val filled = NuvioGuideSources.matchable(all, { it }, nativeKeys, builtIn = false)
+        assertEquals(playlist, filled)
+    }
+
+    @Test
+    fun `a build with no channels to fill stays empty instead of matching everything`() {
+        assertTrue(NuvioGuideSources.matchable(emptyList(), { it: String -> it }, nativeKeys, builtIn = false).isEmpty())
+        assertTrue(NuvioGuideSources.matchable(native, { it }, nativeKeys, builtIn = false).isEmpty())
+    }
 }

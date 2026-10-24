@@ -89,6 +89,42 @@ internal class SportsAddonFeed(
     /** The addon's events, ready to be joined to the app's own games. */
     fun events(baseUrl: String, force: Boolean = false): List<AddonEvent> = parseEvents(raw(baseUrl, force).orEmpty())
 
+    /**
+     * One match's feeds, asked of the addon's stream route.
+     *
+     * `/events.json` carries `sources` only for the live matches it managed to resolve itself, and
+     * it resolves a bounded slice per poll: the game a viewer is looking at is often not among
+     * them, and arrives with nothing but the match link. The route answers the full list — ten
+     * named feeds for a Serie A match measured against the feed's one — so the tab asks it for the
+     * match it is actually showing. One request per match, for the matches somebody opened, is
+     * also what the upstream's rate limit can afford: the feed cannot ask that for every live
+     * fixture on every poll without cooling the client every viewer shares.
+     *
+     * The route's shape differs from the feed's: `resolution` where the feed says `label`, and the
+     * address is already absolute. An answer we cannot read is no sources, which plays the same as
+     * the match link — never an error the screen has to carry.
+     */
+    fun sources(
+        baseUrl: String,
+        eventId: String,
+        httpGet: (url: String) -> String = ::downloadShort,
+    ): List<AddonSource> {
+        val body = runCatching { httpGet(sourceUrl(baseUrl, eventId)) }.getOrNull()?.takeIf { it.isNotBlank() } ?: return emptyList()
+        val root = runCatching { json.parseToJsonElement(body) }.getOrNull() as? JsonObject ?: return emptyList()
+        val streams = root["streams"] as? JsonArray ?: return emptyList()
+        return streams.mapNotNull { s -> streamSource(s as? JsonObject ?: return@mapNotNull null) }.take(MAX_SOURCES)
+    }
+
+    private fun streamSource(o: JsonObject): AddonSource? {
+        val url = o.str("url") ?: return null
+        return AddonSource(
+            streamId = o.long("streamId") ?: 0L,
+            label = o.str("resolution"),
+            verified = (o["verified"] as? JsonPrimitive)?.booleanOrNull ?: false,
+            url = url,
+        )
+    }
+
     private fun read(file: File): Pair<Long, String>? {
         val text = runCatching { file.takeIf { it.exists() }?.readText() }.getOrNull() ?: return null
         val nl = text.indexOf('\n')
@@ -103,6 +139,13 @@ internal class SportsAddonFeed(
 
         /** The feed's address for a base URL (a trailing slash makes no difference). */
         fun url(baseUrl: String): String = baseUrl.trim().trimEnd('/') + "/events.json"
+
+        /** Where one match's feeds live. Same base, same trimming rule as [url]. */
+        fun sourceUrl(baseUrl: String, eventId: String): String =
+            baseUrl.trim().trimEnd('/') + "/stream/tv/" + eventId.trim() + ".json"
+
+        /** A match has never shown more than ten; more than this is a feed that lost the plot. */
+        const val MAX_SOURCES = 12
 
         /** One file per base address, named like the other feeds' ("addon_https_addon_example.json"). */
         fun cacheName(baseUrl: String): String = "addon_" + baseUrl.trim().replace(Regex("[^a-zA-Z0-9]+"), "_") + ".json"
@@ -122,12 +165,32 @@ internal class SportsAddonFeed(
                 .build()
         }
 
-        private fun download(url: String): String {
+        private val shortHttp: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(4, TimeUnit.SECONDS)
+                .readTimeout(6, TimeUnit.SECONDS)
+                .callTimeout(8, TimeUnit.SECONDS)
+                .followRedirects(true)
+                .retryOnConnectionFailure(false)
+                .build()
+        }
+
+        private fun download(url: String): String = get(url, http)
+
+        /**
+         * A source list is asked beside everything else the sports loop refreshes every ten
+         * seconds, so it gets the short timeout: the [feed's own download][http] may wait out a
+         * slow provider because the page is built on it, and a per-match list may not — the match
+         * already has a link to play, and a stalled poll would take the scores with it.
+         */
+        private fun downloadShort(url: String): String = get(url, shortHttp)
+
+        private fun get(url: String, client: OkHttpClient): String {
             val req = Request.Builder().url(url)
                 .header("Accept", "application/json")
                 .header("User-Agent", "Mozilla/5.0 (Linux; Android 12; TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36")
                 .build()
-            http.newCall(req).execute().use { r ->
+            client.newCall(req).execute().use { r ->
                 if (!r.isSuccessful) throw java.io.IOException("HTTP ${r.code}")
                 return r.body?.string() ?: throw java.io.IOException("empty answer")
             }

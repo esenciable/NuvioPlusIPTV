@@ -67,6 +67,9 @@ class SportsRepository @Inject constructor(
     @Volatile
     private var addonCandidates: List<AddonEvent> = emptyList()
 
+    /** When we last asked the addon for one match's feeds. Keeps a re-open off the network. */
+    private val askedAt = HashMap<String, Long>()
+
     val settings: StateFlow<SportsSettings> = prefs.sportsSettingsJson
         .map { SportsSettings.fromJson(it) }
         .stateIn(scope, SharingStarted.Eagerly, SportsSettings())
@@ -303,6 +306,39 @@ class SportsRepository @Inject constructor(
         val base = addonBaseUrl
         if (base.isBlank()) return
         addonFeed.events(base, force).let { if (it.isNotEmpty()) addonCandidates = it }
+    }
+
+    /**
+     * The feeds of one match, asked when the viewer opens it.
+     *
+     * `/events.json` names the sources only for the live matches it managed to resolve on its own,
+     * and it resolves a bounded slice per poll: the fixture on screen is almost never among them,
+     * and arrives with one link when the upstream carries ten different feeds for it (a different
+     * commentary language each). Asking for the match somebody opened is the only shape that costs
+     * what it is worth — one request for one fixture, instead of a fan-out over every live match
+     * that trips a rate limit every viewer shares. A bounded slice in the poll cannot do it either:
+     * the feed sorts live matches by the earliest kick-off, so the game that just started, which is
+     * the one on the screen, is the last to be asked.
+     *
+     * An answer we cannot get leaves the match exactly as it was: the tab still has its one stable
+     * link, which is the difference between a shorter list and a game that will not open.
+     */
+    suspend fun loadSources(eventId: String) {
+        val base = addonBaseUrl
+        if (base.isBlank()) return
+        val ev = events.value.firstOrNull { it.id == eventId } ?: return
+        val addon = SportsAddonMatcher.find(ev, SportsCatalog.league(ev.leagueId), addonCandidates) ?: return
+        val now = System.currentTimeMillis()
+        // The feed named them, or we asked a moment ago and it had nothing: do not go back out.
+        if (addon.sources.isNotEmpty() || now - (askedAt[addon.id] ?: 0L) < SOURCE_ASK_MS) return
+        askedAt[addon.id] = now
+        val got = withContext(Dispatchers.IO) { runCatching { addonFeed.sources(base, addon.id) }.getOrDefault(emptyList()) }
+        if (got.isEmpty()) return
+        addonCandidates = addonCandidates.map { if (it.id == addon.id) it.copy(sources = got) else it }
+        // `decorate` reads the candidate list and rebuilds the whole match map, so the rows for this
+        // fixture are replaced rather than appended: the single link the viewer saw a moment ago
+        // does not stay behind as an eleventh row.
+        runMatch()
     }
 
     private suspend fun updateOnce(now: Long) {
@@ -1058,6 +1094,9 @@ class SportsRepository @Inject constructor(
 
     companion object {
         private const val TAG = "Sports"
+
+        /** How long an answer about one match is believed before the tab asks the addon again. */
+        private const val SOURCE_ASK_MS = 5 * 60_000L
 
         /**
          * Where Esencial Sport's events come from. Blank disables the whole path, so a build

@@ -1008,6 +1008,10 @@ private fun GamePage(
     onClose: () -> Unit
 ) {
     BackHandler(onBack = onClose)
+    // Somebody opened this fixture, so its feeds are worth asking for. The event feed carries one
+    // link for most live matches; the list of them — a different commentary language each — is
+    // what this screen's picker is for. Runs off the main thread and never blocks the rows we have.
+    LaunchedEffect(ev.id) { viewModel.repo.loadSources(ev.id) }
     val league = SportsCatalog.league(ev.leagueId)
     val sport = league?.sport ?: Sport.OTHER
     val sides = ev.ordered(sport)

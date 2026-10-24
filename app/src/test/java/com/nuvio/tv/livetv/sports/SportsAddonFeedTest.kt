@@ -341,4 +341,61 @@ class SportsAddonFeedTest {
         assertEquals(1, ev.sources.size)
         assertEquals(0L, ev.sources[0].streamId)
     }
+    /** What the addon's stream route answers for one live match (measured: ten feeds for Serie A). */
+    private val streamsBody = """
+        {"streams":[
+          {"name":"Esencial Sport","title":"Napoli vs AS Roma \u00b7 8X VN",
+           "url":"https://addon.example/rblive/playlist.m3u8?u=abc","resolution":"8X VN",
+           "streamId":888011,"verified":true},
+          {"name":"Esencial Sport","title":"Napoli vs AS Roma \u00b7 ESPN MX",
+           "url":"https://addon.example/rblive/playlist.m3u8?s=def","resolution":"ESPN MX",
+           "streamId":888012,"verified":false},
+          {"name":"Esencial Sport","title":"no url, no channel","resolution":"Rota"},
+          {"name":"Esencial Sport","title":"unnamed feed",
+           "url":"https://addon.example/rblive/playlist.m3u8?s=ghi"}
+        ]}""".trimIndent()
+
+    @Test
+    fun `asks one match's feeds of the stream route`() {
+        val asked = mutableListOf<String>()
+        val dir = Files.createTempDirectory("addon").toFile()
+        val feed = SportsAddonFeed(dir = dir, now = { 0L })
+
+        val sources = feed.sources(
+            "https://addon.example/kt1gh2mfcxry/", "rb_4441324_1",
+            httpGet = { url -> asked += url; streamsBody },
+        )
+
+        // The base arrives with a trailing slash from the build config sometimes; a double slash
+        // is a different resource to the upstream and answers 404.
+        assertEquals(listOf("https://addon.example/kt1gh2mfcxry/stream/tv/rb_4441324_1.json"), asked)
+        assertEquals(
+            listOf("8X VN", "ESPN MX", null),
+            sources.map { it.label },
+        )
+        // The route says `resolution` where the feed says `label`, and `verified` only when it
+        // probed: an absent flag is "not verified", never an unknown drawn as a working feed.
+        assertEquals(listOf(888011L, 888012L, 0L), sources.map { it.streamId })
+        assertEquals(listOf(true, false, false), sources.map { it.verified })
+    }
+
+    @Test
+    fun `an answer that is not a stream list is no sources, not a failure`() {
+        for (body in listOf("<html>502 Bad Gateway</html>", "", "{}", """{"streams":[]}""")) {
+            val dir = Files.createTempDirectory("addon").toFile()
+            val feed = SportsAddonFeed(dir = dir, now = { 0L })
+            assertEquals("body: $body", emptyList<AddonSource>(), feed.sources("https://addon.example", "rb_1_1", httpGet = { body }))
+        }
+    }
+
+    @Test
+    fun `a route we cannot reach leaves the match on its own link`() {
+        val dir = Files.createTempDirectory("addon").toFile()
+        val feed = SportsAddonFeed(dir = dir, now = { 0L })
+
+        // The caller keeps `sources` empty, which `decorate` answers with the single stable
+        // streamUrl: a rate limit must cost the viewer the extra feeds, never the match.
+        assertEquals(emptyList<AddonSource>(),
+            feed.sources("https://addon.example", "rb_1_1", httpGet = { throw java.io.IOException("HTTP 429") }))
+    }
 }

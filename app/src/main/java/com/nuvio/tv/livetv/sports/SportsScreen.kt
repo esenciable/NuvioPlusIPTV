@@ -4,6 +4,7 @@ package com.nuvio.tv.livetv.sports
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -68,6 +69,8 @@ import com.nuvio.tv.livetv.record.LiveTvNotice
 import com.nuvio.tv.livetv.ui.ChannelLogo
 import com.nuvio.tv.livetv.ui.LivePlayerSurface
 import com.nuvio.tv.livetv.ui.LiveText
+import com.nuvio.tv.livetv.ui.guideBackdrop
+import com.nuvio.tv.livetv.ui.drawGuideBackdrop
 import com.nuvio.tv.livetv.ui.LiveTextField
 import com.nuvio.tv.livetv.ui.ThemeGlow
 import com.nuvio.tv.livetv.ui.drawThemeGlow
@@ -163,6 +166,7 @@ fun SportsScreen(
     val problem by viewModel.problem.collectAsStateWithLifecycle()
     val hasChannels by viewModel.hasChannels.collectAsStateWithLifecycle()
     val playingKey by viewModel.playingKey.collectAsStateWithLifecycle()
+    val backdrop by viewModel.backdrop.collectAsStateWithLifecycle()
 
     var day by rememberSaveable { mutableIntStateOf(0) }
     var chip by rememberSaveable { mutableStateOf<String?>(null) }
@@ -257,10 +261,11 @@ fun SportsScreen(
         events.firstOrNull { ev -> matches[ev.id]?.any { it.channel.key == key } == true }?.let { SportsLaunch.openedFromSports(it.id) }
         onOpenLive()
     }
+    com.nuvio.tv.livetv.ui.FrameMeter("Sports")
     Box(
         Modifier
             .fillMaxSize()
-            .background(NuvioTheme.colors.Background)
+            .guideBackdrop(backdrop)
             .onGloballyPositioned { root = it.boundsInRoot() }
             .onPreviewKeyEvent { e ->
                 if (e.key != Key.Back) return@onPreviewKeyEvent false
@@ -374,7 +379,7 @@ fun SportsScreen(
         }
         // The picture, on top of the page where its slot is (one view for every page, so it
         // never restarts), then the rounded corners and the "nothing playing" note over it.
-        if (videoOn) VideoLayer(slot, root, playerRef ?: viewModel.player, playing = playingKey != null, onAttached = { viewModel.onSurfaceAttached() })
+        if (videoOn) VideoLayer(slot, root, playerRef ?: viewModel.player, playing = playingKey != null, backdrop = backdrop, onAttached = { viewModel.onSurfaceAttached() })
     }
     fixFor?.let { ev -> FixChannelDialog(ev, matches[ev.id].orEmpty(), settings.hideScores, viewModel) { fixFor = null } }
 }
@@ -395,7 +400,7 @@ private fun VideoSlot(modifier: Modifier, onBounds: (Rect?) -> Unit) {
 }
 
 @Composable
-private fun VideoLayer(slot: Rect?, root: Rect?, player: androidx.media3.common.Player?, playing: Boolean, onAttached: () -> Unit) {
+private fun VideoLayer(slot: Rect?, root: Rect?, player: androidx.media3.common.Player?, playing: Boolean, backdrop: String, onAttached: () -> Unit) {
     val density = LocalDensity.current
     val placed = slot != null && root != null && slot.width > 1f
     val place = if (placed) with(density) {
@@ -406,6 +411,7 @@ private fun VideoLayer(slot: Rect?, root: Rect?, player: androidx.media3.common.
     LivePlayerSurface(player = player, useSurfaceView = true, modifier = place, onAttached = onAttached)
     if (!placed) return
     val bg = NuvioTheme.colors.Background
+    val backdropResolved = com.nuvio.tv.livetv.ui.resolveBackdrop(backdrop)
     val accent = NuvioTheme.colors.Secondary
     val glowTop = NuvioTheme.colors.BackgroundElevated
     Box(
@@ -416,8 +422,10 @@ private fun VideoLayer(slot: Rect?, root: Rect?, player: androidx.media3.common.
                 // the picture's square corners, then the rounded window cut back out.
                 val dx = slot!!.left - root!!.left
                 val dy = slot.top - root.top
-                drawRect(bg)
-                translate(-dx, -dy) { drawThemeGlow(accent, glowTop, root.width, SPORTS_GLOW_HEIGHT.toPx()) }
+                translate(-dx, -dy) {
+                    drawGuideBackdrop(backdropResolved, root.width, root.height)
+                    drawThemeGlow(accent, glowTop, root.width, SPORTS_GLOW_HEIGHT.toPx())
+                }
                 drawRoundRect(
                     color = Color.Black,
                     cornerRadius = CornerRadius(14.dp.toPx(), 14.dp.toPx()),
@@ -604,6 +612,17 @@ private fun SportsHub(
     }
     val status: String? = problem
     val statusLine: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {
+        // Top corner: a spinner while your channels are being searched for games; gone when done.
+        if (matching) {
+            Row(
+                Modifier.align(Alignment.TopEnd).padding(end = 32.dp, top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                com.nuvio.tv.livetv.ui.LoadingSpinner()
+                Spacer(Modifier.width(8.dp))
+                LiveText("Finding channels for today's games…", color = SportsLook.Dim, size = 11.sp, weight = FontWeight.Bold)
+            }
+        }
         status?.let {
             LiveText(it, color = NuvioTheme.colors.Error, size = 10.sp, modifier = Modifier.align(Alignment.BottomEnd).padding(end = 32.dp, bottom = 8.dp))
         }
@@ -999,11 +1018,17 @@ private fun ScoreboardStrip(
     height: androidx.compose.ui.unit.Dp,
     big: Boolean = false,
     /** The teams can be highlighted: OK on one opens its card. */
-    onTeam: ((Side) -> Unit)? = null
+    onTeam: ((Side) -> Unit)? = null,
+    /** Before the game (the game page): each team's place, form and chances, and the time column. */
+    preGame: Map<String, PreGameTeam>? = null,
+    extras: GameExtras? = null
 ) {
     val league = SportsCatalog.league(ev.leagueId)
     val sport = league?.sport ?: Sport.OTHER
     val sides = ev.ordered(sport)
+    val pre = big && ev.state == GameState.PRE && sides.size == 2
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+    val wide = maxWidth > 640.dp
     Row(Modifier.fillMaxWidth().height(height).sportsFrame(false, accent = NuvioTheme.colors.Secondary)) {
         Column(Modifier.weight(1f).fillMaxHeight()) {
             if (sides.size == 2) {
@@ -1015,14 +1040,17 @@ private fun ScoreboardStrip(
                         side = s, showScore = showScore, dim = showScore && !tied && s != lead, followed = false,
                         modifier = Modifier.weight(1f).then(if (onTeam != null) Modifier.teamSelectable { onTeam(s) } else Modifier),
                         logo = if (big) 44.dp else 30.dp, name = if (big) 19.sp else 13.sp, score = if (big) 34.sp else 22.sp,
-                        extra = listOfNotNull(s.record, if (s.home) "Home" else "Away").joinToString(" · ")
+                        extra = listOfNotNull(s.record, if (s.home) "Home" else "Away").joinToString(" · "),
+                        trailing = preGame?.get(s.team.id)?.takeIf { pre }?.let { t -> @Composable { PreGameTeamStats(t, wide) } }
                     )
                 }
             } else {
                 EventBand(ev, league, sport, Modifier.fillMaxSize(), big = big)
             }
         }
-        StatusColumn(ev, playing = false, now = now, use24h = use24h, hideScores = hideScores, modifier = Modifier.width(if (big) 150.dp else 124.dp))
+        if (pre) PreGameTimeColumn(ev, sides, extras, now, use24h, Modifier.width(if (wide) 210.dp else 150.dp))
+        else StatusColumn(ev, playing = false, now = now, use24h = use24h, hideScores = hideScores, modifier = Modifier.width(if (big) 150.dp else 124.dp))
+    }
     }
 }
 
@@ -1115,13 +1143,25 @@ private fun GamePage(
         runCatching { if (matches.isNotEmpty()) first.requestFocus() else firstAction.requestFocus() }
     }
 
+    // More about the game, in the space under it all (see SportsGameExtras), and before it
+    // starts, each team's place, form and chances beside its name.
+    val extras = rememberGameExtras(ev, viewModel)
+    val tables by viewModel.repo.standings.collectAsStateWithLifecycle()
+    LaunchedEffect(ev.leagueId, ev.state) {
+        if (ev.state == GameState.PRE && !settings.hideScores && league != null && viewModel.repo.mayHaveTable(league))
+            runCatching { viewModel.repo.standings(ev.leagueId) }
+    }
+    val preGame = if (ev.state == GameState.PRE && sides.size == 2 && !settings.hideScores)
+        preGameTeams(ev, sides, tables[ev.leagueId], extras) else null
+
     val top: @Composable () -> Unit = {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
             LiveText("‹  Sports", color = SportsLook.Dim, size = 12.sp, weight = FontWeight.Bold)
             Spacer(Modifier.width(10.dp))
             LiveText(listOfNotNull(league?.name, ev.subtitle?.takeIf { sides.size == 2 }).joinToString(" · "), color = SportsLook.Dim, size = 12.sp)
         }
-        ScoreboardStrip(ev, settings.hideScores, now, use24h, height = if (sides.size == 2) 124.dp else 100.dp, big = true, onTeam = { cardTeam = it.team })
+        ScoreboardStrip(ev, settings.hideScores, now, use24h, height = if (sides.size == 2) 124.dp else 100.dp, big = true, onTeam = { cardTeam = it.team },
+            preGame = preGame, extras = extras.takeIf { !settings.hideScores })
     }
     val channels: @Composable () -> Unit = {
         SectionHeader("WATCH ON YOUR CHANNELS")
@@ -1275,8 +1315,6 @@ private fun GamePage(
         }
     }
 
-    // More about the game, in the space under it all (see SportsGameExtras).
-    val extras = rememberGameExtras(ev, viewModel)
     val panels = gameExtrasPanels(ev, extras, settings, onTable = onTable)
     if (videoOn) {
         // Two under the channels, the third under the video and the score.
@@ -1380,7 +1418,7 @@ private fun FixChannelDialog(ev: SportsEvent, matches: List<ChannelMatch>, hideS
         val networks = ev.broadcasts
         val league = SportsCatalog.league(ev.leagueId)
         val teams = ev.ordered(league?.sport ?: Sport.OTHER).map { it.team }
-        if (networks.isEmpty() && teams.isEmpty()) {
+        if (networks.isEmpty() && teams.isEmpty() && league?.kind != LeagueKind.EVENT) {
             LaunchedEffect(pick.key) {
                 viewModel.repo.pickChannel(ev, pick.key, forNetworks = false)
                 LiveTvNotice.show("Saved: ${ev.title} on ${pick.name}")
@@ -1403,6 +1441,14 @@ private fun FixChannelDialog(ev: SportsEvent, matches: List<ChannelMatch>, hideS
                 SportsMenuRow("Yes, every $n game", firstMod()) {
                     viewModel.repo.pickChannel(ev, pick.key, forNetworks = true)
                     LiveTvNotice.show("Saved: $n games use ${pick.name}")
+                    onDismiss()
+                }
+            }
+            // A race series, a golf tour, a fight promotion: every event of it on this channel.
+            if (league?.kind == LeagueKind.EVENT) {
+                SportsMenuRow("Yes, every ${league.name} event", firstMod()) {
+                    viewModel.repo.pickChannel(ev, pick.key, forNetworks = false, forLeague = true)
+                    LiveTvNotice.show("Saved: ${league.name} events use ${pick.name}")
                     onDismiss()
                 }
             }
@@ -1465,7 +1511,8 @@ private fun ChannelLine(channel: LiveChannel, detail: String, modifier: Modifier
         modifier
             .fillMaxWidth()
             .clip(SportsLook.SmallShape)
-            .background(if (focused) Color.White else Color.Transparent)
+            .background(if (focused) NuvioTheme.colors.FocusBackground.copy(alpha = 0.25f) else Color.Transparent)
+            .border(if (focused) NuvioTheme.focusRing.border(2.dp) else androidx.compose.foundation.BorderStroke(0.dp, Color.Transparent), SportsLook.SmallShape)
             .onFocusChanged { focused = it.isFocused }
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1473,8 +1520,8 @@ private fun ChannelLine(channel: LiveChannel, detail: String, modifier: Modifier
     ) {
         ChannelLogo(channel.logo, 22.dp)
         Spacer(Modifier.width(10.dp))
-        LiveText(channel.name, color = if (focused) SportsLook.Ink else Color.White, size = 14.sp, weight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-        LiveText(detail, color = if (focused) Color(0xFF555A66) else SportsLook.Dim, size = 11.sp)
+        LiveText(channel.name, color = Color.White, size = 14.sp, weight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        LiveText(detail, color = SportsLook.Dim, size = 11.sp)
     }
 }
 

@@ -184,11 +184,14 @@ object XmltvParser {
         return EpgProgram(
             startMs = start,
             stopMs = stop,
-            title = title?.trim().orEmpty().ifBlank { "No information" },
-            description = fullDesc,
-            category = category?.trim(),
-            episode = episode,
-            icon = icon,
+            // Repeated words (titles, categories, icon links) are stored once instead of once per
+            // show, and very long descriptions are cut: a big guide held several hundred thousand
+            // listings in memory, which is what made huge playlists freeze.
+            title = title?.trim().orEmpty().ifBlank { "No information" }.let { if (it.length <= 80) it.intern() else it },
+            description = fullDesc?.let { if (it.length > 800) it.take(800).trimEnd() + "…" else it },
+            category = category?.trim()?.intern(),
+            episode = episode?.intern(),
+            icon = icon?.intern(),
             year = year,
             people = people.take(12)
         )

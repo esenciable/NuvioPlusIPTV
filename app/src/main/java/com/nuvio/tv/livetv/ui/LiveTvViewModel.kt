@@ -726,15 +726,29 @@ class LiveTvViewModel @Inject constructor(
         playback.setCatchupTitle(next.title)
     }
 
-    /** True if the show on now can be restarted from its beginning (the channel has catch-up). */
-    fun canWatchFromStart(channel: LiveChannel): Boolean {
+    private fun catchupStartPossible(channel: LiveChannel): Boolean {
         val p = currentProgram(channel.key) ?: return false
         return CatchupUrlBuilder.isAvailable(channel.catchup, p.startMs, System.currentTimeMillis())
     }
 
-    /** Restarts the show that's on now, from its beginning. */
-    fun watchFromStart(channel: LiveChannel): Boolean =
-        currentProgram(channel.key)?.let { playCatchup(channel, it, 0L) } ?: false
+    /** True if the show on now can be watched from its beginning: catch-up, or a recording running on the channel. */
+    fun canWatchFromStart(channel: LiveChannel): Boolean =
+        catchupStartPossible(channel) || recorder.activeFor(channel.key) != null
+
+    /** What "from the beginning" means here: the whole show (catch-up), or from where the recording began. */
+    fun restartLabel(channel: LiveChannel): String =
+        if (catchupStartPossible(channel)) "Watch from the beginning" else "Watch from the start of the recording"
+
+    /** Restarts the show that's on now, from its beginning (catch-up), or from the start of the running recording. */
+    fun watchFromStart(channel: LiveChannel): Boolean {
+        if (catchupStartPossible(channel)) {
+            return currentProgram(channel.key)?.let { playCatchup(channel, it, 0L) } ?: false
+        }
+        val rec = recorder.activeFor(channel.key) ?: return false
+        if (playback.playingChannel?.key != channel.key) preview(channel)
+        playback.playFromRecording(recorder.playlistFile(rec), fromStart = true)
+        return true
+    }
 
     /** Where playback is, as time into the catch-up program. */
     fun catchupPositionMs(): Long? {
@@ -931,6 +945,9 @@ class LiveTvViewModel @Inject constructor(
 
     /** Past listings from the Xtream catch-up archive for these channels (browsing back). */
     fun loadCatchupArchive(channels: List<LiveChannel>) = repository.loadXtreamArchive(channels)
+
+    /** Listings from the Xtream API for channels the guide file has nothing for. */
+    fun loadMissingListings(channels: List<LiveChannel>) = repository.loadXtreamArchive(channels, missingOnly = true)
 
     /** Assign EPG: make sure the full guide-channel lists are loaded (the saved guide skips them). */
     fun ensureEpgDetails() = repository.ensureEpgDetails()

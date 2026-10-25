@@ -166,7 +166,33 @@ class LiveTvRecorder @Inject constructor(
     /** Stops a recording now (what's recorded is kept). */
     fun stop(id: String) {
         stopRequested += id
-        jobs[id]?.cancel()
+        val job = jobs[id]
+        job?.cancel()
+        // A recording stuck waiting on a dead connection (or one whose job was lost) can ignore
+        // the stop: if it is still "recording" a few seconds later, end it here.
+        scope.launch {
+            delay(4_000)
+            val stuck = _recordings.value.firstOrNull { it.id == id }?.isRecording == true
+            if (stuck) forceFinish(id)
+        }
+    }
+
+    private fun forceFinish(id: String) {
+        val latest = _recordings.value.firstOrNull { it.id == id } ?: return
+        val dir = File(latest.dir)
+        val hasPieces = playlistFileOf(dir).exists()
+        if (hasPieces) runCatching { ensureEnded(playlistFileOf(dir)) }
+        val done = latest.copy(
+            status = if (hasPieces) RecordingStatus.DONE else RecordingStatus.FAILED,
+            endedAtMs = System.currentTimeMillis(),
+            sizeBytes = dirSize(dir),
+            problem = if (hasPieces) null else "Stopped before anything was recorded"
+        )
+        save(done); update(done)
+        jobs.remove(id)?.cancel()
+        stopRequested.remove(id)
+        stopServiceIfIdle()
+        com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Recording \"${done.title}\" was stuck; ended by hand: ${done.status}")
     }
 
     /** Deletes a recording (stopping it first if it's still going). */

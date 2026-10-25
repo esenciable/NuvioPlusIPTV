@@ -371,7 +371,7 @@ private fun OverlayModeContent(
                     LiveText(it, size = osp(13f), color = Color.White.copy(alpha = 0.75f))
                 }
                 Spacer(Modifier.height(8.dp))
-                LiveText(about.description.orEmpty(), size = osp(13f), color = Color.White.copy(alpha = 0.85f), maxLines = 6)
+                ScrollingDescription(about.description.orEmpty(), size = osp(13f), color = Color.White.copy(alpha = 0.85f), maxLines = 6)
             }
         }
         rememberShowDetails(cardChannelKey, card)?.takeIf { cardFits }?.let { p ->
@@ -400,7 +400,7 @@ private fun OverlayModeContent(
                 }
                 p.description?.let {
                     Spacer(Modifier.height(8.dp))
-                    LiveText(it, color = NuvioTheme.colors.TextSecondary, size = osp(14f), maxLines = 4)
+                    ScrollingDescription(it, color = NuvioTheme.colors.TextSecondary, size = osp(14f), maxLines = 4)
                 }
             }
         }

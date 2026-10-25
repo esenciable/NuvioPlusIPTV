@@ -1,6 +1,7 @@
 package com.nuvio.tv.livetv.sports
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -149,7 +150,8 @@ private fun LengthPicker(minutes: Int, onChange: (Int) -> Unit) {
         Modifier
             .fillMaxWidth()
             .clip(SportsLook.SmallShape)
-            .background(if (focused) Color.White else Color.White.copy(alpha = 0.05f))
+            .background(Color.White.copy(alpha = 0.05f))
+            .border(if (focused) NuvioTheme.focusRing.border(2.dp) else androidx.compose.foundation.BorderStroke(0.dp, Color.Transparent), SportsLook.SmallShape)
             .onFocusChanged { focused = it.isFocused }
             .onPreviewKeyEvent { e ->
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -168,7 +170,7 @@ private fun LengthPicker(minutes: Int, onChange: (Int) -> Unit) {
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        val ink = if (focused) SportsLook.Ink else Color.White
+        val ink = Color.White
         LiveText("Record for", color = ink, size = 15.sp, weight = FontWeight.Bold, modifier = Modifier.weight(1f))
         LiveText("◂", color = if (focused) ink else SportsLook.Dim, size = 15.sp, weight = FontWeight.Black)
         Spacer(Modifier.width(10.dp))

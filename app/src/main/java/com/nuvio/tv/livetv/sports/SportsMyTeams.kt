@@ -255,16 +255,19 @@ internal fun MyTeamsRows(
                         } else {
                             val state = rowState(row.key, row.startIndex)
                             val keyAt: (Int) -> String = { i -> "${row.key}|${row.events[i].id}" }
+                            // The card you left this row on, by game (not by position, which shifts).
+                            val lastOnRow = remember(row.key) { arrayOfNulls<String>(1) }
                             androidx.compose.runtime.CompositionLocalProvider(androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides rowSpec) {
                                 LazyRow(
                                     state = state,
-                                    // Coming back to a row: the game you were on; the first time: the
-                                    // game on now or next (not whichever is under the row above).
+                                    // Coming back to a row: the exact game you left it on; the first
+                                    // time: the game on now or next (not whichever is under the row above).
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .focusRestorer {
                                             val visible = state.layoutInfo.visibleItemsInfo.map { it.index }
-                                            val idx = row.startIndex.takeIf { it in visible } ?: visible.firstOrNull()
+                                            val back = lastOnRow[0]?.let { id -> row.events.indexOfFirst { it.id == id } }?.takeIf { it >= 0 && it in visible }
+                                            val idx = back ?: row.startIndex.takeIf { it in visible } ?: visible.firstOrNull()
                                             idx?.let { requesterFor(keyAt(it)) } ?: FocusRequester.Default
                                         }
                                         .focusGroup(),
@@ -283,7 +286,7 @@ internal fun MyTeamsRows(
                                             playing = playing(ev),
                                             modifier = Modifier
                                                 .focusRequester(requesterFor(key))
-                                                .onFocusChanged { if (it.isFocused) onFocusKey(key) }
+                                                .onFocusChanged { if (it.isFocused) { lastOnRow[0] = ev.id; onFocusKey(key) } }
                                                 .steadyRowKeys(state, i, row.events.size) { j -> requesterFor(keyAt(j)) },
                                             onClick = { onOpen(ev) },
                                             onLongClick = { onQuickWatch(ev) }

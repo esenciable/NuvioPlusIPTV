@@ -33,8 +33,13 @@ internal class SportsMatcher(private val db: EpgDatabase) {
 
     private class Found(val key: String, var score: Int, var how: String, var program: EpgProgram?)
 
+    /** Disc golf is its own sport: its events keep their matches, and no other event takes its shows. */
+    private fun isDiscGolf(ev: SportsEvent): Boolean =
+        hasWord(norm(ev.title), "disc golf") || ev.leagueId.contains("disc", ignoreCase = true)
+
     fun match(input: Input): Result {
         val byKey = input.channels.associateBy { it.key }
+        val rank = preferenceRank(input.settings)
         val names = input.channels.mapNotNull { ch -> if (ch.name.length < 6) null else ch to norm(ch.name.replace("+", " plus ").replace("@", " at ")) }
         val found = HashMap<String, HashMap<String, Found>>()
         fun add(eventId: String, key: String, score: Int, how: String, program: EpgProgram?) {
@@ -45,15 +50,31 @@ internal class SportsMatcher(private val db: EpgDatabase) {
             else if (cur.program == null && program != null) cur.program = program
         }
 
-        val wanted = input.events.filter { ev ->
-            ev.state != GameState.OFF && ev.hasTime &&
+        // Events that run for days (a golf tournament, an F1 weekend from practice to the race) have
+        // no single start time: while they're on, treat them as starting now.
+        fun multiDay(ev: SportsEvent) = !ev.hasTime && ev.endMs != null
+        // Their ids: with no start time of their own, only a show that names the competition ("Formula 1",
+        // "Grand Prix"…) counts, not one that merely shares a word or two with the title ("United States").
+        val noStart = HashSet<String>()
+        val events = input.events.mapNotNull { ev ->
+            when {
+                ev.hasTime -> ev
+                !multiDay(ev) -> null
+                // The feed's end date is the start of the last day (Sunday 00:00): the event runs through that day.
+                ev.endMs!! + 24 * HOUR < input.now -> null
+                ev.startMs >= input.now -> ev
+                else -> ev.copy(startMs = input.now)
+            }?.also { if (!ev.hasTime) noStart.add(ev.id) }
+        }
+        val wanted = events.filter { ev ->
+            ev.state != GameState.OFF &&
                 ev.startMs in (input.now - 8 * HOUR)..(input.now + AHEAD_MS)
         }
         // A channel you picked yourself shows straight away, however far off the game is (the
         // search above only looks a couple of days ahead).
-        val picked = input.events.filter { ev ->
-            ev.state != GameState.OFF && ev.hasTime && ev.startMs >= input.now - 8 * HOUR &&
-                (ev.id in input.settings.eventChannels ||
+        val picked = events.filter { ev ->
+            ev.state != GameState.OFF && ev.startMs >= input.now - 8 * HOUR &&
+                (ev.id in input.settings.eventChannels || ev.leagueId in input.settings.leagueChannels ||
                     (input.settings.teamChannels.isNotEmpty() && ev.sides.any { teamChannelKey(ev.leagueId, it.team.id) in input.settings.teamChannels }))
         }
         val byId = (wanted + picked).associateBy { it.id }
@@ -94,8 +115,15 @@ internal class SportsMatcher(private val db: EpgDatabase) {
                 val t = terms[ev.id] ?: continue
                 for ((key, p, texts) in prepared) {
                     val (nt, nd) = texts
+                    // Disc golf shows never count for regular golf.
+                    if (!isDiscGolf(ev) && (hasWord(nt, "disc golf") || hasWord(nd, "disc golf"))) continue
                     if (p.startMs > ev.startMs + 60 * MINUTE || p.stopMs < ev.startMs + 15 * MINUTE) continue
                     var score = t.scoreText(nt, nd)
+                    // No start time (a race weekend, a tournament): a show on now that names the competition is enough.
+                    if (ev.id in noStart) {
+                        if (!t.namesLeague(nt, nd)) continue
+                        if (score <= 0) score = 70
+                    }
                     if (score <= 0) continue
                     // Pre-game shows often start an hour early on the same channel; much earlier or later is less likely the game.
                     if (p.startMs < ev.startMs - 80 * MINUTE || p.startMs > ev.startMs + 25 * MINUTE) score -= 10
@@ -110,7 +138,10 @@ internal class SportsMatcher(private val db: EpgDatabase) {
             if (ev.state == GameState.POST && ev.startMs < input.now - 5 * HOUR) continue
             val t = terms[ev.id] ?: continue
             for ((ch, nn) in names) {
+                if (!isDiscGolf(ev) && hasWord(nn, "disc golf")) continue
                 if (t.inName(nn)) { add(ev.id, ch.key, 95, "Channel name", null); byName++ }
+                // A channel named for the competition ("Sky Sports F1") carries it while it's on.
+                else if (ev.id in noStart && t.leagueInName(nn)) { add(ev.id, ch.key, 78, "Channel name", null); byName++ }
             }
         }
 
@@ -125,6 +156,11 @@ internal class SportsMatcher(private val db: EpgDatabase) {
         }
         networkEvents.groupBy { it.startMs / (30 * MINUTE) }.forEach { (_, slot) ->
             val at = slot.minOf { it.startMs } + 20 * MINUTE
+            // Your own channel for a network counts even when no channel is named like it (Sky
+            // Sports F1 for "Apple TV"): nothing to look through, but the pick still applies.
+            for (ev in slot) for (b in ev.broadcasts) {
+                input.settings.networkChannels[networkKey(b)]?.let { key -> add(ev.id, key, 75, "Your channel for $b", null) }
+            }
             val keys = slot.flatMap { ev -> ev.broadcasts.flatMap { candidates[networkKey(it)].orEmpty() } }.map { it.key }.distinct()
             if (keys.isEmpty()) return@forEach
             val onNow: Map<String, EpgProgram?> = runCatching {
@@ -137,12 +173,15 @@ internal class SportsMatcher(private val db: EpgDatabase) {
                 for (b in ev.broadcasts) {
                     val n = networkKey(b)
                     input.settings.networkChannels[n]?.let { key -> add(ev.id, key, 75, "Your channel for $b", onNow[key]) }
+                    // No start time (a race weekend, a tournament): the network's listing says nothing about what's on now.
+                    if (ev.id in noStart) continue
                     val national = n in NATIONAL
                     candidates[n].orEmpty()
                         .map { ch ->
                             val p = onNow[ch.key]
                             val showText = p?.let { norm(it.title + " " + (it.episode ?: "")) }
                             val score = when {
+                                !isDiscGolf(ev) && showText != null && hasWord(showText, "disc golf") -> 0
                                 p == null -> if (keys.size < 400 && national) 45 else 0
                                 // The guide says it's a different game: not this one.
                                 terms[ev.id]?.otherGame(showText!!) == true -> 0
@@ -153,7 +192,10 @@ internal class SportsMatcher(private val db: EpgDatabase) {
                             Triple(ch, score, p)
                         }
                         .filter { it.second > 0 }
-                        .sortedByDescending { qualityRank(input.quality[it.first.key] ?: nameQuality(it.first.name)) }
+                        .sortedWith(
+                            compareByDescending<Triple<LiveChannel, Int, EpgProgram?>> { rank(it.first) }
+                                .thenByDescending { qualityRank(input.quality[it.first.key] ?: nameQuality(it.first.name)) }
+                        )
                         .take(if (national) 4 else 6)
                         .forEach { (ch, score, p) -> add(ev.id, ch.key, score, "$b listed by ESPN", p); byNetwork++ }
                 }
@@ -162,7 +204,9 @@ internal class SportsMatcher(private val db: EpgDatabase) {
 
         // ---- 4. Your own fixes: this game, then every game of a team.
         for (ev in byId.values) {
-            input.settings.eventChannels[ev.id]?.substringBefore('|')?.let { add(ev.id, it, 200, "Your pick", null) }
+            input.settings.eventChannels[ev.id]?.substringBeforeLast('|')?.let { add(ev.id, it, 200, "Your pick", null) }
+            // Your channel for the whole competition (every Formula 1 round, every PGA Tour event).
+            input.settings.leagueChannels[ev.leagueId]?.let { add(ev.id, it, 140, "Your channel for ${SportsCatalog.league(ev.leagueId)?.name ?: "this competition"}", null) }
             if (input.settings.teamChannels.isNotEmpty()) for (side in ev.sides) {
                 input.settings.teamChannels[teamChannelKey(ev.leagueId, side.team.id)]?.let { add(ev.id, it, 150, "Your channel for ${side.team.name}", null) }
             }
@@ -185,10 +229,17 @@ internal class SportsMatcher(private val db: EpgDatabase) {
                     )
                 }
             if (list.isEmpty()) continue
-            out[eventId] = sortMatches(list, input.settings.bestChannelFirst).take(8)
+            out[eventId] = sortMatches(list, input.settings.bestChannelFirst, rank).take(8)
+        }
+        // Events that run for days (golf, race weekends): what was looked for and found, for the report.
+        val multi = teamEvents.filter { it.id in noStart }.joinToString(" | ") { ev ->
+            val t = terms[ev.id]
+            "${ev.title.take(32)}: looked for ${t?.leagueWords?.joinToString("/")}, " +
+                "channels named like that ${names.count { (_, nn) -> t?.leagueInName(nn) == true }}, matched ${out[ev.id]?.size ?: 0}"
         }
         val summary = "Sports: ${wanted.size} games and events in the next day or so · channels found for ${out.size} " +
-            "(guide $byGuide, channel names $byName, networks $byNetwork)"
+            "(guide $byGuide, channel names $byName, networks $byNetwork)" +
+            (if (multi.isNotEmpty()) " · multi-day: $multi" else "")
         return Result(out, summary)
     }
 
@@ -308,6 +359,12 @@ internal class SportsMatcher(private val db: EpgDatabase) {
             if (us) return false
             return MATCHUP.containsMatchIn(text)
         }
+
+        /** The show's title or description names the competition itself ("Formula 1", "Grand Prix"). */
+        fun namesLeague(nt: String, nd: String): Boolean = leagueWords.any { hasWord(nt, it) || hasWord(nd, it) }
+
+        /** The channel's own name carries the competition's name ("Sky Sports F1", "Formula 1 HD"). */
+        fun leagueInName(nn: String): Boolean = leagueWords.any { it.length >= 2 && it != "grand prix" && hasWord(nn, it) }
 
         fun inName(nn: String): Boolean {
             if (a.isNotEmpty() && b.isNotEmpty()) {
@@ -516,19 +573,57 @@ internal class SportsMatcher(private val db: EpgDatabase) {
             "4K" -> 4; "FHD" -> 3; "HD" -> 2; "SD" -> 1; else -> 2
         }
 
-        fun sortMatches(list: List<ChannelMatch>, bestFirst: Boolean): List<ChannelMatch> {
+        /** Your own region's words, as channel names and groups use them ("UK: TNT Sports 1", group "UK | Sports"). */
+        private val REGION_WORDS = mapOf(
+            "UK" to listOf("uk", "gb", "united kingdom", "britain", "england", "scotland"),
+            "IE" to listOf("ie", "ireland", "irish", "irl", "eir"),
+            "US" to listOf("us", "usa", "united states"),
+            "CA" to listOf("ca", "canada", "can"),
+            "AU" to listOf("au", "aus", "australia", "nz", "new zealand")
+        )
+
+        /**
+         * How much a channel is preferred for any game: 2 in a group you chose (Sports settings),
+         * 1 from your own region (its group or the start of its name says so), else 0.
+         */
+        fun preferenceRank(settings: SportsSettings): (LiveChannel) -> Int {
+            val groups = settings.preferredGroups.map { it.lowercase().trim() }.toSet()
+            val words = REGION_WORDS[SportsCatalog.regionOf(settings)].orEmpty()
+            return { ch ->
+                when {
+                    groups.isNotEmpty() && ch.group.lowercase().trim() in groups -> 2
+                    words.isNotEmpty() && (
+                        norm(ch.group).let { g -> words.any { hasWord(g, it) } } ||
+                            norm(ch.name.substringBefore(':').substringBefore('|').take(16)).let { n ->
+                                (ch.name.contains(':') || ch.name.contains('|')) && words.any { hasWord(n, it) }
+                            }
+                        ) -> 1
+                    else -> 0
+                }
+            }
+        }
+
+        fun sortMatches(list: List<ChannelMatch>, bestFirst: Boolean, rank: (LiveChannel) -> Int = { 0 }): List<ChannelMatch> {
             fun band(score: Int) = when {
                 score >= 150 -> 3
                 score >= 80 -> 2
                 score >= 55 -> 1
                 else -> 0
             }
+            // Your own picks first; then your groups and region; then how sure and how good.
             return if (bestFirst) list.sortedWith(
-                compareByDescending<ChannelMatch> { band(it.score) }
+                compareByDescending<ChannelMatch> { if (band(it.score) == 3) 1 else 0 }
+                    .thenByDescending { rank(it.channel) }
+                    .thenByDescending { band(it.score) }
                     .thenByDescending { qualityRank(it.quality) }
                     .thenByDescending { it.score }
                     .thenBy { it.channel.name.length }
-            ) else list.sortedWith(compareByDescending<ChannelMatch> { it.score }.thenBy { it.channel.number })
+            ) else list.sortedWith(
+                compareByDescending<ChannelMatch> { if (band(it.score) == 3) 1 else 0 }
+                    .thenByDescending { rank(it.channel) }
+                    .thenByDescending { it.score }
+                    .thenBy { it.channel.number }
+            )
         }
     }
 }

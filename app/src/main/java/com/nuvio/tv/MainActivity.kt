@@ -1040,6 +1040,12 @@ open class MainActivity : ComponentActivity() {
                     LaunchedEffect(navController, layoutChosen, pendingDeepLink) {
                         val url = pendingDeepLink ?: return@LaunchedEffect
                         if (!layoutChosen) return@LaunchedEffect
+                        // Live TV fork: a launcher row's channel or game.
+                        if (url.startsWith("nuvio://livetv")) {
+                            pendingDeepLinkUrl.value = null
+                            runCatching { com.nuvio.tv.livetv.home.LiveTvLauncherRows.open(context, navController, url) }
+                            return@LaunchedEffect
+                        }
                         when (val deepLink = DeepLinkParser.parse(url)) {
                             is AppDeepLink.Meta -> {
                                 pendingDeepLinkUrl.value = null
@@ -1522,6 +1528,8 @@ open class MainActivity : ComponentActivity() {
         super.onStart()
         startupSyncService.startPeriodicSurfacePulls()
         androidTvChannelSyncService.onForegroundChanged(true)
+        // Live TV fork: make sure the launcher rows exist once the app has loaded its channels.
+        runCatching { com.nuvio.tv.livetv.home.LiveTvLauncherRows.refresh(applicationContext, afterMs = 6000) }
     }
 
     override fun onStop() {
@@ -1531,6 +1539,8 @@ open class MainActivity : ComponentActivity() {
         // App going to background (e.g. user returning to the launcher): reconcile the
         // Continue Watching channel once so Projectivy repaints it with fresh progress.
         androidTvChannelSyncService.onForegroundChanged(false)
+        // Live TV fork: bring the launcher's Live TV rows up to date.
+        runCatching { com.nuvio.tv.livetv.home.LiveTvLauncherRows.refresh(applicationContext) }
     }
 
     override fun onDestroy() {

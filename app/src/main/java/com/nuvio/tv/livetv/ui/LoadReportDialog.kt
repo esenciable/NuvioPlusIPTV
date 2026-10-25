@@ -54,13 +54,25 @@ import com.nuvio.tv.ui.theme.NuvioTheme
 fun LoadReportDialog(onDismiss: () -> Unit) {
     val lines by LiveTvLoadReport.lines.collectAsStateWithLifecycle()
     val text = lines.joinToString("\n")
-    val qr = remember(text) {
-        runCatching { com.nuvio.tv.core.qr.QrCodeGenerator.generate(text.takeLast(1_700).ifBlank { "(empty)" }, 360) }.getOrNull()
+    // The whole report as a web page on the home network, opened from a phone (a QR code can
+    // only hold the last few lines). Runs only while this screen is open.
+    var handle by remember { mutableStateOf<com.nuvio.tv.livetv.crash.ReportServer.Handle?>(null) }
+    var noNetwork by remember { mutableStateOf(false) }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        val h = com.nuvio.tv.livetv.crash.ReportServer.start("Live TV start-up report") {
+            LiveTvLoadReport.lines.value.joinToString("\n")
+        }
+        handle = h
+        noNetwork = h == null
+        onDispose { h?.stop() }
+    }
+    val qr = remember(handle?.url) {
+        handle?.url?.let { runCatching { com.nuvio.tv.core.qr.QrCodeGenerator.generate(it, 360) }.getOrNull() }
     }
     LiveDialog(onDismiss = onDismiss, width = 860.dp) {
         LiveText("Live TV start-up report", size = 20.sp, weight = FontWeight.Bold)
         LiveText(
-            "Since the app started. ▲ ▼ to scroll. Scan the code to send the latest part from your phone.",
+            "Since the app started. ▲ ▼ to scroll.",
             color = NuvioTheme.colors.TextSecondary, size = 13.sp
         )
         Spacer(Modifier.height(10.dp))
@@ -112,12 +124,24 @@ fun LoadReportDialog(onDismiss: () -> Unit) {
                     )
                 }
             }
-            qr?.let {
-                Image(
-                    bitmap = it.asImageBitmap(),
-                    contentDescription = null,
-                    modifier = Modifier.size(180.dp).background(Color.White).padding(6.dp)
-                )
+            Column(Modifier.width(210.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                LiveText("Send the whole report", size = 13.sp, weight = FontWeight.Bold)
+                if (noNetwork) {
+                    LiveText("Connect this TV to Wi-Fi to send the report from your phone.", size = 11.sp, color = NuvioTheme.colors.TextSecondary)
+                } else {
+                    LiveText(
+                        "1. Put your phone on the same Wi-Fi as this TV.\n2. Scan this code with your phone's camera, or type the address below.\n3. Tap Copy report, then paste it in your message.",
+                        size = 11.sp, color = NuvioTheme.colors.TextSecondary
+                    )
+                }
+                qr?.let {
+                    Image(
+                        bitmap = it.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier.size(150.dp).background(Color.White).padding(6.dp)
+                    )
+                }
+                handle?.url?.let { LiveText(it.removePrefix("http://"), size = 11.sp, color = NuvioTheme.colors.TextPrimary) }
             }
         }
         Spacer(Modifier.height(10.dp))

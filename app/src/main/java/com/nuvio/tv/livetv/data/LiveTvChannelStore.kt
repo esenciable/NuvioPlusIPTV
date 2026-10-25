@@ -122,13 +122,16 @@ class LiveTvChannelStore @Inject constructor(
     private val memoFile by lazy { java.io.File(java.io.File(context.filesDir, "livetv"), "name_editor_cache.txt") }
     private var saveJob: kotlinx.coroutines.Job? = null
 
+    // The cleaning rules are part of the header, so saved results from older rules are dropped.
+    private fun memoHeader(raw: String) = "v2|" + raw.replace('\n', ' ')
+
     private fun nameMemo(raw: String): MutableMap<String, String> = synchronized(memoLock) {
         if (memoFor == raw) return memo
         val fresh = java.util.concurrent.ConcurrentHashMap<String, String>()
         // Saved results only count when they were made with exactly these terms.
         runCatching {
             if (memoFile.exists()) memoFile.bufferedReader().use { r ->
-                if (r.readLine() == raw.replace('\n', ' ')) {
+                if (r.readLine() == memoHeader(raw)) {
                     while (true) {
                         val line = r.readLine() ?: break
                         val tab = line.indexOf('\t')
@@ -153,7 +156,7 @@ class LiveTvChannelStore @Inject constructor(
                 memoFile.parentFile?.mkdirs()
                 val tmp = java.io.File(memoFile.parentFile, memoFile.name + ".tmp")
                 tmp.bufferedWriter().use { w ->
-                    w.write(raw.replace('\n', ' ')); w.newLine()
+                    w.write(memoHeader(raw)); w.newLine()
                     for ((name, cleaned) in current) {
                         if (name !in names || '\n' in name || '\t' in name || '\n' in cleaned) continue
                         w.write(name); w.write("\t"); w.write(cleaned); w.newLine()

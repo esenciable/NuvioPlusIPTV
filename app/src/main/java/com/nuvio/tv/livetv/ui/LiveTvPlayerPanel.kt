@@ -12,42 +12,36 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AspectRatio
-import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.GridView
-import androidx.compose.material.icons.filled.ClosedCaption
-import androidx.compose.material.icons.filled.ClosedCaptionDisabled
 import androidx.compose.material.icons.filled.Forward30
-import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay30
-import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Icon
@@ -57,7 +51,11 @@ import com.nuvio.tv.ui.theme.NuvioTheme
 /** What the bottom panel is showing. */
 internal enum class PanelMode { LIVE, CATCHUP, SHIFT }
 
-/** The panel's buttons and quick options, in the order the highlight moves through them. */
+/**
+ * The panel's controls, in the order the highlight moves through them. The bar itself only has
+ * the timeline, back 30, play/pause, forward 30 and the gear; the rest are kept for the keys
+ * that still name them, and live in the gear panel.
+ */
 internal enum class PanelControl { TIMELINE, BACK, PLAY, FORWARD, LIVE, CC, AUDIO, SIZE, SLEEP, MORE }
 
 /** Timeline: everything in wall-clock milliseconds. */
@@ -75,7 +73,34 @@ internal data class PanelTimeline(
     val statusLive: Boolean = false
 )
 
-/** Which controls the panel offers in each mode. */
+/** The parts of the bar you can switch off (⚙ → Play bar layout). Saved by these names. */
+internal object BarPart {
+    const val POSTER = "poster"
+    const val CHANNEL = "channel"
+    const val TAGS = "tags"
+    const val DESCRIPTION = "description"
+    const val PROGRESS = "progress"
+    const val CLOCK = "clock"
+    const val NEXT = "next"
+    const val RECENT = "recent"
+
+    /** In the order the toggles show, with what each is called there. */
+    val ALL: List<Triple<String, String, String?>> = listOf(
+        Triple(POSTER, "Poster", null),
+        Triple(CHANNEL, "Channel name & logo", null),
+        Triple(TAGS, "Tags", "Live, quality, sound, catch-up"),
+        Triple(DESCRIPTION, "Description", null),
+        Triple(PROGRESS, "Progress bar", "Always shown while paused"),
+        Triple(CLOCK, "Clock", null),
+        Triple(NEXT, "Up next", null),
+        Triple(RECENT, "Recent channels", "The row under the bar (OK)")
+    )
+
+    fun parse(raw: String): Set<String> = raw.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    fun join(set: Set<String>): String = set.sorted().joinToString(",")
+}
+
+/** Which controls the bar offers: back 30 / forward 30 only where you can skip, and the gear. */
 internal fun panelControls(mode: PanelMode, paused: Boolean, canSkip: Boolean): List<PanelControl> = buildList {
     val transport = mode != PanelMode.LIVE || paused
     // The timeline itself can be grabbed (Up from the buttons) and moved with ◀ / ▶.
@@ -83,17 +108,39 @@ internal fun panelControls(mode: PanelMode, paused: Boolean, canSkip: Boolean): 
     if (transport && canSkip) add(PanelControl.BACK)
     add(PanelControl.PLAY)
     if (transport && canSkip) add(PanelControl.FORWARD)
-    if (mode != PanelMode.LIVE) add(PanelControl.LIVE)
-    // Audio and Sleep are in the ••• menu, so the time bar gets their room.
-    add(PanelControl.CC); add(PanelControl.SIZE); add(PanelControl.MORE)
+    add(PanelControl.MORE)
 }
 
+/** The glass behind the bar and the gear panel: the theme's background, see-through. */
+@Composable
+internal fun glassColor(level: String): Color {
+    val base = NuvioTheme.colors.Background
+    return base.copy(alpha = when (level) { "solid" -> 0.97f; "darker" -> 0.86f; else -> 0.74f })
+}
+
+/** The info bar above the guide: "Standard" is exactly as dark as the guide's own tiles. */
+@Composable
+internal fun guideInfoGlass(level: String): Color {
+    val c = NuvioTheme.colors.Background
+    val base = if (c.luminance() < 0.003f) Color(0xFF0E0E12) else c
+    return base.copy(alpha = when (level) { "solid" -> 0.97f; "darker" -> 0.86f; else -> 0.66f })
+}
+
+internal val GLASS_SHAPE = RoundedCornerShape(22.dp)
+
+/** A glass panel: rounded, see-through, with a faint edge (the bar, the gear panel). */
+internal fun Modifier.glass(color: Color, shape: androidx.compose.ui.graphics.Shape = GLASS_SHAPE): Modifier =
+    this.clip(shape)
+        .background(Brush.verticalGradient(listOf(color.copy(alpha = (color.alpha - 0.06f).coerceAtLeast(0f)), color)))
+        .border(1.dp, Color.White.copy(alpha = 0.12f), shape)
+
 /**
- * The full-screen player's bottom panel, in two sizes:
- *  - compact ([full] = false): channel, show and progress, shown while changing channels;
- *  - full (OK): also the description, the timeline (live, catch-up, or a pause-and-rewind
- *    recording), the playback buttons and quick options.
- * [focused] is the highlighted control in the full panel, else null. Colors follow Nuvio's theme.
+ * The full-screen player's bar: a floating glass card at the bottom. Poster (or the channel's
+ * logo), the channel line with its tags, the title, the description, then ⟲30 · ⏯ · 30⟳, the
+ * progress bar and ⚙ on one line; the clock and what's next on the right.
+ *  - compact ([full] = false): changing channels and channel surfing (no buttons);
+ *  - full (OK, or paused): the buttons too, and the Recent row underneath.
+ * Parts in [hidden] are left out and the rest closes up (⚙ → Play bar layout).
  */
 @Composable
 internal fun LiveTvPlayerPanel(
@@ -134,152 +181,238 @@ internal fun LiveTvPlayerPanel(
     modifier: Modifier = Modifier,
     /** The sound of what's playing, next to the picture size ("5.1", "DD+ 5.1", "STEREO"). */
     audioBadge: String? = null,
-    /** How dark the background is: "standard", "darker" or "solid" (Live TV settings). */
-    background: String = "standard"
+    /** How see-through the glass is: "standard", "darker" or "solid" (Live TV settings). */
+    background: String = "standard",
+    /** Parts switched off (see [BarPart]). */
+    hidden: Set<String> = emptySet()
 ) {
-    // The OK panel: one compact layout, the same height with or without the channel row.
-    if (full) {
-        FullInfoPanel(
-            channel, mode, title, meta, description, poster, showPosters, timeline, paused, controls,
-            focused, captionsOn, audioLabel, sizeLabel, sleepLabel, clock, resolution, showNumber,
-            nextTitle, nextTime, catchupAvailable, recent, recentFocus, recentTitle, recentClear, modifier,
-            audioBadge = audioBadge, background = background
-        )
-    } else {
-    val withRecent = false
     val colors = NuvioTheme.colors
     val accent = colors.Secondary
-    val posterW = if (withRecent) 88.dp else if (full) 116.dp else 110.dp
-    val posterH = if (withRecent) 132.dp else if (full) 174.dp else 165.dp
-    Column(
+    fun on(part: String) = part !in hidden
+    // Moving through a recording or a replay needs the bar, whatever the setting.
+    val showProgress = timeline != null && (on(BarPart.PROGRESS) || mode != PanelMode.LIVE || paused)
+    val showPoster = on(BarPart.POSTER) && showPosters
+    val showChannel = on(BarPart.CHANNEL)
+    val showTags = on(BarPart.TAGS)
+    val showClock = on(BarPart.CLOCK) && clock.isNotEmpty()
+    val showNext = on(BarPart.NEXT) && nextTitle != null && mode == PanelMode.LIVE
+    val desc = description?.takeIf { it.isNotBlank() && on(BarPart.DESCRIPTION) }
+    val withRecent = full && recent != null && on(BarPart.RECENT)
+
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            // Fades in above the text (in the top padding), then stays dark behind it.
-            .panelScrim(colors.Background, background, fade = 56.dp)
-            .padding(start = 48.dp, end = 48.dp, top = if (withRecent) 48.dp else 64.dp, bottom = if (withRecent) 14.dp else if (full) 18.dp else 24.dp)
+            .padding(start = 36.dp, end = 36.dp, bottom = 14.dp, top = 8.dp)
     ) {
-    Row(verticalAlignment = Alignment.Bottom) {
-        // Poster (or the channel logo when posters are off or there isn't one).
-        val posterShape = RoundedCornerShape(liveCorner())
-        Box(
-            modifier = Modifier
-                .width(if (showPosters) posterW else 72.dp)
-                .height(if (showPosters) posterH else 72.dp)
-                .clip(posterShape)
-                .background(colors.BackgroundCard.copy(alpha = 0.85f))
-                .border(1.dp, Color.White.copy(alpha = 0.12f), posterShape),
-            contentAlignment = Alignment.Center
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .glass(glassColor(background))
+                // Equal on every side, so the poster (and everything else) sits in an evenly
+                // framed card instead of a wider gap on one axis than the other.
+                .padding(14.dp)
         ) {
-            if (showPosters && !poster.isNullOrBlank()) {
-                coil3.compose.AsyncImage(
-                    model = poster,
-                    contentDescription = null,
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                ChannelLogo(channel.logo, if (showPosters) 56.dp else 48.dp)
-            }
-        }
-        Spacer(Modifier.width(24.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            if (browsing) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    LiveTag("BROWSING", accent, colors.OnSecondary)
-                    Spacer(Modifier.width(10.dp))
-                    LiveText(
-                        "OK to watch  ·  ▲ ▼ more channels (hold to go faster)  ·  Back to stay",
-                        size = 12.sp, color = colors.TextSecondary
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-            // Channel line: logo, number and name, tags, and the clock on the right.
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (!channel.logo.isNullOrBlank()) {
-                    ChannelLogo(channel.logo, 24.dp)
-                    Spacer(Modifier.width(10.dp))
+                // ---- left: the poster, or the channel's logo on a tile
+                if (showPoster) {
+                    val shape = RoundedCornerShape(10.dp)
+                    Box(
+                        Modifier.width(52.dp).height(76.dp).clip(shape)
+                            .background(colors.BackgroundCard.copy(alpha = 0.85f))
+                            .border(1.dp, Color.White.copy(alpha = 0.12f), shape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (!poster.isNullOrBlank()) LivePosterImage(poster, Modifier.fillMaxSize())
+                        else ChannelLogo(channel.logo, 30.dp)
+                    }
+                    Spacer(Modifier.width(14.dp))
+                } else if (showChannel && !channel.logo.isNullOrBlank()) {
+                    Box(
+                        Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.10f)),
+                        contentAlignment = Alignment.Center
+                    ) { ChannelLogo(channel.logo, 34.dp) }
+                    Spacer(Modifier.width(14.dp))
                 }
-                LiveText(
-                    (if (showNumber) "${channel.number} · " else "") + channel.name,
-                    size = 14.sp, weight = FontWeight.SemiBold, color = colors.TextSecondary,
-                    shadow = true
-                )
-                when (mode) {
-                    PanelMode.LIVE -> { Spacer(Modifier.width(10.dp)); LiveTag("LIVE", LIVE_RED, Color.White) }
-                    PanelMode.CATCHUP -> { Spacer(Modifier.width(10.dp)); LiveTag("ARCHIVE", accent, colors.OnSecondary) }
-                    PanelMode.SHIFT -> { Spacer(Modifier.width(10.dp)); LiveTag("PAUSED LIVE", accent, colors.OnSecondary) }
-                }
-                resolution?.let {
-                    Spacer(Modifier.width(6.dp))
-                    LiveTag(it.uppercase(), Color.Transparent, colors.TextSecondary,
-                        Modifier.border(1.dp, colors.Border, RoundedCornerShape(5.dp)))
-                }
-                audioBadge?.let {
-                    Spacer(Modifier.width(6.dp))
-                    LiveTag(it, Color.Transparent, colors.TextSecondary,
-                        Modifier.border(1.dp, colors.Border, RoundedCornerShape(5.dp)))
-                }
-                if (catchupAvailable && mode == PanelMode.LIVE) {
-                    Spacer(Modifier.width(6.dp))
-                    LiveTag("CATCH-UP", Color.Transparent, colors.TextSecondary,
-                        Modifier.border(1.dp, colors.Border, RoundedCornerShape(5.dp)))
-                }
-                // Sports: the live score of the game on this channel.
-                if (mode == PanelMode.LIVE) com.nuvio.tv.livetv.sports.SportsScoreTag(channel.key)
-                Spacer(Modifier.weight(1f))
-                if (full) timeline?.let {
-                    LiveText(it.status, size = 13.sp, color = if (it.statusLive) colors.Error else accent, modifier = Modifier.padding(end = 14.dp))
-                }
-                LiveText(clock, size = 18.sp, weight = FontWeight.Bold, color = colors.TextPrimary)
-            }
-            Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.Bottom) {
+
+                // ---- middle: channel line, title, description, the controls and progress
                 Column(Modifier.weight(1f)) {
-                    LiveText(title, size = if (withRecent) 26.sp else 30.sp, weight = FontWeight.ExtraBold, maxLines = 1, marquee = true, color = colors.TextPrimary, shadow = true)
-                    // Channel surfing: the lines are always there (empty until the details arrive),
-                    // so nothing moves when the description fills in.
-                    if (meta.isNotBlank() || browsing) {
-                        Spacer(Modifier.height(2.dp))
-                        LiveText(meta.ifBlank { " " }, size = 14.sp, color = colors.TextSecondary, maxLines = 1, shadow = true)
+                    if (browsing) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            LiveTag("BROWSING", accent, colors.OnSecondary)
+                            Spacer(Modifier.width(10.dp))
+                            LiveText("OK to watch  ·  ▲ ▼ more channels  ·  Back to stay", size = 11.sp, color = colors.TextSecondary)
+                        }
+                        Spacer(Modifier.height(6.dp))
                     }
-                    val desc = description?.takeIf { it.isNotBlank() }
-                    if (desc != null || browsing) {
+                    if (showChannel || showTags) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (showChannel) {
+                                if (showPoster && !channel.logo.isNullOrBlank()) {
+                                    ChannelLogo(channel.logo, 22.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                if (showNumber) {
+                                    LiveText("${channel.number}", size = 13.sp, weight = FontWeight.Bold, color = colors.TextPrimary)
+                                    Spacer(Modifier.width(6.dp))
+                                }
+                                LiveText(channel.name, size = 13.sp, color = colors.TextSecondary, maxLines = 1, modifier = Modifier.widthIn(max = 320.dp))
+                                Spacer(Modifier.width(10.dp))
+                            }
+                            if (showTags) {
+                                when (mode) {
+                                    PanelMode.LIVE -> LiveTag("● LIVE", LIVE_RED, Color.White)
+                                    PanelMode.CATCHUP -> LiveTag("CATCH-UP", accent, colors.OnSecondary)
+                                    PanelMode.SHIFT -> LiveTag(timeline?.status?.uppercase() ?: "PAUSED LIVE", Color.White.copy(alpha = 0.22f), Color.White)
+                                }
+                                resolution?.let { Spacer(Modifier.width(6.dp)); GlassChip(it.uppercase()) }
+                                audioBadge?.let { Spacer(Modifier.width(6.dp)); GlassChip(it) }
+                                if (catchupAvailable && mode == PanelMode.LIVE) { Spacer(Modifier.width(6.dp)); GlassChip("CATCH-UP") }
+                                if (mode == PanelMode.LIVE) com.nuvio.tv.livetv.sports.SportsScoreTag(channel.key)
+                            }
+                        }
                         Spacer(Modifier.height(4.dp))
-                        LiveText(desc ?: " ", size = 14.sp, color = colors.TextSecondary, maxLines = if (full && !withRecent) 4 else 1, shadow = true)
+                    }
+                    LiveText(title, size = 20.sp, weight = FontWeight.ExtraBold, maxLines = 1, marquee = true, color = colors.TextPrimary)
+                    val line = listOfNotNull(meta.takeIf { it.isNotBlank() }, desc).joinToString("  ·  ")
+                    if (on(BarPart.DESCRIPTION) && (line.isNotEmpty() || browsing)) {
+                        Spacer(Modifier.height(2.dp))
+                        ScrollingDescription(line.ifEmpty { " " }, size = 12.sp, color = colors.TextSecondary, maxLines = if (full) 2 else 1)
+                    }
+                    if (full || showProgress) {
+                        Spacer(Modifier.height(6.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (full) {
+                                listOf(PanelControl.BACK, PanelControl.PLAY, PanelControl.FORWARD).filter { it in controls }.forEach { c ->
+                                    RoundButton(
+                                        icon = when (c) {
+                                            PanelControl.BACK -> Icons.Default.Replay30
+                                            PanelControl.FORWARD -> Icons.Default.Forward30
+                                            else -> if (paused) Icons.Default.PlayArrow else Icons.Default.Pause
+                                        },
+                                        focused = focused == c && recentFocus == null,
+                                        big = c == PanelControl.PLAY
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Spacer(Modifier.width(4.dp))
+                            }
+                            Box(Modifier.weight(1f)) {
+                                when {
+                                    showProgress && timeline != null -> GlassTimeline(timeline, grabbed = focused == PanelControl.TIMELINE)
+                                    // Progress bar off: the times, as words.
+                                    timeline != null -> LiveText(
+                                        timeline.leftLabel + " – " + timeline.rightLabel + "  ·  " + timeline.status,
+                                        size = 12.sp, color = colors.TextSecondary
+                                    )
+                                }
+                            }
+                            if (full) {
+                                Spacer(Modifier.width(10.dp))
+                                RoundButton(Icons.Default.Settings, focused = focused == PanelControl.MORE && recentFocus == null, big = false)
+                            }
+                        }
                     }
                 }
-                // What's on next, on the right.
-                if (nextTitle != null) {
-                    Spacer(Modifier.width(24.dp))
-                    Column(horizontalAlignment = Alignment.End) {
-                        LiveText("NEXT", size = 11.sp, weight = FontWeight.Bold, color = colors.TextTertiary)
-                        LiveText(nextTitle, size = 15.sp, weight = FontWeight.Bold, color = colors.TextPrimary, modifier = Modifier.widthIn(max = 260.dp), shadow = true)
-                        nextTime?.let { LiveText(it, size = 13.sp, color = colors.TextSecondary) }
+
+                // ---- right: the clock and what's next
+                if (showClock || showNext) {
+                    Spacer(Modifier.width(14.dp))
+                    Box(Modifier.width(1.dp).height(60.dp).background(Color.White.copy(alpha = 0.10f)))
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.widthIn(min = 70.dp, max = if (showNext) 190.dp else 110.dp)) {
+                        if (showClock) LiveText(clock, size = 19.sp, weight = FontWeight.ExtraBold, color = colors.TextPrimary)
+                        if (showNext) {
+                            if (showClock) Spacer(Modifier.height(4.dp))
+                            LiveText(
+                                "UP NEXT" + (nextTime?.let { " · " + it.substringBefore(" –") } ?: ""),
+                                size = 10.sp, weight = FontWeight.Bold, color = colors.TextTertiary
+                            )
+                            LiveText(nextTitle!!, size = 13.sp, weight = FontWeight.Bold, color = colors.TextPrimary, maxLines = 2)
+                        }
                     }
                 }
             }
-            timeline?.let { t ->
-                Spacer(Modifier.height(if (full) 10.dp else 10.dp))
-                PanelTimelineBar(t, grabbed = focused == PanelControl.TIMELINE, compact = !full)
-            }
-            if (full) {
-                Spacer(Modifier.height(10.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    controls.filter { it != PanelControl.TIMELINE }.forEach { c ->
-                        if (c == PanelControl.CC) Spacer(Modifier.weight(1f))
-                        PanelButton(c, focused == c && recentFocus == null, paused, captionsOn, audioLabel, sizeLabel, sleepLabel, mode)
-                    }
-                }
+            if (withRecent) {
+                Spacer(Modifier.height(6.dp))
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.08f)))
+                Spacer(Modifier.height(6.dp))
+                RecentRow(recent.orEmpty(), recentFocus, recentTitle, recentClear)
             }
         }
     }
-    if (withRecent) {
-        Spacer(Modifier.height(12.dp))
-        RecentRow(recent.orEmpty(), recentFocus, recentTitle, recentClear)
+}
+
+/** A small see-through tag (quality, sound, catch-up). */
+@Composable
+private fun GlassChip(text: String) {
+    LiveText(
+        text,
+        size = 10.sp, weight = FontWeight.Bold, color = Color.White.copy(alpha = 0.9f),
+        modifier = Modifier.clip(RoundedCornerShape(5.dp)).background(Color.White.copy(alpha = 0.14f)).padding(horizontal = 6.dp, vertical = 1.dp)
+    )
+}
+
+/** A round icon button on the bar: white when highlighted. */
+@Composable
+private fun RoundButton(icon: ImageVector, focused: Boolean, big: Boolean) {
+    val colors = NuvioTheme.colors
+    val size: Dp = if (big) 32.dp else 27.dp
+    Box(
+        modifier = Modifier
+            .graphicsLayer { val s = if (focused) 1.08f else 1f; scaleX = s; scaleY = s }
+            .size(size)
+            .clip(CircleShape)
+            .background(if (focused) Color.White else Color.White.copy(alpha = if (big) 0.18f else 0.10f))
+            .border(if (focused) 3.dp else 0.dp, if (focused) Color.White.copy(alpha = 0.25f) else Color.Transparent, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = null, tint = if (focused) Color(0xFF111111) else colors.TextPrimary, modifier = Modifier.size(if (big) 18.dp else 15.dp))
     }
+}
+
+/**
+ * The progress bar: start, the bar, end · how long is left. While moving through a recording
+ * or replay, a handle with the time you're at, and a red line where live is.
+ */
+@Composable
+private fun GlassTimeline(t: PanelTimeline, grabbed: Boolean) {
+    val colors = NuvioTheme.colors
+    val span = (t.endMs - t.startMs).coerceAtLeast(1L).toFloat()
+    fun frac(ms: Long) = ((ms - t.startMs) / span).coerceIn(0f, 1f)
+    val left = t.leftLabel.removePrefix("From ")
+    val right = t.rightLabel.removePrefix("Live ")
+    val scrubber = t.liveMs != null || grabbed
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        LiveText(left, size = 11.sp, color = colors.TextSecondary)
+        Spacer(Modifier.width(10.dp))
+        BoxWithConstraints(modifier = Modifier.weight(1f).height(20.dp)) {
+            val w = maxWidth
+            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp)).background(Color.White.copy(alpha = 0.18f)))
+            t.recordedUntilMs?.let { r ->
+                Box(Modifier.align(Alignment.CenterStart).width(w * frac(r)).height(5.dp).clip(RoundedCornerShape(3.dp)).background(Color.White.copy(alpha = 0.36f)))
+            }
+            Box(Modifier.align(Alignment.CenterStart).width(w * frac(t.positionMs)).height(5.dp).clip(RoundedCornerShape(3.dp)).background(Color.White))
+            t.liveMs?.let { l ->
+                Box(Modifier.align(Alignment.CenterStart).offset(x = (w * frac(l)) - 1.dp).width(2.dp).fillMaxHeight().background(LIVE_RED))
+            }
+            if (scrubber) {
+                val knob = if (grabbed) 18.dp else 14.dp
+                Box(
+                    Modifier.align(Alignment.CenterStart).offset(x = (w * frac(t.positionMs)) - knob / 2).size(knob)
+                        .clip(CircleShape).background(Color.White)
+                        .border(if (grabbed) 4.dp else 0.dp, Color.White.copy(alpha = 0.3f), CircleShape)
+                )
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        LiveText(right, size = 11.sp, color = if (t.liveMs != null) LIVE_RED else colors.TextSecondary)
+        Spacer(Modifier.width(10.dp))
+        LiveText(
+            if (grabbed) "◀ ▶ move · OK play/pause" else t.status,
+            size = 11.sp,
+            color = if (t.statusLive && !grabbed) LIVE_RED else colors.TextTertiary
+        )
     }
-    } // else (the smaller panel)
 }
 
 /** A channel in the info panel's Recent row: what's on now and how far into it. */
@@ -309,71 +442,81 @@ private fun RecentRow(recent: List<PanelRecent>, focus: Int?, title: String, sho
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-    // "RECENT" / "FAVORITES" up the side, so the row doesn't need a line of its own.
-    Box(Modifier.width(14.dp).height(TILE_H), contentAlignment = Alignment.Center) {
-        LiveText(
-            title, size = 9.sp, weight = FontWeight.Bold, color = colors.TextTertiary,
-            modifier = Modifier.wrapContentSize(unbounded = true).rotate(-90f),
-            shadow = true
-        )
-    }
-    Spacer(Modifier.width(4.dp))
-    androidx.compose.foundation.lazy.LazyRow(
-        state = state,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 4.dp),
-        userScrollEnabled = false
-    ) {
-        item(key = "guide") {
-            RecentTile(focused = focus == 0, width = 64.dp) {
-                Icon(Icons.Default.GridView, contentDescription = null, tint = colors.TextPrimary, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.height(2.dp))
-                LiveText("TV Guide", size = 10.sp, weight = FontWeight.SemiBold, color = colors.TextPrimary)
-            }
+        // "RECENT" / "FAVORITES" up the side, so the row doesn't need a line of its own.
+        Box(Modifier.width(14.dp).height(TILE_H), contentAlignment = Alignment.Center) {
+            LiveText(
+                title, size = 9.sp, weight = FontWeight.Bold, color = colors.TextTertiary,
+                modifier = Modifier.wrapContentSize(unbounded = true).rotate(-90f)
+            )
         }
-        recent.forEachIndexed { i, r ->
-            item(key = "ch:" + r.channel.key) {
-                RecentTile(focused = focus == i + 1, width = 96.dp, progress = r.progress) {
-                    if (!r.channel.logo.isNullOrBlank()) ChannelLogo(r.channel.logo, 17.dp)
-                    else LiveText(r.channel.name, size = 12.sp, weight = FontWeight.Bold, color = colors.TextPrimary, maxLines = 1)
-                    Spacer(Modifier.height(2.dp))
-                    LiveText(r.title ?: r.channel.name, size = 9.sp, color = colors.TextSecondary, maxLines = 1)
+        Spacer(Modifier.width(4.dp))
+        androidx.compose.foundation.lazy.LazyRow(
+            state = state,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+            userScrollEnabled = false
+        ) {
+            item(key = "guide") {
+                val f = focus == 0
+                val fg = focusedTextColor(f)
+                RecentTile(focused = f, width = 56.dp) {
+                    Icon(Icons.Default.GridView, contentDescription = null, tint = fg, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.height(1.dp))
+                    LiveText("TV Guide", size = 9.sp, weight = FontWeight.SemiBold, color = fg)
+                }
+            }
+            recent.forEachIndexed { i, r ->
+                item(key = "ch:" + r.channel.key) {
+                    val f = focus == i + 1
+                    val fg = focusedTextColor(f)
+                    val fgDim = focusedSecondaryTextColor(f)
+                    RecentTile(focused = f, width = 86.dp, progress = r.progress) {
+                        if (!r.channel.logo.isNullOrBlank()) ChannelLogo(r.channel.logo, 15.dp)
+                        else LiveText(r.channel.name, size = 11.sp, weight = FontWeight.Bold, color = fg, maxLines = 1)
+                        Spacer(Modifier.height(1.dp))
+                        LiveText(r.title ?: r.channel.name, size = 9.sp, color = fgDim, maxLines = 1)
+                    }
+                }
+            }
+            if (showClear) item(key = "clear") {
+                val f = focus == recent.size + 1
+                val fg = if (f) focusedTextColor(true) else colors.TextSecondary
+                RecentTile(focused = f, width = 56.dp) {
+                    Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = fg, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.height(1.dp))
+                    LiveText("Clear", size = 9.sp, weight = FontWeight.SemiBold, color = fg)
                 }
             }
         }
-        if (showClear) item(key = "clear") {
-            RecentTile(focused = focus == recent.size + 1, width = 64.dp) {
-                Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = colors.TextSecondary, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.height(2.dp))
-                LiveText("Clear", size = 10.sp, weight = FontWeight.SemiBold, color = colors.TextSecondary)
-            }
-        }
-    }
     }
 }
 
-private val TILE_H = 44.dp
+private val TILE_H = 34.dp
 
 @Composable
 private fun RecentTile(
     focused: Boolean,
-    width: androidx.compose.ui.unit.Dp,
+    width: Dp,
     progress: Float? = null,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
     val colors = NuvioTheme.colors
-    val shape = RoundedCornerShape(8.dp)
+    val shape = RoundedCornerShape(9.dp)
+    // The app's own highlight (outline or solid, per the Highlight Style setting).
+    val cell = liveCellColors(focused, Color.Black.copy(alpha = 0.45f))
     Box(
         modifier = Modifier
             .graphicsLayer { val s = if (focused) 1.06f else 1f; scaleX = s; scaleY = s }
             .width(width)
             .height(TILE_H)
             .clip(shape)
-            .background(Color.White.copy(alpha = if (focused) 0.16f else 0.08f))
-            .border(if (focused) 2.dp else 1.dp, if (focused) colors.FocusRing else Color.White.copy(alpha = 0.08f), shape)
+            // Dark, not white-tinted: stays readable over bright video regardless of what's
+            // behind the (translucent) bar, instead of relying on contrast with the picture.
+            .background(cell.background)
+            .border(if (focused) 2.dp else 1.dp, if (focused) cell.border else Color.White.copy(alpha = 0.12f), shape)
     ) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 5.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
             content = content
@@ -386,409 +529,3 @@ private fun RecentTile(
         }
     }
 }
-
-@Composable
-private fun PanelTimelineBar(t: PanelTimeline, grabbed: Boolean, compact: Boolean) {
-    val colors = NuvioTheme.colors
-    val accent = colors.Secondary
-    val span = (t.endMs - t.startMs).coerceAtLeast(1L).toFloat()
-    fun frac(ms: Long) = ((ms - t.startMs) / span).coerceIn(0f, 1f)
-    val track = if (compact) 4.dp else 4.dp
-    if (compact) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            LiveText(t.leftLabel, size = 13.sp, color = colors.TextSecondary)
-            Spacer(Modifier.width(12.dp))
-            BoxWithConstraints(modifier = Modifier.weight(1f).height(8.dp)) {
-                val w = maxWidth
-                Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(track).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.18f)))
-                t.recordedUntilMs?.let { r ->
-                    Box(Modifier.align(Alignment.CenterStart).width(w * frac(r)).height(track).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.35f)))
-                }
-                Box(Modifier.align(Alignment.CenterStart).width(w * frac(t.positionMs)).height(track).clip(RoundedCornerShape(2.dp)).background(accent))
-                t.liveMs?.let { l ->
-                    Box(Modifier.align(Alignment.CenterStart).offset(x = (w * frac(l)) - 1.dp).width(2.dp).fillMaxHeight().background(colors.Error))
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            LiveText(t.rightLabel, size = 13.sp, color = if (t.liveMs != null) colors.Error else colors.TextSecondary)
-            Spacer(Modifier.width(14.dp))
-            LiveText(t.status, size = 13.sp, color = if (t.statusLive) colors.Error else colors.TextSecondary)
-        }
-        return
-    }
-    Column {
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth().height(if (compact) 8.dp else 16.dp)) {
-            val w = maxWidth
-            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(track).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.18f)))
-            t.recordedUntilMs?.let { r ->
-                Box(Modifier.align(Alignment.CenterStart).width(w * frac(r)).height(track).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.35f)))
-            }
-            Box(Modifier.align(Alignment.CenterStart).width(w * frac(t.positionMs)).height(track).clip(RoundedCornerShape(2.dp)).background(accent))
-            t.liveMs?.let { l ->
-                Box(Modifier.align(Alignment.CenterStart).offset(x = (w * frac(l)) - 1.dp).width(2.dp).fillMaxHeight().background(colors.Error))
-            }
-            if (!compact) {
-                // The handle: bigger, with a ring, while the timeline is grabbed.
-                val knob = if (grabbed) 18.dp else 12.dp
-                Box(
-                    Modifier.align(Alignment.CenterStart).offset(x = (w * frac(t.positionMs)) - knob / 2).size(knob)
-                        .clip(CircleShape).background(Color.White)
-                        .border(if (grabbed) 3.dp else 2.dp, if (grabbed) colors.FocusRing else accent, CircleShape)
-                )
-            }
-        }
-        if (!compact) Row(Modifier.fillMaxWidth().padding(top = 2.dp)) {
-            LiveText(t.leftLabel, size = 11.sp, color = colors.TextSecondary)
-            Spacer(Modifier.weight(1f))
-            if (grabbed) LiveText("◀ ▶ to move · OK to play/pause", size = 11.sp, color = colors.TextSecondary)
-            Spacer(Modifier.weight(1f))
-            LiveText(t.rightLabel, size = 11.sp, color = if (t.liveMs != null) colors.Error else colors.TextSecondary)
-        }
-    }
-}
-
-@Composable
-private fun PanelButton(
-    c: PanelControl,
-    focused: Boolean,
-    paused: Boolean,
-    captionsOn: Boolean,
-    audioLabel: String,
-    sizeLabel: String,
-    sleepLabel: String?,
-    mode: PanelMode,
-    /** The compact full panel's smaller round buttons. */
-    small: Boolean = false
-) {
-    val colors = NuvioTheme.colors
-    val idle = Color.White.copy(alpha = 0.12f)
-    when (c) {
-        PanelControl.TIMELINE -> Unit
-        PanelControl.BACK, PanelControl.FORWARD, PanelControl.PLAY -> {
-            val big = c == PanelControl.PLAY
-            val icon: ImageVector = when (c) {
-                PanelControl.BACK -> Icons.Default.Replay30
-                PanelControl.FORWARD -> Icons.Default.Forward30
-                else -> if (paused) Icons.Default.PlayArrow else Icons.Default.Pause
-            }
-            Box(
-                modifier = Modifier
-                    .size(if (small) (if (big) 32.dp else 30.dp) else if (big) 40.dp else 34.dp)
-                    .clip(CircleShape)
-                    .background(if (focused) colors.FocusRing else if (big) Color.White.copy(alpha = 0.22f) else idle),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(icon, contentDescription = null, tint = if (focused) colors.Background else colors.TextPrimary, modifier = Modifier.size(if (small) 17.dp else if (big) 22.dp else 18.dp))
-            }
-        }
-        PanelControl.LIVE -> Pill(
-            text = if (mode == PanelMode.CATCHUP) "Back to live" else "Go live",
-            icon = null, focused = focused, dot = true
-        )
-        PanelControl.CC -> Pill(
-            text = if (captionsOn) "CC on" else "CC off",
-            icon = if (captionsOn) Icons.Default.ClosedCaption else Icons.Default.ClosedCaptionDisabled,
-            focused = focused, active = captionsOn
-        )
-        PanelControl.AUDIO -> Pill(audioLabel, Icons.Default.VolumeUp, focused)
-        PanelControl.SIZE -> Pill(sizeLabel, Icons.Default.AspectRatio, focused)
-        PanelControl.SLEEP -> Pill(sleepLabel ?: "Sleep", Icons.Default.Bedtime, focused)
-        PanelControl.MORE -> Pill("", Icons.Default.MoreHoriz, focused)
-    }
-}
-
-@Composable
-private fun Pill(
-    text: String,
-    icon: ImageVector?,
-    focused: Boolean,
-    active: Boolean = false,
-    dot: Boolean = false
-) {
-    val colors = NuvioTheme.colors
-    val shape = RoundedCornerShape(16.dp)
-    Row(
-        modifier = Modifier
-            .height(32.dp)
-            .clip(shape)
-            .background(
-                when {
-                    focused -> colors.FocusRing
-                    active -> colors.Secondary.copy(alpha = 0.30f)
-                    else -> Color.White.copy(alpha = 0.12f)
-                }
-            )
-            .padding(horizontal = if (text.isEmpty()) 8.dp else 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        val color = if (focused) colors.Background else colors.TextPrimary
-        if (dot) {
-            Box(Modifier.size(7.dp).clip(CircleShape).background(colors.Error))
-            Spacer(Modifier.width(6.dp))
-        }
-        icon?.let {
-            Icon(it, contentDescription = null, tint = color, modifier = Modifier.size(16.dp))
-            if (text.isNotEmpty()) Spacer(Modifier.width(6.dp))
-        }
-        if (text.isNotEmpty()) LiveText(text, size = 12.sp, color = color, weight = FontWeight.Medium)
-    }
-}
-
-
-/**
- * The full panel (OK while watching), kept small: channel line and clock along the top of the
- * poster; the title with its category and what's next on one line; the description (only
- * without the channel row); then play/pause, the time bar and the quick options on one line.
- * The poster is as tall as the text beside it, and the panel is the same height with or without
- * the channel row (the row's space goes to the description and a bigger poster).
- */
-@Composable
-private fun FullInfoPanel(
-    channel: LiveChannel,
-    mode: PanelMode,
-    title: String,
-    meta: String,
-    description: String?,
-    poster: String?,
-    showPosters: Boolean,
-    timeline: PanelTimeline?,
-    paused: Boolean,
-    controls: List<PanelControl>,
-    focused: PanelControl?,
-    captionsOn: Boolean,
-    audioLabel: String,
-    sizeLabel: String,
-    sleepLabel: String?,
-    clock: String,
-    resolution: String?,
-    showNumber: Boolean,
-    nextTitle: String?,
-    nextTime: String?,
-    catchupAvailable: Boolean,
-    recent: List<PanelRecent>?,
-    recentFocus: Int?,
-    recentTitle: String,
-    recentClear: Boolean,
-    modifier: Modifier,
-    audioBadge: String? = null,
-    background: String = "standard"
-) {
-    val colors = NuvioTheme.colors
-    val accent = colors.Secondary
-    val withRow = recent != null
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    // The poster matches the height of the text beside it.
-    var infoHeightPx by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
-    val posterH = with(density) { infoHeightPx.toDp() }
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            // Fades in above the text (in the top padding), then stays dark behind it.
-            .panelScrim(colors.Background, background, fade = 38.dp)
-            .padding(start = 40.dp, end = 40.dp, top = 42.dp, bottom = 10.dp)
-    ) {
-        Row(verticalAlignment = Alignment.Top) {
-            val posterShape = RoundedCornerShape(liveCorner())
-            Box(
-                modifier = Modifier
-                    .width(posterH * (2f / 3f))
-                    .height(posterH)
-                    .clip(posterShape)
-                    .background(colors.BackgroundCard.copy(alpha = 0.85f))
-                    .border(1.dp, Color.White.copy(alpha = 0.12f), posterShape),
-                contentAlignment = Alignment.Center
-            ) {
-                if (showPosters && !poster.isNullOrBlank()) {
-                    coil3.compose.AsyncImage(
-                        model = poster,
-                        contentDescription = null,
-                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    ChannelLogo(channel.logo, (posterH * 0.3f).coerceAtLeast(20.dp))
-                }
-            }
-            Spacer(Modifier.width(14.dp))
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .onSizeChanged { sz ->
-                        // A couple of pixels either way doesn't matter (and can't go back and forth).
-                        if (kotlin.math.abs(sz.height - infoHeightPx) > 2) infoHeightPx = sz.height
-                    }
-            ) {
-                // Channel line, with the clock on the right: level with the top of the poster.
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (!channel.logo.isNullOrBlank()) {
-                        ChannelLogo(channel.logo, 18.dp)
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    LiveText(
-                        (if (showNumber) "${channel.number} · " else "") + channel.name,
-                        size = 12.sp, weight = FontWeight.SemiBold, color = colors.TextSecondary,
-                        shadow = true
-                    )
-                    when (mode) {
-                        PanelMode.LIVE -> { Spacer(Modifier.width(8.dp)); LiveTag("LIVE", LIVE_RED, Color.White) }
-                        PanelMode.CATCHUP -> { Spacer(Modifier.width(8.dp)); LiveTag("ARCHIVE", accent, colors.OnSecondary) }
-                        PanelMode.SHIFT -> { Spacer(Modifier.width(8.dp)); LiveTag("PAUSED LIVE", accent, colors.OnSecondary) }
-                    }
-                    resolution?.let {
-                        Spacer(Modifier.width(6.dp))
-                        LiveTag(it.uppercase(), Color.Transparent, colors.TextSecondary,
-                            Modifier.border(1.dp, colors.Border, RoundedCornerShape(5.dp)))
-                    }
-                    audioBadge?.let {
-                        Spacer(Modifier.width(6.dp))
-                        LiveTag(it, Color.Transparent, colors.TextSecondary,
-                            Modifier.border(1.dp, colors.Border, RoundedCornerShape(5.dp)))
-                    }
-                    if (catchupAvailable && mode == PanelMode.LIVE) {
-                        Spacer(Modifier.width(6.dp))
-                        LiveTag("CATCH-UP", Color.Transparent, colors.TextSecondary,
-                            Modifier.border(1.dp, colors.Border, RoundedCornerShape(5.dp)))
-                    }
-                    if (mode == PanelMode.LIVE) com.nuvio.tv.livetv.sports.SportsScoreTag(channel.key)
-                    Spacer(Modifier.weight(1f))
-                    // Time left / how far behind live: up here, so the time bar keeps its length.
-                    timeline?.let {
-                        LiveText(
-                            it.status, size = 12.sp, weight = FontWeight.SemiBold,
-                            color = if (it.statusLive) colors.Error else accent,
-                            modifier = Modifier.padding(end = 12.dp)
-                        )
-                    }
-                    if (clock.isNotEmpty()) LiveText(clock, size = 16.sp, weight = FontWeight.Bold, color = colors.TextPrimary, shadow = true)
-                }
-                Spacer(Modifier.height(2.dp))
-                // Title · category, and what's next on the right.
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    LiveText(
-                        title, size = 22.sp, weight = FontWeight.ExtraBold, maxLines = 1, marquee = true,
-                        color = colors.TextPrimary, modifier = Modifier.weight(1f, fill = false),
-                        shadow = true
-                    )
-                    if (meta.isNotBlank()) {
-                        Spacer(Modifier.width(10.dp))
-                        LiveText(meta, size = 12.sp, color = colors.TextSecondary, maxLines = 1, modifier = Modifier.weight(1f, fill = false), shadow = true)
-                    }
-                    Spacer(Modifier.weight(0.001f))
-                    if (nextTitle != null) {
-                        Spacer(Modifier.width(16.dp))
-                        LiveText("Next: ", size = 12.sp, color = colors.TextSecondary, shadow = true)
-                        LiveText(nextTitle, size = 12.sp, weight = FontWeight.Bold, color = colors.TextPrimary, modifier = Modifier.widthIn(max = 220.dp), shadow = true)
-                        nextTime?.let {
-                            Spacer(Modifier.width(6.dp))
-                            LiveText(it.substringBefore(" –"), size = 12.sp, color = colors.TextSecondary, shadow = true)
-                        }
-                    }
-                }
-                // The description: only without the channel row (the row takes its place).
-                if (!withRow) {
-                    Spacer(Modifier.height(6.dp))
-                    LiveText(
-                        description?.takeIf { it.isNotBlank() } ?: " ",
-                        // Grows to fit (the panel and poster get taller), up to 5 lines.
-                        size = 12.sp, color = colors.TextSecondary, maxLines = 5,
-                        modifier = Modifier.heightIn(min = 48.dp),
-                        shadow = true
-                    )
-                }
-                Spacer(Modifier.height(if (withRow) 8.dp else 10.dp))
-                // Play / pause (and skip) first, then the time bar, then the quick options.
-                val buttons = controls.filter { it != PanelControl.TIMELINE }
-                val transport = buttons.filter { it == PanelControl.BACK || it == PanelControl.PLAY || it == PanelControl.FORWARD }
-                val rest = buttons - transport.toSet()
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    transport.forEach { c ->
-                        PanelButton(c, small = true, focused = focused == c && recentFocus == null, paused = paused, captionsOn = captionsOn,
-                            audioLabel = audioLabel, sizeLabel = sizeLabel, sleepLabel = sleepLabel, mode = mode)
-                    }
-                    Spacer(Modifier.width(4.dp))
-                    Box(Modifier.weight(1f)) {
-                        timeline?.let { InlineTimeline(it, grabbed = focused == PanelControl.TIMELINE) }
-                    }
-                    Spacer(Modifier.width(4.dp))
-                    rest.forEach { c ->
-                        PanelButton(c, small = true, focused = focused == c && recentFocus == null, paused = paused, captionsOn = captionsOn,
-                            audioLabel = audioLabel, sizeLabel = sizeLabel, sleepLabel = sleepLabel, mode = mode)
-                    }
-                }
-            }
-        }
-        if (withRow) {
-            Spacer(Modifier.height(8.dp))
-            RecentRow(recent.orEmpty(), recentFocus, recentTitle, recentClear)
-        }
-    }
-}
-
-/** The time bar on the buttons' line: start, the bar (with a handle you can grab), end · time left. */
-@Composable
-private fun InlineTimeline(t: PanelTimeline, grabbed: Boolean) {
-    val colors = NuvioTheme.colors
-    val accent = colors.Secondary
-    val span = (t.endMs - t.startMs).coerceAtLeast(1L).toFloat()
-    fun frac(ms: Long) = ((ms - t.startMs) / span).coerceIn(0f, 1f)
-    // Just the times at each end ("From" / "Live" dropped); how far in is shown by the clock.
-    val left = t.leftLabel.removePrefix("From ")
-    val right = t.rightLabel.removePrefix("Live ")
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        LiveText(left, size = 11.sp, color = colors.TextSecondary)
-        Spacer(Modifier.width(8.dp))
-        BoxWithConstraints(modifier = Modifier.weight(1f).height(16.dp)) {
-            val w = maxWidth
-            Box(Modifier.align(Alignment.CenterStart).fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.18f)))
-            t.recordedUntilMs?.let { r ->
-                Box(Modifier.align(Alignment.CenterStart).width(w * frac(r)).height(3.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.35f)))
-            }
-            Box(Modifier.align(Alignment.CenterStart).width(w * frac(t.positionMs)).height(3.dp).clip(RoundedCornerShape(2.dp)).background(accent))
-            t.liveMs?.let { l ->
-                Box(Modifier.align(Alignment.CenterStart).offset(x = (w * frac(l)) - 1.dp).width(2.dp).fillMaxHeight().background(colors.Error))
-            }
-            if (grabbed) {
-                val knob = 14.dp
-                Box(
-                    Modifier.align(Alignment.CenterStart).offset(x = (w * frac(t.positionMs)) - knob / 2).size(knob)
-                        .clip(CircleShape).background(Color.White)
-                        .border(3.dp, colors.FocusRing, CircleShape)
-                )
-            }
-        }
-        Spacer(Modifier.width(8.dp))
-        LiveText(
-            if (grabbed) "◀ ▶ to move · OK play/pause" else right,
-            size = 11.sp,
-            color = if (t.liveMs != null && !grabbed) colors.Error else colors.TextSecondary
-        )
-    }
-}
-
-/**
- * The info panel's background in the theme's color: clear at the very top, dark by the time the
- * text starts (the fade sits in the top padding, [fade] tall), a touch darker toward the bottom.
- * [level]: "standard", "darker" or "solid" (Live TV settings, Info Panel Background).
- */
-private fun Modifier.panelScrim(base: Color, level: String, fade: androidx.compose.ui.unit.Dp): Modifier =
-    this.drawBehind {
-        val (top, bottom) = when (level) {
-            "solid" -> 1f to 1f
-            "darker" -> 0.95f to 0.99f
-            else -> 0.88f to 0.97f
-        }
-        val f = fade.toPx().coerceAtMost(size.height)
-        drawRect(
-            androidx.compose.ui.graphics.Brush.verticalGradient(
-                0f to base.copy(alpha = 0f), 1f to base.copy(alpha = top), startY = 0f, endY = f
-            ),
-            size = androidx.compose.ui.geometry.Size(size.width, f)
-        )
-        drawRect(
-            androidx.compose.ui.graphics.Brush.verticalGradient(
-                0f to base.copy(alpha = top), 1f to base.copy(alpha = bottom), startY = f, endY = size.height
-            ),
-            topLeft = androidx.compose.ui.geometry.Offset(0f, f),
-            size = androidx.compose.ui.geometry.Size(size.width, size.height - f)
-        )
-    }

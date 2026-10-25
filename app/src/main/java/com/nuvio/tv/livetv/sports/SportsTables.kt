@@ -263,8 +263,8 @@ private fun LeagueButton(league: League, selected: Boolean, modifier: Modifier =
         modifier
             .height(34.dp)
             .clip(shape)
-            .background(if (focused) Color.White else if (selected) accent.copy(alpha = 0.14f) else SportsLook.Card)
-            .border(1.5.dp, if (focused) Color.White else if (selected) accent else SportsLook.Border, shape)
+            .background(if (selected) accent.copy(alpha = 0.14f) else SportsLook.Card)
+            .border(if (focused) NuvioTheme.focusRing.border(1.5.dp) else androidx.compose.foundation.BorderStroke(1.5.dp, if (selected) accent else SportsLook.Border), shape)
             .onFocusChanged { focused = it.isFocused; if (it.isFocused && !selected) onClick() }
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
             .padding(start = 5.dp, end = 13.dp),
@@ -272,7 +272,7 @@ private fun LeagueButton(league: League, selected: Boolean, modifier: Modifier =
     ) {
         LeagueMark(league, 22.dp)
         Spacer(Modifier.width(7.dp))
-        LiveText(league.name, color = if (focused) SportsLook.Ink else Color.White, size = 12.sp, weight = FontWeight.ExtraBold)
+        LiveText(league.name, color = Color.White, size = 12.sp, weight = FontWeight.ExtraBold)
     }
 }
 
@@ -414,8 +414,8 @@ private fun StandingsLine(
 ) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(8.dp)
-    val ink = if (focused) SportsLook.Ink else Color.White
-    val sub = if (focused) Color(0xFF555A66) else Color(0xFFC9CCD6)
+    val ink = Color.White
+    val sub = Color(0xFFC9CCD6)
     val team = TeamInfo(table.leagueId, row.id, row.shortName, row.name, row.abbr, null, row.color, row.altColor, row.logo)
     // The team's colour behind its name, fading out across the row (as on the game cards).
     val band = if (row.color != null || row.altColor != null) bandColor(teamColor(team)) else null
@@ -427,7 +427,6 @@ private fun StandingsLine(
             .background(SportsLook.Card)
             .background(
                 when {
-                    focused -> Brush.horizontalGradient(listOf(Color.White, Color.White))
                     band != null -> Brush.horizontalGradient(
                         0f to band.copy(alpha = if (marked) 0.95f else 0.75f), 0.55f to band.copy(alpha = 0.18f), 1f to Color.Transparent
                     )
@@ -435,8 +434,15 @@ private fun StandingsLine(
                     else -> Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent))
                 }
             )
-            // Your team (or the game's two, from a game page): a gold outline.
-            .border(if (marked && !focused) 1.5.dp else 0.dp, if (marked && !focused) Color(0xFFFFCE54) else Color.Transparent, shape)
+            // Your team (or the game's two, from a game page): a gold outline; the usual ring when focused.
+            .border(
+                when {
+                    focused -> NuvioTheme.focusRing.border(1.5.dp)
+                    marked -> androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFFFCE54))
+                    else -> androidx.compose.foundation.BorderStroke(0.dp, Color.Transparent)
+                },
+                shape
+            )
             .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus() }
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically
@@ -444,7 +450,7 @@ private fun StandingsLine(
         // The zone's colour down the left edge (Champions League, relegation…), or the division leader's.
         Box(Modifier.width(3.dp).fillMaxHeight().background(row.zone?.let { Color(it.color) } ?: Color.Transparent))
         Row(Modifier.width(POS_W - 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-            LiveText("${row.pos}", color = if (focused) SportsLook.Ink else if (band != null) Color.White.copy(alpha = 0.85f) else SportsLook.Dim, size = 11.sp, weight = FontWeight.ExtraBold)
+            LiveText("${row.pos}", color = if (band != null) Color.White.copy(alpha = 0.85f) else SportsLook.Dim, size = 11.sp, weight = FontWeight.ExtraBold)
             if (showChange) row.change?.let { c ->
                 LiveText(if (c > 0) "▲" else "▼", color = if (c > 0) Color(0xFF2E9E5B) else Color(0xFFE05A4F), size = 7.sp, modifier = Modifier.padding(start = 2.dp))
             }
@@ -457,7 +463,7 @@ private fun StandingsLine(
             row.clincher?.let { cl ->
                 LiveText(
                     " $cl",
-                    color = if (cl == "e") Color(0xFFE05A4F) else if (focused) Color(0xFF1C7A45) else Color(0xFF5FD38D),
+                    color = if (cl == "e") Color(0xFFE05A4F) else Color(0xFF5FD38D),
                     size = 9.sp, weight = FontWeight.Black
                 )
             }
@@ -466,7 +472,7 @@ private fun StandingsLine(
             val v = row.values[c.key].orEmpty()
             val strong = c.key == "points" || (table.kind == StandingsKind.RECORD && c.key == "winPercent")
             val streakColor = if (c.key == "streak") when {
-                v.startsWith("W") -> if (focused) Color(0xFF1C7A45) else Color(0xFF5FD38D)
+                v.startsWith("W") -> Color(0xFF5FD38D)
                 v.startsWith("L") -> Color(0xFFE05A4F)
                 else -> sub
             } else null
@@ -748,7 +754,11 @@ private fun cardStats(t: Standings, r: StandingsRow): List<Pair<String, String>>
 
 @Composable
 private fun StatBox(label: String, value: String, modifier: Modifier) {
-    Column(modifier.clip(RoundedCornerShape(9.dp)).background(SportsLook.CardRaised).padding(horizontal = 9.dp, vertical = 6.dp)) {
+    Column(
+        modifier.clip(RoundedCornerShape(9.dp)).background(SportsLook.CardRaised)
+            .border(1.dp, SportsLook.Border, RoundedCornerShape(9.dp))
+            .padding(horizontal = 9.dp, vertical = 6.dp)
+    ) {
         LiveText(label, color = SportsLook.Dim, size = 8.sp, weight = FontWeight.Black)
         val color = when {
             label == "STREAK" && value.startsWith("W") -> Color(0xFF5FD38D)
@@ -816,16 +826,16 @@ private fun AllGames(team: TeamInfo, games: List<SportsEvent>, hide: Boolean, no
                 (if (i == firstAhead) Modifier.focusRequester(first) else Modifier)
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
-                    .background(if (focused) Color.White else Color.Transparent)
+                    .background(if (focused) NuvioTheme.colors.FocusBackground.copy(alpha = 0.25f) else Color.Transparent)
+                    .border(if (focused) NuvioTheme.focusRing.border(2.dp) else androidx.compose.foundation.BorderStroke(0.dp, Color.Transparent), RoundedCornerShape(8.dp))
                     .onFocusChanged { focused = it.isFocused }
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onOpen(ev) }
                     .padding(horizontal = 8.dp)
             ) {
                 if (focused) {
-                    // Dark text on the white highlight.
                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        LiveText(gameLine(ev, team, hide, now, use24h), color = SportsLook.Ink, size = 12.sp, weight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
-                        LiveText("Game info ›", color = Color(0xFF555A66), size = 10.sp)
+                        LiveText(gameLine(ev, team, hide, now, use24h), color = Color.White, size = 12.sp, weight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
+                        LiveText("Game info ›", color = SportsLook.Dim, size = 10.sp)
                     }
                 } else {
                     CardGame(ev, team, hide, now, use24h, live = ev.state == GameState.LIVE)

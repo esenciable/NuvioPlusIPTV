@@ -137,6 +137,9 @@ class OnDemandRepository @Inject constructor(
     private val infoCache = com.nuvio.tv.livetv.data.boundedCache<String, VodInfo>(300)
     /** The last import problem, shown in settings (cleared by a clean import). */
     @Volatile private var lastProblem: String? = null
+
+    /** Each login's own last problem (by playlist id), so one login's success or failure doesn't hide another's. */
+    private val problemByPlaylist = java.util.concurrent.ConcurrentHashMap<String, String>()
     private var started = false
 
     @Synchronized
@@ -233,6 +236,7 @@ class OnDemandRepository @Inject constructor(
             val series = runCatching { importKind(pl, VodKind.SERIES) }
                 .onFailure { Log.w(TAG, "Series for ${pl.name} failed", it); lastProblem = "Couldn't import series from ${pl.name}: ${it.message ?: it.javaClass.simpleName}" }
             val ok = movies.isSuccess && series.isSuccess && lastProblem == null
+            lastProblem?.let { problemByPlaylist[pl.id] = it } ?: problemByPlaylist.remove(pl.id)
             // Success: next import in a day. Failure: try again in an hour, not on every start.
             prefs.setOnDemandImportTime(
                 pl.id,
@@ -243,7 +247,9 @@ class OnDemandRepository @Inject constructor(
         }
         _hasContent.value = runCatching { db.hasAny() }.getOrDefault(_hasContent.value)
         // A problem stays visible in Settings → Live TV → On Demand (no more silent failures).
-        _status.value = OnDemandStatus(false, lastProblem)
+        // Every login's problem, not only the last one imported.
+        problemByPlaylist.keys.retainAll(keep)
+        _status.value = OnDemandStatus(false, problemByPlaylist.values.joinToString("\n").ifBlank { null })
     }
 
     /**

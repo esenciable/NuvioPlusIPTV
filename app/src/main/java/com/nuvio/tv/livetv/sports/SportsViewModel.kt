@@ -39,6 +39,11 @@ class SportsViewModel @Inject constructor(
     val use24h: StateFlow<Boolean> = livePrefs.settings.map { it.use24HourClock }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    /** The guide's chosen backdrop (Settings → Live TV), shared so Sports matches it. */
+    val backdrop: StateFlow<String> = livePrefs.settings.map { it.guideBackdrop }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "auto")
+
     /** Live TV has channels at all (otherwise the page explains channels need a playlist). */
     val hasChannels: StateFlow<Boolean> = liveRepo.channels.map { it.isNotEmpty() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)

@@ -60,6 +60,7 @@ import coil3.compose.AsyncImage
 import com.nuvio.tv.livetv.ui.LIVE_RED
 import com.nuvio.tv.livetv.ui.LiveText
 import com.nuvio.tv.livetv.ui.liveCorner
+import com.nuvio.tv.livetv.ui.guideBackdrop
 import com.nuvio.tv.ui.theme.NuvioTheme
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -92,6 +93,10 @@ class RecordingsViewModel @Inject constructor(
             val byKey = all.associateBy { it.key }
             (user.favorites + user.recent).distinct().mapNotNull { byKey[it] }.take(80)
         }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The guide's look (background, panel darkness, highlight style), so this screen matches it. */
+    val look: kotlinx.coroutines.flow.StateFlow<com.nuvio.tv.livetv.model.LiveTvSettings> = livePrefs.settings
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, com.nuvio.tv.livetv.model.LiveTvSettings())
 
     val use24h: kotlinx.coroutines.flow.StateFlow<Boolean> = livePrefs.settings
         .map { it.use24HourClock }
@@ -241,6 +246,7 @@ fun RecordingsScreen(
     val newButton = remember { FocusRequester() }
     val first = remember { FocusRequester() }
     val colors = NuvioTheme.colors
+    val look by viewModel.look.collectAsStateWithLifecycle()
 
     val now = recordings.filter { it.isRecording }
     val done = recordings.filter { !it.isRecording }
@@ -257,10 +263,15 @@ fun RecordingsScreen(
     val firstSeriesId = if (now.isEmpty() && schedules.isEmpty()) seriesRules.firstOrNull()?.id else null
     val firstDoneId = if (now.isEmpty() && schedules.isEmpty() && seriesRules.isEmpty()) done.firstOrNull()?.id else null
 
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.nuvio.tv.livetv.ui.LocalLiveSolidHighlight provides look.solidHighlight,
+        com.nuvio.tv.livetv.ui.LocalGuideDarkness provides look.guideInfoBackground
+    ) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(colors.Background)
+            // The same background as the guide and Sports (Settings → Live TV → Guide & Sports Background).
+            .guideBackdrop(look.guideBackdrop)
     ) {
         // The guide's background: the theme's glow behind the top of the screen.
         com.nuvio.tv.livetv.ui.ThemeGlow(Modifier.fillMaxWidth().height(260.dp))
@@ -278,10 +289,14 @@ fun RecordingsScreen(
                 )
                 Spacer(Modifier.width(18.dp))
                 // Record a time you pick, on a channel with no listings (PPV events…).
-                com.nuvio.tv.livetv.ui.LiveFocusRow(
+                PillButton(
+                    "+ New Recording",
+                    primary = false,
                     modifier = Modifier.focusRequester(newButton),
-                    onClick = { pickingChannel = true }
-                ) { f -> LiveText("+ New Recording", color = com.nuvio.tv.livetv.ui.focusedTextColor(f), size = 15.sp, weight = FontWeight.SemiBold) }
+                    onFocus = {},
+                    onClick = { pickingChannel = true },
+                    onMenu = { pickingChannel = true }
+                )
             }
             Spacer(Modifier.height(20.dp))
             if (recordings.isEmpty() && schedules.isEmpty() && seriesRules.isEmpty()) {
@@ -389,6 +404,7 @@ fun RecordingsScreen(
                 }
             }
         }
+    }
     }
     val anything = recordings.isNotEmpty() || schedules.isNotEmpty() || seriesRules.isNotEmpty()
     LaunchedEffect(anything) {
@@ -499,7 +515,7 @@ private fun EmptyNote(text: String) {
 private fun cardColors(focused: Boolean): Pair<Color, Color> {
     val colors = NuvioTheme.colors
     return (if (focused) colors.FocusBackground else com.nuvio.tv.livetv.ui.guideSurface()) to
-        (if (focused) colors.FocusRing else Color.Transparent)
+        (if (focused) colors.FocusRing else com.nuvio.tv.livetv.ui.GuideGlassEdge)
 }
 
 /**
@@ -520,7 +536,7 @@ private fun ArtThumb(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(liveCorner()))
-            .background(NuvioTheme.colors.BackgroundCard)
+            .background(com.nuvio.tv.livetv.ui.guideSurfaceVariant())
     ) {
         if (art?.backdrop != null) {
             AsyncImage(
@@ -684,7 +700,7 @@ private fun PillButton(
     val bg = when {
         focused -> colors.TextPrimary
         primary -> colors.TextPrimary.copy(alpha = 0.85f)
-        else -> Color.White.copy(alpha = 0.10f)
+        else -> com.nuvio.tv.livetv.ui.guideSurfaceVariant()
     }
     val fg = if (focused || primary) colors.Background else colors.TextPrimary
     Box(
@@ -692,7 +708,7 @@ private fun PillButton(
             .height(44.dp)
             .clip(shape)
             .background(bg)
-            .border(2.dp, if (focused) colors.FocusRing else Color.Transparent, shape)
+            .border(2.dp, if (focused) colors.FocusRing else com.nuvio.tv.livetv.ui.GuideGlassEdge, shape)
             .onFocusChanged { focused = it.isFocused; onFocus(it.isFocused) }
             .onPreviewKeyEvent { e ->
                 if (e.type == KeyEventType.KeyDown && e.key == Key.Menu) { onMenu(); true } else false
@@ -817,22 +833,24 @@ private fun RecordingActionDialog(
 ) {
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { kotlinx.coroutines.delay(80); runCatching { first.requestFocus() } }
-    com.nuvio.tv.ui.components.NuvioDialog(onDismiss = onDismiss, title = title, subtitle = detail, width = 480.dp) {
+    // The same dark glass menu as the guide's.
+    com.nuvio.tv.livetv.ui.LiveDialog(onDismiss = onDismiss, width = 480.dp) {
+        LiveText(title, size = 20.sp, weight = FontWeight.Bold, maxLines = 2)
+        if (!detail.isNullOrBlank()) {
+            Spacer(Modifier.height(4.dp))
+            LiveText(detail, size = 13.sp, color = NuvioTheme.colors.TextSecondary, maxLines = 4)
+        }
+        Spacer(Modifier.height(14.dp))
         // Scrolls when the choices don't all fit (the last ones used to sit off the bottom of
         // the screen, out of reach).
         Column(
             modifier = Modifier
                 .heightIn(max = 340.dp)
                 .verticalScroll(androidx.compose.foundation.rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.xxs)
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             actions.forEachIndexed { i, (label, action) ->
-                com.nuvio.tv.ui.screens.settings.SettingsActionRow(
-                    title = label,
-                    subtitle = null,
-                    onClick = action,
-                    modifier = if (i == 0) Modifier.focusRequester(first) else Modifier
-                )
+                com.nuvio.tv.livetv.ui.MenuItem(label, if (i == 0) Modifier.focusRequester(first) else Modifier, action)
             }
         }
     }
@@ -863,8 +881,10 @@ private fun RecordingInfoDialog(rec: LiveTvRecording, savedOn: String, onDismiss
         add("Saved on" to savedOn)
         rec.problem?.let { add("Note" to it) }
     }
-    com.nuvio.tv.ui.components.NuvioDialog(onDismiss = onDismiss, title = rec.title, subtitle = null, width = 520.dp) {
-        Column(verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.xxs)) {
+    com.nuvio.tv.livetv.ui.LiveDialog(onDismiss = onDismiss, width = 520.dp) {
+        LiveText(rec.title, size = 20.sp, weight = FontWeight.Bold, maxLines = 2)
+        Spacer(Modifier.height(10.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             rows.forEach { (k, v) ->
                 Row(modifier = Modifier.padding(vertical = 3.dp)) {
                     LiveText(k, color = NuvioTheme.colors.TextSecondary, size = 14.sp, modifier = Modifier.width(110.dp))
@@ -872,12 +892,7 @@ private fun RecordingInfoDialog(rec: LiveTvRecording, savedOn: String, onDismiss
                 }
             }
             Spacer(Modifier.height(10.dp))
-            com.nuvio.tv.ui.screens.settings.SettingsActionRow(
-                title = "Close",
-                subtitle = null,
-                onClick = onDismiss,
-                modifier = Modifier.focusRequester(first)
-            )
+            com.nuvio.tv.livetv.ui.MenuItem("Close", Modifier.focusRequester(first), onDismiss)
         }
     }
 }

@@ -977,6 +977,7 @@ private fun SettingsDetailPane(
         )
         SettingsCategory.DEBUG -> DebugSettingsContent()
         SettingsCategory.LIVE_TV -> LiveTvSettingsContent(
+            page = LiveTvPage.HUB,
             initialFocusRequester = if (allowDetailAutofocus) {
                 contentFocusRequesters[SettingsCategory.LIVE_TV]
             } else {

@@ -25,9 +25,28 @@ object BackgroundWork {
         val count = java.util.concurrent.atomic.AtomicInteger()
         java.util.concurrent.Executors.newFixedThreadPool(2) { r ->
             Thread({
-                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                // Just short of Android's "background" class (10): that class is held to a small
+                // slice of the processor whenever anything else is busy, which stretched a guide
+                // update from a minute or two to ten on slower boxes. 9 still yields to the screen.
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND - 1)
                 r.run()
             }, "nuvio-quiet-${count.incrementAndGet()}").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+    }
+
+    /**
+     * Reading listings out of the guide database for the channels (all of them, once the guide
+     * opens; more as you scroll ahead). Big reads and lots of memory churn: at normal priority
+     * they competed with the screen and made the guide stutter while they ran, so they get
+     * their own low-priority threads, which the screen takes precedence over.
+     */
+    val reads: kotlinx.coroutines.CoroutineDispatcher by lazy {
+        val count = java.util.concurrent.atomic.AtomicInteger()
+        java.util.concurrent.Executors.newFixedThreadPool(2) { r ->
+            Thread({
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                r.run()
+            }, "nuvio-reads-${count.incrementAndGet()}").apply { isDaemon = true }
         }.asCoroutineDispatcher()
     }
 

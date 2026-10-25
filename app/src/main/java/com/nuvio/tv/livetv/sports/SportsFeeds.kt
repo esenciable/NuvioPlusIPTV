@@ -458,7 +458,8 @@ internal class SportsFeeds {
                 // Likewise "not started" between a tournament's first day and its last (no match on
                 // yet that day): it's under way.
                 val nowMs = System.currentTimeMillis()
-                val underWay = multiDay && end != null && end > nowMs && start <= nowMs
+                // (The end date is the start of the last day, so the last day counts too.)
+                val underWay = multiDay && end != null && end + 24 * 3_600_000L > nowMs && start <= nowMs
                 val evState = if (underWay && (state == GameState.POST || state == GameState.PRE)) GameState.LIVE else state
                 return SportsEvent(
                     id = "espn:${league.id}:$espnId",

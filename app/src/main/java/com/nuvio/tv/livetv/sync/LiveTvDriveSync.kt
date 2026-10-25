@@ -258,6 +258,7 @@ class LiveTvDriveSync @Inject constructor(
     }
 
     fun backUpNow() { scope.launch { push(force = true) } }
+    @Volatile private var emptyRefused = false
     fun restoreNow() { scope.launch { pull(force = true) } }
 
     // ------------------------------------------------------------------ backup / restore
@@ -265,6 +266,7 @@ class LiveTvDriveSync @Inject constructor(
     /** Uploads this TV's setup. Skips the upload when nothing changed since the last one. */
     private suspend fun push(force: Boolean) = mutex.withLock {
         val token = token() ?: return@withLock
+        emptyRefused = false
         _state.value = _state.value.copy(busy = true, message = if (force) "Backing up…" else null)
         val result = runCatching {
             var data = prefs.exportForSync()
@@ -281,6 +283,12 @@ class LiveTvDriveSync @Inject constructor(
                     if (merged.toString() != data.toString()) applyLocally(merged)
                     data = merged
                 }
+            }
+            // No playlists and no guides here (signed out, a fresh install, everything removed):
+            // never write that over the backup. Automatic sync just skips it; Back up now says why.
+            if (!prefs.syncHasSources(data)) {
+                if (force) emptyRefused = true
+                return@runCatching false
             }
             val hash = sha(data.toString())
             val now = System.currentTimeMillis()
@@ -325,6 +333,7 @@ class LiveTvDriveSync @Inject constructor(
             lastSyncMs = store.getLong(KEY_LAST_SYNC, 0L),
             message = when {
                 result.isFailure -> "Backup failed: ${result.exceptionOrNull()?.message ?: "network error"}"
+                emptyRefused -> "Nothing backed up: add a playlist or guide first. Your saved copy in Google Drive was left as it was."
                 force -> "Backed up to Google Drive."
                 else -> _state.value.message
             }
@@ -352,6 +361,9 @@ class LiveTvDriveSync @Inject constructor(
             val fromThisTv = json.optString("deviceId") == deviceId
             if (!force && (fromThisTv || savedAt <= store.getLong(KEY_APPLIED_AT, 0L))) return@runCatching false
             val remoteData = json.optJSONObject("data") ?: return@runCatching false
+            // A saved copy with no playlists or guides (made by an older version after signing
+            // out): never let it empty this TV. Treated as no backup at all.
+            if (!prefs.syncHasSources(remoteData)) return@runCatching null
             // "Restore" replaces this TV's setup; automatic sync keeps changes made on this TV
             // since the last sync and takes everything else from the other TV.
             val data = if (force) remoteData

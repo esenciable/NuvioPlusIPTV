@@ -181,8 +181,10 @@ class OnDemandViewModel @Inject constructor(
             ParentalControls.isLocked("vod:${c.uid}", c.name, s, user.lockedGroups)
         }.map { it.uid }
         val merge = s.vodMergeDuplicates
-        val movies = repository.search(VodKind.MOVIE, q, hidden, merge = merge)
-        val series = repository.search(VodKind.SERIES, q, hidden, merge = merge)
+        // Fair between logins: one from each in turn, so the login imported first can't fill
+        // every place when two catalogs have similar titles.
+        val movies = interleaveByPlaylist(repository.search(VodKind.MOVIE, q, hidden, merge = merge))
+        val series = interleaveByPlaylist(repository.search(VodKind.SERIES, q, hidden, merge = merge))
         // Some of each, so a long list of movies doesn't hide the series.
         val half = limit / 2
         val m = movies.take(maxOf(half, limit - series.size))
@@ -815,4 +817,15 @@ class OnDemandViewModel @Inject constructor(
 private fun <T> Result<T>.rethrowCancel(): Result<T> {
     exceptionOrNull()?.let { if (it is kotlinx.coroutines.CancellationException) throw it }
     return this
+}
+
+
+/** Takes one result from each login in turn (their own order kept), so no single login crowds out the rest. */
+internal fun interleaveByPlaylist(items: List<VodItem>): List<VodItem> {
+    if (items.size < 2) return items
+    val groups = items.groupBy { it.playlistId }.values.map { it.iterator() }
+    if (groups.size < 2) return items
+    val out = ArrayList<VodItem>(items.size)
+    while (out.size < items.size) for (g in groups) if (g.hasNext()) out += g.next()
+    return out
 }

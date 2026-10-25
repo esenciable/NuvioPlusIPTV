@@ -423,15 +423,15 @@ private fun FollowPill(label: String, badge: (@Composable () -> Unit)?, modifier
     Row(
         modifier
             .clip(RoundedCornerShape(50))
-            .background(if (focused) Color.White else SportsLook.CardRaised)
-            .border(1.dp, if (focused) Color.White else SportsLook.Border, RoundedCornerShape(50))
+            .background(SportsLook.CardRaised)
+            .border(if (focused) NuvioTheme.focusRing.border(2.dp) else androidx.compose.foundation.BorderStroke(1.dp, SportsLook.Border), RoundedCornerShape(50))
             .onFocusChanged { focused = it.isFocused }
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
             .padding(start = if (badge != null) 4.dp else 10.dp, end = 10.dp, top = 3.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         badge?.let { it(); Spacer(Modifier.width(6.dp)) }
-        LiveText(if (focused) "$label  ✕" else label, color = if (focused) Color(0xFF0B0C10) else Color.White, size = 12.sp, weight = FontWeight.Bold)
+        LiveText(if (focused) "$label  ✕" else label, color = Color.White, size = 12.sp, weight = FontWeight.Bold)
     }
 }
 
@@ -449,25 +449,24 @@ private fun SportRow(sport: Sport, selected: Boolean, count: Int, modifier: Modi
             .fillMaxWidth()
             .height(40.dp)
             .clip(SportsLook.SmallShape)
-            .background(
-                when {
-                    focused -> Color.White
-                    selected -> accent.copy(alpha = 0.14f)
-                    else -> Color.Transparent
-                }
+            .background(if (selected) accent.copy(alpha = 0.14f) else Color.Transparent)
+            .border(
+                if (focused) NuvioTheme.focusRing.border(1.5.dp)
+                else androidx.compose.foundation.BorderStroke(1.5.dp, if (selected) accent else Color.Transparent),
+                SportsLook.SmallShape
             )
-            .border(1.5.dp, if (selected && !focused) accent else Color.Transparent, SportsLook.SmallShape)
             .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocused() }
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
-            Modifier.size(28.dp).clip(CircleShape).background(if (focused) Color(0xFFE8E9EE) else SportsLook.Card),
+            Modifier.size(28.dp).clip(CircleShape).background(SportsLook.Card)
+                .border(if (focused) NuvioTheme.focusRing.border(1.5.dp) else androidx.compose.foundation.BorderStroke(1.dp, SportsLook.Border), CircleShape),
             contentAlignment = Alignment.Center
         ) { LiveText(sport.icon, size = 14.sp) }
         Spacer(Modifier.width(10.dp))
-        LiveText(sport.label, color = if (focused) SportsLook.Ink else Color.White, size = 13.sp, weight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        LiveText(sport.label, color = Color.White, size = 13.sp, weight = FontWeight.Bold, modifier = Modifier.weight(1f))
         if (count > 0) SportsBadge("$count", accent, NuvioTheme.colors.OnSecondary)
     }
 }
@@ -631,7 +630,9 @@ private fun ArrangeDialog(follows: SportsFollows, viewModel: SportsViewModel, on
             items(keys.size, key = { keys[it] }) { i ->
                 val k = keys[i]
                 Row(
-                    Modifier.fillMaxWidth().clip(SportsLook.SmallShape).background(SportsLook.CardRaised).padding(horizontal = 10.dp, vertical = 6.dp),
+                    Modifier.fillMaxWidth().clip(SportsLook.SmallShape).background(SportsLook.CardRaised)
+                        .border(1.dp, SportsLook.Border, SportsLook.SmallShape)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     LiveText("${i + 1}", color = SportsLook.Dim, size = 12.sp, weight = FontWeight.Black, modifier = Modifier.width(26.dp))

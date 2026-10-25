@@ -121,6 +121,13 @@ object SportsLaunch {
 }
 
 private const val CHIP_MINE = "mine"
+
+/**
+ * How long to wait before asking the addon once more for an open match's feeds, after it said it
+ * could not ask. Long enough for a cold route to answer the first viewer who came looking, short
+ * enough that the viewer still on the screen is the one who gets the rows.
+ */
+private const val SOURCE_RETRY_MS = 6_000L
 private const val CHIP_LIVE = "live"
 private const val CHIP_ALL = "all"
 /** A league from the top bar: "lg:" + its id. */
@@ -1011,7 +1018,18 @@ private fun GamePage(
     // Somebody opened this fixture, so its feeds are worth asking for. The event feed carries one
     // link for most live matches; the list of them — a different commentary language each — is
     // what this screen's picker is for. Runs off the main thread and never blocks the rows we have.
-    LaunchedEffect(ev.id) { viewModel.repo.loadSources(ev.id) }
+    //
+    // One more try when the addon could not answer at all: that is a moment on the server's side —
+    // a cold route, its own rate limit — and the viewer is sitting here waiting for exactly these
+    // rows. Leaving without asking again is what made a match look like it had one feed until the
+    // viewer went and played it and came back. An answer, even an empty one, is not retried: that
+    // is a fact about the fixture, and re-asking is traffic every other viewer pays for.
+    LaunchedEffect(ev.id) {
+        if (viewModel.repo.loadSources(ev.id) == SportsRepository.SourcesOutcome.CouldNotAsk) {
+            delay(SOURCE_RETRY_MS)
+            viewModel.repo.loadSources(ev.id)
+        }
+    }
     val league = SportsCatalog.league(ev.leagueId)
     val sport = league?.sport ?: Sport.OTHER
     val sides = ev.ordered(sport)

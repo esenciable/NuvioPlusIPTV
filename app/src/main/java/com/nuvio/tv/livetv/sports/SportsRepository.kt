@@ -323,26 +323,37 @@ class SportsRepository @Inject constructor(
      * An answer we cannot get leaves the match exactly as it was: the tab still has its one stable
      * link, which is the difference between a shorter list and a game that will not open.
      */
-    suspend fun loadSources(eventId: String) {
+    /**
+     * What asking the addon for one match's feeds achieved.
+     *
+     * The screen needs the difference: `CouldNotAsk` is a moment on the server's side, so trying
+     * again while the viewer is still looking is worth it; `Answered` is a fact about the fixture,
+     * and asking twice for the same fact is traffic somebody else pays for.
+     */
+    enum class SourcesOutcome { Nothing, Answered, CouldNotAsk }
+
+    suspend fun loadSources(eventId: String): SourcesOutcome {
         val base = addonBaseUrl
-        if (base.isBlank()) return
-        val ev = events.value.firstOrNull { it.id == eventId } ?: return
-        val addon = SportsAddonMatcher.find(ev, SportsCatalog.league(ev.leagueId), addonCandidates) ?: return
+        if (base.isBlank()) return SourcesOutcome.Nothing
+        val ev = events.value.firstOrNull { it.id == eventId } ?: return SourcesOutcome.Nothing
+        val addon = SportsAddonMatcher.find(ev, SportsCatalog.league(ev.leagueId), addonCandidates)
+            ?: return SourcesOutcome.Nothing
         val now = System.currentTimeMillis()
         // The feed named them, or we asked a moment ago and it had nothing: do not go back out.
-        if (addon.sources.isNotEmpty() || now - (askedAt[addon.id] ?: 0L) < SOURCE_ASK_MS) return
+        if (addon.sources.isNotEmpty() || now - (askedAt[addon.id] ?: 0L) < SOURCE_ASK_MS) return SourcesOutcome.Nothing
         val got = withContext(Dispatchers.IO) { runCatching { addonFeed.sources(base, addon.id) }.getOrNull() }
         // `null` is the addon saying it could not ask — its rate limit, a cold route. Stamping that
         // as an answer about this fixture is what left a viewer with one row for five minutes on a
         // match the upstream carries eight feeds for, so the next open asks again.
-        if (got == null) return
+        if (got == null) return SourcesOutcome.CouldNotAsk
         askedAt[addon.id] = now
-        if (got.isEmpty()) return
+        if (got.isEmpty()) return SourcesOutcome.Answered
         addonCandidates = addonCandidates.map { if (it.id == addon.id) it.copy(sources = got) else it }
         // `decorate` reads the candidate list and rebuilds the whole match map, so the rows for this
         // fixture are replaced rather than appended: the single link the viewer saw a moment ago
         // does not stay behind as an eleventh row.
         runMatch()
+        return SourcesOutcome.Answered
     }
 
     private suspend fun updateOnce(now: Long) {

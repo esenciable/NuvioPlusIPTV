@@ -561,7 +561,7 @@ object ChannelNameEditor {
         if (terms == compiledFor) return compiled
         val list = terms.map { t ->
             val q = Regex.escape(t)
-            val opts = setOf(RegexOption.IGNORE_CASE, RegexOption.UNICODE_CASE)
+            val opts = setOf(RegexOption.IGNORE_CASE)
             // A plain ASCII word or number must stand alone ("HD" is not the end of "XHD", "4K"
             // is not the start of "4KIDS"). Tags written in special letters (ᴴᴰ) can be stuck on.
             val ascii = t.all { it.code < 128 && it.isLetterOrDigit() }

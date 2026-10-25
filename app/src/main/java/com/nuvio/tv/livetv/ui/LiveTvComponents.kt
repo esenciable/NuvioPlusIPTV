@@ -124,7 +124,8 @@ internal fun LiveText(
 
 /**
  * A description that fits [maxLines] lines, or, when it's longer than that, scrolls up slowly
- * so the whole thing can be read, waits at the end, then starts again from the top.
+ * so the whole thing can be read: it waits on the first lines, scrolls at a slow reading pace,
+ * waits on the last lines, then starts again from the top.
  */
 @Composable
 internal fun ScrollingDescription(
@@ -142,15 +143,17 @@ internal fun ScrollingDescription(
     val max = scroll.maxValue
     LaunchedEffect(text, max, maxLines) {
         if (max <= 0) return@LaunchedEffect
-        val pxPerSecond = with(density) { 16.dp.toPx() }
+        // About one line every 2.5 seconds (a slow reading pace), whatever the text size. It sits
+        // on the first lines for a while first, and on the last lines for a while at the end.
+        val pxPerSecond = with(density) { lineHeight.toPx() } / 2.5f
         while (true) {
             scroll.scrollTo(0)
-            kotlinx.coroutines.delay(3_000)
+            kotlinx.coroutines.delay(6_000)
             scroll.animateScrollTo(
                 max,
-                androidx.compose.animation.core.tween((max / pxPerSecond * 1000).toInt().coerceAtLeast(500), easing = androidx.compose.animation.core.LinearEasing)
+                androidx.compose.animation.core.tween((max / pxPerSecond * 1000).toInt().coerceAtLeast(1_500), easing = androidx.compose.animation.core.LinearEasing)
             )
-            kotlinx.coroutines.delay(2_500)
+            kotlinx.coroutines.delay(6_000)
         }
     }
     Box(modifier.heightIn(max = boxHeight).clipToBounds()) {

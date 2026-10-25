@@ -114,3 +114,26 @@ Napoli vs AS Roma, Serie A, LIVE at 66'. `WATCH ON YOUR CHANNELS` before this ch
 row. In the same minute the feed published 8 sources for that match (`8X VN`, `TyR` verified; the
 rest lazy), and the upstream's list moves between probes — 10 in one, 8 in the next — which is the
 fixture's own variability, not the app dropping rows.
+
+## The retry the operator's second report asked for (build 17 → 18)
+
+Next day, different fixtures: **the match's other feeds appeared only after playing the one link
+that was there and coming back.** That is not the row list being wrong — it is `loadSources` asking
+once per open and treating "the addon could not ask" (a cold route, its own rate limit) as the end
+of the conversation. The viewer who stayed on the screen had already been left with one row.
+
+`loadSources` now returns which of three things happened — `Nothing` (nothing to do), `Answered`
+(a fact about the fixture, empty included), `CouldNotAsk` — and the detail screen retries once after
+six seconds on the last one only. An answer is never re-asked: polling for a fact the server already
+gave is traffic every other viewer pays for at the upstream.
+
+`CouldNotAsk` is the same distinction the feed layer made in `b54087dd1`, now carried all the way to
+the screen that can act on it. The coroutine belongs to `LaunchedEffect(ev.id)`, so closing the match
+cancels the wait.
+
+Server side, the cause of those cold answers was found the same day and is recorded in
+`esencial-sport/odd/tasks/sports-multi-sources.md`: live HLS re-fetching its playlist resolved the
+lazy source against the upstream every time — 88 metadata calls in 260 s from one viewer — which put
+the shared client in a 429 cooldown 59% of the time. Cached (`ESS_LAZY_TTL_MS`, 60 s), the duty cycle
+went to 0% with playback running. The retry stays because a route can still be cold for other
+reasons, and the viewer sitting on the screen is the one who benefits.

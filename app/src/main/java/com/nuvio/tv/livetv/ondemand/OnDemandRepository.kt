@@ -225,14 +225,17 @@ class OnDemandRepository @Inject constructor(
             if (onlyId != null && pl.id != onlyId) continue
             val last = stamps[pl.id] ?: 0L
             if (!force && now - last < REFRESH_MS) continue
-            // Automatic imports wait while a movie or episode is playing in Nuvio's player.
+            // Automatic imports wait while a movie or episode is playing in Nuvio's player, and
+            // while the guide is being built or Sports is finding channels.
             if (!force) com.nuvio.tv.livetv.data.BackgroundWork.awaitIdle()
+            if (!force) com.nuvio.tv.livetv.data.BackgroundWork.awaitNoHeavy()
             _status.value = OnDemandStatus(true, "Importing movies and series from ${pl.name}…")
             lastProblem = null
             // Movies and series import separately, so a problem with one keeps the other.
             val movies = runCatching { importKind(pl, VodKind.MOVIE) }
                 .onFailure { Log.w(TAG, "Movies for ${pl.name} failed", it); lastProblem = "Couldn't import movies from ${pl.name}: ${it.message ?: it.javaClass.simpleName}" }
             if (!force) com.nuvio.tv.livetv.data.BackgroundWork.awaitIdle()
+            if (!force) com.nuvio.tv.livetv.data.BackgroundWork.awaitNoHeavy()
             val series = runCatching { importKind(pl, VodKind.SERIES) }
                 .onFailure { Log.w(TAG, "Series for ${pl.name} failed", it); lastProblem = "Couldn't import series from ${pl.name}: ${it.message ?: it.javaClass.simpleName}" }
             val ok = movies.isSuccess && series.isSuccess && lastProblem == null
@@ -310,6 +313,15 @@ class OnDemandRepository @Inject constructor(
     }
 
     private fun importKind(pl: PlaylistSource, kind: VodKind) {
+        val t0 = System.currentTimeMillis()
+        try { importKindInner(pl, kind) } finally {
+            com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                "On Demand \"${pl.name}\": ${if (kind == VodKind.MOVIE) "movies" else "series"} imported in ${(System.currentTimeMillis() - t0) / 1000} s"
+            )
+        }
+    }
+
+    private fun importKindInner(pl: PlaylistSource, kind: VodKind) {
         val api = pl.xtreamApiUrl()
         val catAction = if (kind == VodKind.MOVIE) "get_vod_categories" else "get_series_categories"
         val listAction = if (kind == VodKind.MOVIE) "get_vod_streams" else "get_series"
@@ -333,6 +345,10 @@ class OnDemandRepository @Inject constructor(
         val saved = db.replace(
             pl.id, kind, categories,
             streamItems(pl, kind, "$api&action=$listAction", onStop = { stoppedEarly = it }, onItem = ::progress)
+        )
+        com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+            "On Demand \"${pl.name}\": ${"%,d".format(saved)} $what, ${categories.size} categories; " +
+                "${"%,d".format(db.lastChanges.first)} new or changed, ${"%,d".format(db.lastChanges.second)} removed"
         )
         val firstProblem = stoppedEarly ?: return
 
@@ -603,6 +619,17 @@ class OnDemandRepository @Inject constructor(
 
     suspend fun cachedTitle(item: VodItem): String? = withContext(Dispatchers.IO) {
         runCatching { db.cachedTitle(item.uid) }.getOrNull()
+    }
+
+    /** The name (and year) typed for this title with "Fix poster", if any. */
+    suspend fun posterFix(item: VodItem): Pair<String, Int?>? = withContext(Dispatchers.IO) {
+        runCatching { db.posterFix(item.uid) }.getOrNull()
+    }
+
+    /** "Fix poster": the name (and year) to look this title up by; a blank name goes back to automatic. */
+    suspend fun setPosterFix(item: VodItem, title: String, year: Int?) = withContext(Dispatchers.IO) {
+        runCatching { db.setPosterFix(item.uid, title, year) }
+        Unit
     }
 
     // ------------------------------------------------------------------ "Watch On Demand"

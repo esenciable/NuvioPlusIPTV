@@ -66,7 +66,21 @@ object LiveTvLauncherRows {
         }
     }
 
+    @Volatile private var noTvProviderReported = false
+
     private suspend fun doRefresh(context: Context) {
+        // Phones and tablets (and some boxes) have no home-screen channel service: nothing to do
+        // there, said once instead of an error per row every time.
+        val hasTvProvider = runCatching {
+            context.packageManager.resolveContentProvider("android.media.tv", 0) != null
+        }.getOrDefault(false)
+        if (!hasTvProvider) {
+            if (!noTvProviderReported) {
+                noTvProviderReported = true
+                LiveTvLoadReport.add("Launcher rows: this device has no home-screen channels (not Android TV / Google TV); skipped")
+            }
+            return
+        }
         val entry = EntryPointAccessors.fromApplication(context, LiveTvStartupEntryPoint::class.java)
         val prefs = entry.liveTvPreferences()
         val settings = prefs.settings.first()

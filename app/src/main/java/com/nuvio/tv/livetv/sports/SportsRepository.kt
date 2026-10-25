@@ -775,9 +775,30 @@ class SportsRepository @Inject constructor(
             if (!status.loadedOnce) return@collect
             if (status.loading && !status.quiet && _matches.value.isNotEmpty() && !pickPending) return@collect
             pickPending = false
+            // The very first search (nothing shown yet) waits for the start-up guide read to finish:
+            // both work on the same guide database, which made the search take many minutes, and
+            // the guide isn't all there yet anyway.
+            // Same while the guide is being built (a first setup, or new guide files): searching
+            // before it's in found channels for only a few games.
+            if (_matches.value.isEmpty() && com.nuvio.tv.livetv.data.BackgroundWork.guideBuilding.value) {
+                _matching.value = true
+                val w0 = System.currentTimeMillis()
+                kotlinx.coroutines.withTimeoutOrNull(10 * 60_000L) {
+                    com.nuvio.tv.livetv.data.BackgroundWork.guideBuilding.first { !it }
+                }
+                _matching.value = false
+                LiveTvLoadReport.add("Sports matching waited ${(System.currentTimeMillis() - w0) / 1000} s for the guide to be built")
+            }
+            if (_matches.value.isEmpty() && liveRepo.guideReadBusy()) {
+                _matching.value = true
+                var waited = 0
+                while (liveRepo.guideReadBusy() && waited < 300_000) { delay(1_000); waited += 1_000 }
+                _matching.value = false
+                if (waited > 0) LiveTvLoadReport.add("Sports matching waited ${waited / 1000} s for the guide to finish loading")
+            }
             lastRun = System.currentTimeMillis()
             val t0 = System.currentTimeMillis()
-            runCatching { runMatch() }.onFailure { Log.w(TAG, "Sports matching failed", it) }
+            runCatching { com.nuvio.tv.livetv.data.BackgroundWork.heavy { runMatch() } }.onFailure { Log.w(TAG, "Sports matching failed", it) }
             lastMatchAt = System.currentTimeMillis()
             val took = lastMatchAt - t0
             if (took > 2_000) LiveTvLoadReport.add("Sports matching took ${took / 1000.0} s (page open: ${viewers.value > 0})")

@@ -635,6 +635,13 @@ object DeveloperTools {
  * (developer tools): shows whether the saved channel list and guide were used, and why not.
  */
 object LiveTvLoadReport {
+    /** Which Live TV kit this app was built from: changed with every kit, so a report shows the exact build. */
+    const val KIT_STAMP = "2026-10-25 18:15"
+
+    /** The first line of every report: kit and app version, so it's clear which build wrote it. */
+    val buildLine: String
+        get() = "Build: kit $KIT_STAMP · app ${com.nuvio.tv.BuildConfig.VERSION_NAME} (${com.nuvio.tv.BuildConfig.VERSION_CODE})"
+
     private val startedAt = System.currentTimeMillis()
     val lines = kotlinx.coroutines.flow.MutableStateFlow<List<String>>(emptyList())
     fun add(text: String) {

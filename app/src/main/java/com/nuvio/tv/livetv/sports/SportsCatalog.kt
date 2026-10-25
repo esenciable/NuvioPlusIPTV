@@ -434,7 +434,9 @@ object SportsCatalog {
         "highlights", "replay", "classic", "classics", "rewind", "recap", "review", "reaction",
         "condensed", "mini match", "extended", "best of", "in 60", "in 90", "encore", "re air", "reair",
         "magazine", "preview show", "goals", "match of the day", "motd", "uncut", "repeat",
-        "this week in", "bottom line", "untold", "vault", "biography"
+        "this week in", "bottom line", "untold", "vault", "biography",
+        // UK guides shorten highlights ("PL: Brighton v Leeds Hlts"); re-runs of a game shown "as live".
+        "hlts", "highlight", "rerun", "re run", "as live"
     )
 
     /** Other names guides use for teams (and the start of names that need them). */

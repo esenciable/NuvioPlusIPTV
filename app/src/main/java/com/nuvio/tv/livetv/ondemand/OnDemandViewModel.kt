@@ -69,6 +69,7 @@ class OnDemandViewModel @Inject constructor(
     private val prefs: LiveTvPreferences,
     private val resolver: LiveTvPosterResolver,
     private val tmdb: com.nuvio.tv.core.tmdb.TmdbService,
+    private val tmdbMetadata: com.nuvio.tv.core.tmdb.TmdbMetadataService,
     private val metaRepository: com.nuvio.tv.domain.repository.MetaRepository,
     private val trailerService: com.nuvio.tv.data.trailer.TrailerService,
     private val watchProgressRepository: com.nuvio.tv.domain.repository.WatchProgressRepository,
@@ -97,15 +98,54 @@ class OnDemandViewModel @Inject constructor(
     private fun matchTitles(item: VodItem): List<String> {
         val clean = matchTitle(item)
         val after = AFTER_SEPARATOR.find(clean)?.groupValues?.get(1)?.trim()
-        return listOfNotNull(clean, after?.takeIf { it.length >= 2 }).distinct()
+        // A series listed by season ("Loki S02", "Dark Season 1"): the show's own name too.
+        val show = if (item.kind == VodKind.SERIES) clean.replace(SEASON_TAIL, "").trim().takeIf { it.length >= 2 && it != clean } else null
+        return listOfNotNull(clean, show, after?.takeIf { it.length >= 2 }).distinct()
     }
 
-    private suspend fun matchAny(item: VodItem, urgent: Boolean): LiveTvPosterResolver.Hit? {
+    /**
+     * The title in your addons. With "Fix poster", the name you typed; otherwise the cleaned
+     * names. [imdb]: the provider's own id for it, when known, which picks out the right one
+     * among same-named titles.
+     */
+    private suspend fun matchAny(item: VodItem, urgent: Boolean, imdb: String? = null): LiveTvPosterResolver.Hit? {
+        repository.posterFix(item)?.let { (title, year) ->
+            return resolver.matchFor(title, item.kind == VodKind.SERIES, year, urgent = urgent)
+        }
         for (t in matchTitles(item)) {
-            resolver.matchFor(t, item.kind == VodKind.SERIES, item.year, urgent = urgent)?.let { return it }
+            resolver.matchFor(t, item.kind == VodKind.SERIES, item.year, imdbId = imdb, urgent = urgent)?.let { return it }
         }
         return null
     }
+
+    /** True when the provider's id says the match is another title (a same-named film, a remake). */
+    private fun wrongTitle(hit: LiveTvPosterResolver.Hit, imdb: String?): Boolean =
+        imdb != null && hit.meta.imdbId != imdb && hit.meta.id != imdb
+
+    /** TMDB's poster for the provider's own TMDB id: exact, whatever the title is called. */
+    private suspend fun tmdbPosterById(item: VodItem): String? {
+        val id = item.tmdbId?.takeIf { it.isNotBlank() } ?: return null
+        val type = if (item.kind == VodKind.SERIES) com.nuvio.tv.domain.model.ContentType.SERIES else com.nuvio.tv.domain.model.ContentType.MOVIE
+        return runCatching { tmdbMetadata.fetchEnrichment(tmdbId = id, contentType = type)?.poster }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
+    /** "Fix poster": look this title up by [title] (and [year]) from now on; a blank title goes back to automatic. */
+    fun fixPoster(item: VodItem, title: String, year: Int?) {
+        viewModelScope.launch {
+            repository.setPosterFix(item, title, year)
+            posters.remove(item.uid)
+            names.remove(item.uid)
+            homeMatched.remove(item.uid)
+            homeHits.remove(item.uid)
+            homeDetailed.remove(item.uid)
+            enrichOne(item, urgent = true)
+            if (!homeMatched.containsKey(item.uid)) posterFor(item)
+            updateHomeRows()
+        }
+    }
+
+    /** The name and year set with "Fix poster" for this title, if any. */
+    suspend fun posterFixFor(item: VodItem): Pair<String, Int?>? = repository.posterFix(item)
 
     private val names = com.nuvio.tv.livetv.data.boundedCache<String, String>(3_000)
 
@@ -277,14 +317,23 @@ class OnDemandViewModel @Inject constructor(
             if (cached.isNotBlank()) { posters[item.uid] = cached; return cached }
             if (fresh) return item.icon
         }
-        // Posters only need the cleaned title (no TMDB call per poster); the id is looked up
-        // once, when you actually open a title.
-        val hit = matchAny(item, urgent = false)
-        repository.cachePoster(item, hit?.meta?.poster, hit?.meta?.name)
+        // The provider's TMDB id, when it sends one, says exactly which title it is: same-named
+        // films, remakes and titles in another language no longer get another title's poster.
+        // One lookup per title, remembered with the poster. (Not with "Fix poster": then the
+        // name you typed decides.)
+        val fixed = repository.posterFix(item) != null
+        val imdb = if (fixed) null else kotlinx.coroutines.withTimeoutOrNull(4_000) { imdbFor(item) }
+        var hit = matchAny(item, urgent = false, imdb = imdb)
+        var byId: String? = null
+        if (!fixed && (hit == null || wrongTitle(hit, imdb))) {
+            byId = tmdbPosterById(item)
+            if (byId != null) hit = null
+        }
+        repository.cachePoster(item, hit?.meta?.poster ?: byId, hit?.meta?.name)
         hit?.meta?.name?.let { names[item.uid] = it }
         // The same match carries the title's genres: keep them for "By genre".
         hit?.meta?.genres?.takeIf { it.isNotEmpty() }?.let { repository.fillGenres(item, it) }
-        val poster = hit?.meta?.poster ?: item.icon
+        val poster = hit?.meta?.poster ?: byId ?: item.icon
         if (poster != null) posters[item.uid] = poster
         return poster
     }
@@ -635,7 +684,19 @@ class OnDemandViewModel @Inject constructor(
     private suspend fun enrichOne(item: VodItem, urgent: Boolean = false) {
         // Poster and title lookups (addon searches) wait while Nuvio's player is open.
         if (!urgent) com.nuvio.tv.livetv.data.BackgroundWork.awaitIdle()
-        val hit = runCatching { matchAny(item, urgent = urgent) }.rethrowCancel().getOrNull() ?: return
+        // The provider's TMDB id picks out the right title among same-named ones (see posterFor).
+        val fixed = repository.posterFix(item) != null
+        val imdb = if (fixed) null else kotlinx.coroutines.withTimeoutOrNull(4_000) { runCatching { imdbFor(item) }.getOrNull() }
+        val found = runCatching { matchAny(item, urgent = urgent, imdb = imdb) }.rethrowCancel().getOrNull()
+        if (!fixed && (found == null || wrongTitle(found, imdb))) {
+            // Not in your addons (or only another title by that name): TMDB's poster for the id.
+            tmdbPosterById(item)?.let { p ->
+                posters[item.uid] = p
+                repository.cachePoster(item, p, null)
+                return
+            }
+        }
+        val hit = found ?: return
         homeHits[item.uid] = hit
         homeMatched[item.uid] = hit.meta
         hit.meta.poster?.let { posters[item.uid] = it; repository.cachePoster(item, it, hit.meta.name) }
@@ -801,6 +862,8 @@ class OnDemandViewModel @Inject constructor(
     private companion object {
         const val HOME_PAGE = 30
         private val AFTER_SEPARATOR = Regex("""^.{1,40}?\s(?:-|–|—|:)\s+(.+)$""")
+        /** A season at the end of a series name: "Loki S02", "Dark Season 1", "Casa Temporada 3". */
+        private val SEASON_TAIL = Regex("(?i)[\\s\\-–—:._]*(?:(?:season|saison|temporada|staffel)\\s*\\d{1,2}|s\\d{1,2})(?:\\s*(?:e|ep|episode|x)\\s*\\d{1,4})?\\s*$")
         private val YEAR = Regex("""\b(19|20)\d{2}\b""")
         const val ENRICH_PER_ROW = 12
         /** The sort you picked, kept while the app is open. */

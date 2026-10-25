@@ -3,6 +3,7 @@ package com.nuvio.tv.livetv.data
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 
 /**
  * Keeps Live TV and On Demand's heavy background jobs (playlist, guide and catalog downloads,
@@ -53,5 +54,26 @@ object BackgroundWork {
     /** Waits while Nuvio's player is open. */
     suspend fun awaitIdle() {
         if (nuvioPlaying.value) nuvioPlaying.first { !it }
+    }
+
+    /**
+     * Heavy jobs running now (building the guide, finding channels for Sports games). An automatic
+     * On Demand import waits for them to finish instead of competing with them for the processor:
+     * all at once, they slowed each other (and the video) right down.
+     */
+    val heavyJobs = MutableStateFlow(0)
+
+    /** The guide is being built from the guide files right now. */
+    val guideBuilding = MutableStateFlow(false)
+
+    suspend fun <T> heavy(block: suspend () -> T): T {
+        heavyJobs.update { it + 1 }
+        try { return block() } finally { heavyJobs.update { (it - 1).coerceAtLeast(0) } }
+    }
+
+    /** Waits (up to 10 minutes) until no heavy job is running. */
+    suspend fun awaitNoHeavy() {
+        if (heavyJobs.value == 0) return
+        kotlinx.coroutines.withTimeoutOrNull(10 * 60_000L) { heavyJobs.first { it == 0 } }
     }
 }

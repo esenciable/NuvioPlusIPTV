@@ -270,16 +270,19 @@ class LiveTvDriveSync @Inject constructor(
         _state.value = _state.value.copy(busy = true, message = if (force) "Backing up…" else null)
         val result = runCatching {
             var data = prefs.exportForSync()
+            val removedHere = prefs.removedSourceIds()
             val hash0 = sha(data.toString())
             if (!force && hash0 == store.getString(KEY_LAST_HASH, null)) return@runCatching false
             // Another TV saved since we last synced: combine its changes with ours first, so
             // neither TV overwrites the other (that made favorites and names flip back and forth).
+            // Decided by what's in the copy, not by the TVs' clocks: a TV whose clock ran ahead
+            // took the other TVs' newer copy for an older one, skipped it, and then saved over it
+            // without the playlists they had added (which then vanished from every TV).
             remoteCopy(token)?.let { remote ->
-                val newer = remote.optLong("savedAt") > store.getLong(KEY_APPLIED_AT, 0L) &&
-                    remote.optString("deviceId") != deviceId
                 val remoteData = remote.optJSONObject("data")
-                if (newer && remoteData != null) {
-                    val merged = merge(readBase(), local = data, remote = remoteData, localWinsWithoutBase = true)
+                val base = readBase()
+                if (remoteData != null && remoteData.toString() != base?.toString()) {
+                    val merged = merge(base, local = data, remote = remoteData, localWinsWithoutBase = true, removedHere = removedHere)
                     if (merged.toString() != data.toString()) applyLocally(merged)
                     data = merged
                 }
@@ -326,6 +329,8 @@ class LiveTvDriveSync @Inject constructor(
             }
             store.edit().putString(KEY_LAST_HASH, hash).putLong(KEY_LAST_SYNC, now).putLong(KEY_APPLIED_AT, now).apply()
             writeBase(data)
+            // Those removals are in the saved copy now.
+            prefs.forgetRemovedSources(removedHere)
             true
         }
         _state.value = _state.value.copy(
@@ -359,15 +364,18 @@ class LiveTvDriveSync @Inject constructor(
             val json = JSONObject(text)
             val savedAt = json.optLong("savedAt")
             val fromThisTv = json.optString("deviceId") == deviceId
-            if (!force && (fromThisTv || savedAt <= store.getLong(KEY_APPLIED_AT, 0L))) return@runCatching false
             val remoteData = json.optJSONObject("data") ?: return@runCatching false
+            // Nothing new: saved by this TV, or the same as what this TV last synced. (Not judged
+            // by the time it was saved: TVs' clocks differ, and a newer copy was skipped.)
+            val base = readBase()
+            if (!force && (fromThisTv || remoteData.toString() == base?.toString())) return@runCatching false
             // A saved copy with no playlists or guides (made by an older version after signing
             // out): never let it empty this TV. Treated as no backup at all.
             if (!prefs.syncHasSources(remoteData)) return@runCatching null
             // "Restore" replaces this TV's setup; automatic sync keeps changes made on this TV
             // since the last sync and takes everything else from the other TV.
             val data = if (force) remoteData
-            else merge(readBase(), local = prefs.exportForSync(), remote = remoteData, localWinsWithoutBase = false)
+            else merge(base, local = prefs.exportForSync(), remote = remoteData, localWinsWithoutBase = false, removedHere = prefs.removedSourceIds())
             applyLocally(data)
             store.edit()
                 .putLong(KEY_APPLIED_AT, savedAt)
@@ -441,8 +449,29 @@ class LiveTvDriveSync @Inject constructor(
      * ([base]) is kept, everything else comes from the other TV. Without a base, [localWinsWithoutBase]
      * decides.
      */
-    private fun merge(base: JSONObject?, local: JSONObject, remote: JSONObject, localWinsWithoutBase: Boolean): JSONObject {
-        if (base == null) return if (localWinsWithoutBase) local else remote
+    private fun merge(
+        base: JSONObject?,
+        local: JSONObject,
+        remote: JSONObject,
+        localWinsWithoutBase: Boolean,
+        removedHere: Set<String>
+    ): JSONObject {
+        if (base == null) {
+            // Nothing synced on this TV yet (or since an older version): one side's settings win,
+            // but playlists and guides from both are kept. Taking one TV's whole list lost the
+            // playlists only the other TVs had.
+            val (first, second) = if (localWinsWithoutBase) local to remote else remote to local
+            val out = JSONObject(first.toString())
+            for (k in SOURCE_LISTS) {
+                val a = first.optJSONObject(k)
+                val b = second.optJSONObject(k)
+                if (b == null) continue
+                if (a == null) { out.put(k, JSONObject(b.toString())); continue }
+                runCatching { unionSources(a.optString("v"), b.optString("v"), removedHere) }.getOrNull()
+                    ?.let { out.put(k, JSONObject(a.toString()).put("v", it)) }
+            }
+            return out
+        }
         val out = JSONObject(remote.toString())
         val keys = HashSet<String>().apply {
             local.keys().forEach { add(it) }
@@ -456,17 +485,20 @@ class LiveTvDriveSync @Inject constructor(
                 // setting. Taking this TV's whole list whenever anything in it had changed (a
                 // playlist switched off, the server's time zone learned) threw away the other
                 // TV's edits, like a provider's new server address, and then sent the old one back.
-                val listMerged = if (k in SOURCE_LISTS && local.has(k) && remote.has(k)) {
+                // A list missing on one side counts as empty (never "remove everything").
+                val listMerged = if (k in SOURCE_LISTS && (local.has(k) || remote.has(k))) {
                     runCatching {
                         mergeSources(
                             base.optJSONObject(k)?.optString("v"),
-                            local.getJSONObject(k).optString("v"),
-                            remote.getJSONObject(k).optString("v")
+                            local.optJSONObject(k)?.optString("v") ?: "[]",
+                            remote.optJSONObject(k)?.optString("v") ?: "[]",
+                            removedHere
                         )
                     }.getOrNull()
                 } else null
+                val shell = (local.optJSONObject(k) ?: remote.optJSONObject(k))
                 when {
-                    listMerged != null -> out.put(k, JSONObject(local.getJSONObject(k).toString()).put("v", listMerged))
+                    listMerged != null && shell != null -> out.put(k, JSONObject(shell.toString()).put("v", listMerged))
                     local.has(k) -> out.put(k, local.get(k))
                     else -> out.remove(k)
                 }
@@ -480,18 +512,8 @@ class LiveTvDriveSync @Inject constructor(
      * or removed on either TV are added or removed, and within a source each setting changed on
      * this TV since the last sync is kept, everything else comes from the other TV.
      */
-    private fun mergeSources(baseRaw: String?, localRaw: String, remoteRaw: String): String {
-        fun read(raw: String?): LinkedHashMap<String, JSONObject> {
-            val out = LinkedHashMap<String, JSONObject>()
-            if (raw.isNullOrBlank()) return out
-            val arr = org.json.JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                val id = o.optString("id")
-                if (id.isNotBlank()) out[id] = o
-            }
-            return out
-        }
+    private fun mergeSources(baseRaw: String?, localRaw: String, remoteRaw: String, removedHere: Set<String>): String {
+        fun read(raw: String?) = readSources(raw)
         val base = read(baseRaw)
         val local = read(localRaw)
         val remote = read(remoteRaw)
@@ -501,8 +523,10 @@ class LiveTvDriveSync @Inject constructor(
             val l = local[id]
             val b = base[id]
             when {
-                // Removed on this TV since the last sync: stays removed.
-                l == null && b != null -> continue
+                // Removed on this TV (by you) since the last sync: stays removed.
+                l == null && id in removedHere -> continue
+                // Missing here but never removed here (this TV didn't get it yet, or lost it):
+                // kept. Only a removal someone actually made takes a source off the other TVs.
                 l == null -> result.put(r)
                 b == null -> result.put(r) // On both TVs but new to the last sync: the other TV's.
                 else -> {
@@ -517,6 +541,32 @@ class LiveTvDriveSync @Inject constructor(
         // Added on this TV since the last sync.
         for ((id, l) in local) {
             if (id !in remote && id !in base) result.put(l)
+        }
+        return result.toString()
+    }
+
+    private fun readSources(raw: String?): LinkedHashMap<String, JSONObject> {
+        val out = LinkedHashMap<String, JSONObject>()
+        if (raw.isNullOrBlank()) return out
+        val arr = org.json.JSONArray(raw)
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val id = o.optString("id")
+            if (id.isNotBlank()) out[id] = o
+        }
+        return out
+    }
+
+    /**
+     * Two source lists combined with nothing synced to compare against: every source in [firstRaw]
+     * (its versions win), then those only in [secondRaw], except ones removed on this TV.
+     */
+    private fun unionSources(firstRaw: String, secondRaw: String, removedHere: Set<String>): String {
+        val first = readSources(firstRaw)
+        val result = org.json.JSONArray()
+        first.values.forEach { result.put(it) }
+        for ((id, o) in readSources(secondRaw)) {
+            if (id !in first && id !in removedHere) result.put(o)
         }
         return result.toString()
     }

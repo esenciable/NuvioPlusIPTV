@@ -60,7 +60,7 @@ fun LoadReportDialog(onDismiss: () -> Unit) {
     var noNetwork by remember { mutableStateOf(false) }
     androidx.compose.runtime.DisposableEffect(Unit) {
         val h = com.nuvio.tv.livetv.crash.ReportServer.start("Live TV start-up report") {
-            LiveTvLoadReport.lines.value.joinToString("\n")
+            LiveTvLoadReport.buildLine + "\n" + LiveTvLoadReport.lines.value.joinToString("\n")
         }
         handle = h
         noNetwork = h == null
@@ -75,6 +75,7 @@ fun LoadReportDialog(onDismiss: () -> Unit) {
             "Since the app started. ▲ ▼ to scroll.",
             color = NuvioTheme.colors.TextSecondary, size = 13.sp
         )
+        LiveText(LiveTvLoadReport.buildLine, color = NuvioTheme.colors.TextSecondary, size = 13.sp)
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             // Scrolls with the remote (it couldn't be scrolled at all): opens at the newest lines,

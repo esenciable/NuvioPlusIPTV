@@ -70,6 +70,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.focus.FocusRequester
@@ -2334,6 +2335,8 @@ private fun GuideRow(
         // The channel cell is never highlighted; the program under the cursor is.
         // …except while it's being moved with Reorder channels.
         val channelFocused = moving || nameFocused
+        // The channel that's playing: a soft red glow around its channel cell (not the shows).
+        val playingGlow = isPlaying && !reorderMode && !moving && !nameFocused
         // The channel picked up to move: its own color (gold), apart from the highlight.
         val cell = if (moving) LiveCellColors(NuvioTheme.colors.Rating, NuvioTheme.colors.Rating, Color.Black)
             else liveCellColors(focused = nameFocused, idle = guideSurface())
@@ -2342,7 +2345,12 @@ private fun GuideRow(
                 .width(channelColWidth)
                 .fillMaxHeight()
                 .padding(end = 6.dp)
-                .glassTile(cell.background, if (cell.border == Color.Transparent) GuideGlassEdge else cell.border, cellShape)
+                .then(if (playingGlow) Modifier.shadow(10.dp, cellShape, ambientColor = NuvioTheme.colors.Error, spotColor = NuvioTheme.colors.Error) else Modifier)
+                .glassTile(
+                    if (playingGlow) androidx.compose.ui.graphics.lerp(cell.background, NuvioTheme.colors.Error, 0.16f) else cell.background,
+                    if (playingGlow) NuvioTheme.colors.Error.copy(alpha = 0.75f) else if (cell.border == Color.Transparent) GuideGlassEdge else cell.border,
+                    cellShape
+                )
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -2403,11 +2411,6 @@ private fun GuideRow(
                     tint = if (channelFocused && LocalLiveSolidHighlight.current) cell.text else NuvioTheme.colors.Rating,
                     modifier = Modifier.size(gdp(14f))
                 )
-            }
-            // While moving, only the move marker shows (no playing dot or star in the way).
-            if (isPlaying && !reorderMode && !moving) {
-                Spacer(Modifier.width(4.dp))
-                Box(Modifier.size(7.dp).clip(RoundedCornerShape(50)).background(NuvioTheme.colors.Error))
             }
             // Reordering: every channel shows the up/down marker; the one picked up in its color.
             if (reorderMode || moving) {
@@ -2475,69 +2478,84 @@ private fun GuideRow(
                     )
                 }
             }
-            // Gaps in a channel's listings (nothing listed for a while, then shows again).
+            // Every show (and gap) but the highlighted one is painted in one go (see GuideRowStrip);
+            // the highlighted show stays a full block, so its title can scroll.
+            val gapFill = guideSurface().copy(alpha = 0.55f)
+            val idleFill = guideSurface()
+            val strip = ArrayList<StripItem>()
             if (visible.isNotEmpty()) {
+                // Gaps in a channel's listings (nothing listed for a while, then shows again).
                 laid.gaps.forEach { (from, to) ->
                     val gx = xOf(from)
                     val gw = xOf(to) - gx
-                    if (gw > 4.dp) {
-                        Box(
-                            modifier = Modifier
-                                .offset(x = gx)
-                                .width(gw)
-                                .fillMaxHeight()
-                                .padding(horizontal = 3.dp)
-                                .clip(cellShape)
-                                .background(guideSurface().copy(alpha = 0.55f))
-                                .border(2.dp, Color.White.copy(alpha = 0.09f), cellShape)
-                                .padding(horizontal = 12.dp),
-                            contentAlignment = Alignment.CenterStart
-                        ) {
-                            // Something is on; the guide just doesn't say what.
-                            if (gw > 90.dp) {
-                                androidx.compose.material3.Text(
-                                    text = "No information",
-                                    color = NuvioTheme.colors.TextTertiary,
-                                    fontSize = gsp(14f),
-                                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                                    maxLines = 1
-                                )
-                            }
-                        }
-                    }
+                    if (gw > 4.dp) strip += StripItem(
+                        x = gx, width = gw,
+                        // Something is on; the guide just doesn't say what.
+                        title = if (gw > 90.dp) "No information" else "",
+                        subtitle = null,
+                        fill = gapFill, edge = Color.White.copy(alpha = 0.09f),
+                        text = NuvioTheme.colors.TextTertiary, italic = true
+                    )
                 }
             }
+            var focusedShow: (@Composable () -> Unit)? = null
             visible.forEach { p ->
                 val x = xOf(p.startMs)
                 val w = (xOf(p.stopMs) - x).coerceAtLeast(2.dp)
                 val live = now >= p.startMs && now < p.stopMs
                 val past = p.stopMs <= now
                 val isFocused = focusColumn != null && focusedBlock?.program == p
-                val colors = liveCellColors(
-                    focused = isFocused,
-                    // One color for every show (the progress bar already marks what's on now).
-                    idle = guideSurface(),
-                    idleText = if (past) NuvioTheme.colors.TextSecondary else NuvioTheme.colors.TextPrimary
-                )
                 val marks = titleMarks(p.title)
-                ProgramBlock(
-                    title = marks.title,
-                    // "Show times in the guide": start and end under the title.
-                    subtitle = if (settings.showProgramTimes && w > 64.dp) formatRange(p.startMs, p.stopMs, settings.use24HourClock) else null,
-                    x = x, width = w,
-                    colors = colors,
-                    focused = isFocused,
-                    progress = if (live) p.progress(now) else null,
-                    continuesLeft = p.startMs < windowStart,
-                    liveTag = marks.live && !past,
-                    newTag = marks.isNew,
-                    episode = p.episode?.takeIf { settings.showEpisodeNumbers && it.length <= 12 },
-                    reminder = p.startMs in reminderStarts,
-                    recording = (recordingSpan != null && p.stopMs > recordingSpan.first && p.startMs < recordingSpan.second) ||
-                        p.startMs in scheduledStarts,
-                    catchup = past && channel.catchup != null
-                )
+                val subtitle = if (settings.showProgramTimes && w > 64.dp) formatRange(p.startMs, p.stopMs, settings.use24HourClock) else null
+                val episode = p.episode?.takeIf { settings.showEpisodeNumbers && it.length <= 12 }
+                val reminder = p.startMs in reminderStarts
+                val recording = (recordingSpan != null && p.stopMs > recordingSpan.first && p.startMs < recordingSpan.second) ||
+                    p.startMs in scheduledStarts
+                val catchup = past && channel.catchup != null
+                if (isFocused) {
+                    val colors = liveCellColors(
+                        focused = true,
+                        idle = idleFill,
+                        idleText = if (past) NuvioTheme.colors.TextSecondary else NuvioTheme.colors.TextPrimary
+                    )
+                    focusedShow = {
+                        ProgramBlock(
+                            title = marks.title,
+                            // "Show times in the guide": start and end under the title.
+                            subtitle = subtitle,
+                            x = x, width = w,
+                            colors = colors,
+                            focused = true,
+                            progress = if (live) p.progress(now) else null,
+                            continuesLeft = p.startMs < windowStart,
+                            liveTag = marks.live && !past,
+                            newTag = marks.isNew,
+                            episode = episode,
+                            reminder = reminder,
+                            recording = recording,
+                            catchup = catchup
+                        )
+                    }
+                } else {
+                    strip += StripItem(
+                        x = x, width = w,
+                        title = (if (p.startMs < windowStart) "‹ " else "") + marks.title,
+                        subtitle = subtitle,
+                        // One color for every show (the progress bar already marks what's on now).
+                        fill = idleFill, edge = GuideGlassEdge,
+                        text = if (past) NuvioTheme.colors.TextSecondary else NuvioTheme.colors.TextPrimary,
+                        progress = if (live) p.progress(now) else null,
+                        liveTag = marks.live && !past,
+                        newTag = marks.isNew,
+                        episode = episode,
+                        reminder = reminder,
+                        catchup = catchup,
+                        recording = recording
+                    )
+                }
             }
+            if (strip.isNotEmpty()) GuideRowStrip(strip, titleSize = gsp(14f), smallSize = gsp(12f), dotSize = gdp(9f), iconSize = gdp(13f))
+            focusedShow?.invoke()
             // Highlight for an empty slot under the cursor.
             if (focusColumn != null && focusedBlock != null && focusedBlock.program == null && !emptyRowFocused) {
                 val x = xOf(focusedBlock.startMs)

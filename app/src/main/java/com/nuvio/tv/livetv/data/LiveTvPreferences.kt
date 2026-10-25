@@ -121,6 +121,8 @@ class LiveTvPreferences @Inject constructor(
         val groupPlaylistHeadings = booleanPreferencesKey("group_playlist_headings")
         /** This TV has had Group by Playlist turned on once (per TV, never synced). */
         val groupPlaylistTurnedOn = booleanPreferencesKey("group_playlist_turned_on_once")
+        /** This TV only: ids of playlists and guides removed here, not yet passed on by sync. */
+        val removedSources = stringSetPreferencesKey("removed_sources")
         val nameRemovals = stringPreferencesKey("name_removals")
         val developerTools = booleanPreferencesKey("developer_tools")
         val browseByChannelName = booleanPreferencesKey("browse_by_channel_name")
@@ -469,11 +471,41 @@ class LiveTvPreferences @Inject constructor(
     // ---------- sources ----------
 
     suspend fun updatePlaylists(transform: (List<PlaylistSource>) -> List<PlaylistSource>) {
-        store.edit { p -> p[Keys.playlists] = encodePlaylists(transform(decodePlaylists(p[Keys.playlists]))) }
+        var removed = emptySet<String>()
+        store.edit { p ->
+            val before = decodePlaylists(p[Keys.playlists])
+            val after = transform(before)
+            removed = before.map { it.id }.toSet() - after.map { it.id }.toSet()
+            p[Keys.playlists] = encodePlaylists(after)
+        }
+        noteRemovedSources(removed)
     }
 
     suspend fun updateEpgSources(transform: (List<EpgSource>) -> List<EpgSource>) {
-        store.edit { p -> p[Keys.epgs] = encodeEpgs(transform(decodeEpgs(p[Keys.epgs]))) }
+        var removed = emptySet<String>()
+        store.edit { p ->
+            val before = decodeEpgs(p[Keys.epgs])
+            val after = transform(before)
+            removed = before.map { it.id }.toSet() - after.map { it.id }.toSet()
+            p[Keys.epgs] = encodeEpgs(after)
+        }
+        noteRemovedSources(removed)
+    }
+
+    // Playlists and guides removed on this TV (by you), until Google Drive sync has passed that on.
+    // Sync only takes a source out of the saved copy when it's listed here, so a TV that simply
+    // never had a playlist (or lost it) can't delete it from your other TVs.
+    private suspend fun noteRemovedSources(ids: Set<String>) {
+        val clean = ids.filter { it.isNotBlank() }
+        if (clean.isEmpty()) return
+        deviceStore.edit { it[Keys.removedSources] = (it[Keys.removedSources] ?: emptySet()) + clean }
+    }
+
+    suspend fun removedSourceIds(): Set<String> = deviceStore.data.first()[Keys.removedSources] ?: emptySet()
+
+    suspend fun forgetRemovedSources(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        deviceStore.edit { it[Keys.removedSources] = (it[Keys.removedSources] ?: emptySet()) - ids }
     }
 
     // ---------- settings ----------

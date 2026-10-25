@@ -37,10 +37,60 @@ internal class SportsMatcher(private val db: EpgDatabase) {
     private fun isDiscGolf(ev: SportsEvent): Boolean =
         hasWord(norm(ev.title), "disc golf") || ev.leagueId.contains("disc", ignoreCase = true)
 
+    /** Runs [block] over the channels (in list order) whose name has one of [tokens] as a word. */
+    private inline fun forNamed(
+        index: Map<String, List<Int>>,
+        tokens: Set<String>,
+        names: List<Pair<LiveChannel, String>>,
+        block: (LiveChannel, String) -> Unit
+    ) {
+        val hits = java.util.BitSet(names.size)
+        for (tok in tokens) index[tok]?.forEach { hits.set(it) }
+        var i = hits.nextSetBit(0)
+        while (i >= 0) {
+            val (ch, nn) = names[i]
+            block(ch, nn)
+            i = hits.nextSetBit(i + 1)
+        }
+    }
+
+    /** Channel names worked out once per channel list and kept between searches (they rarely change). */
+    private class NameData(
+        val fingerprint: Long,
+        val names: List<Pair<LiveChannel, String>>,
+        val tokenIndex: Map<String, List<Int>>,
+        val discNames: Set<String>
+    )
+    @Volatile private var nameData: NameData? = null
+
+    private fun nameData(channels: List<LiveChannel>): NameData {
+        // The channel list is rebuilt for every search, so it's recognised by its contents.
+        var fp = channels.size.toLong()
+        for (ch in channels) fp = fp * 31 + ch.key.hashCode() * 17L + ch.name.hashCode()
+        nameData?.let { if (it.fingerprint == fp) return it }
+        // Separator "channels" ("##### USA SPORTS #####", "==== UK ====") are never a game's channel.
+        val names = channels.mapNotNull { ch ->
+            if (ch.name.length < 6 || isBanner(ch.name)) null
+            else ch to norm(ch.name.replace("+", " plus ").replace("@", " at "))
+        }
+        // Channel names by word, so a game's channels are found without going through every channel.
+        val tokenIndex = HashMap<String, MutableList<Int>>()
+        names.forEachIndexed { i, (_, nn) ->
+            nn.split(' ').filter { it.isNotEmpty() }.distinct().forEach { tok -> tokenIndex.getOrPut(tok) { ArrayList() }.add(i) }
+        }
+        val discNames = names.filter { (_, nn) -> hasWord(nn, "disc golf") }.mapTo(HashSet()) { it.first.key }
+        return NameData(fp, names, tokenIndex, discNames).also { nameData = it }
+    }
+
     fun match(input: Input): Result {
         val byKey = input.channels.associateBy { it.key }
         val rank = preferenceRank(input.settings)
-        val names = input.channels.mapNotNull { ch -> if (ch.name.length < 6) null else ch to norm(ch.name.replace("+", " plus ").replace("@", " at ")) }
+        val tStart = System.currentTimeMillis()
+        val nd0 = nameData(input.channels)
+        val names = nd0.names
+        val tokenIndex = nd0.tokenIndex
+        val discNames = nd0.discNames
+        val discIds = input.events.filter { isDiscGolf(it) }.mapTo(HashSet()) { it.id }
         val found = HashMap<String, HashMap<String, Found>>()
         fun add(eventId: String, key: String, score: Int, how: String, program: EpgProgram?) {
             if (key !in byKey || score <= 0) return
@@ -88,6 +138,31 @@ internal class SportsMatcher(private val db: EpgDatabase) {
         val teamEvents = wanted.filter { it.source != EventSource.GUIDE }
         val terms = teamEvents.associate { ev -> ev.id to termsFor(ev) }
 
+        // Tournaments and race weekends running at the same time (several tennis events, two golf
+        // tours): a channel or show that just says "Tennis" or "Golf" can't tell them apart.
+        // Each one's own words ("basel", "bermuda") pick it out; the competition's words only
+        // count when no other event running now uses them.
+        val multiEvents = teamEvents.filter { it.id in noStart }
+        val specific: Map<String, Set<String>> = multiEvents.associate { ev ->
+            val league = terms[ev.id]?.leagueWords.orEmpty().flatMap { it.split(' ') }.toSet()
+            ev.id to norm(ev.title).trim().split(' ')
+                .filter { it.length >= 4 && it.any { c -> c.isLetter() } && it !in GENERIC_TOURNAMENT_WORDS && it !in league }
+                .toSet()
+        }
+        val leagueWordUse = HashMap<String, Int>()
+        multiEvents.forEach { ev -> terms[ev.id]?.leagueWords.orEmpty().toSet().forEach { leagueWordUse[it] = (leagueWordUse[it] ?: 0) + 1 } }
+        fun specificHits(evId: String, text: String) = specific[evId].orEmpty().count { hasWord(text, it) }
+        /** The competition named by a word only this event uses ("pga tour" while the DP World Tour is on too). */
+        fun distinctLeague(evId: String, text: String) = terms[evId]?.leagueWords.orEmpty()
+            .any { it != "grand prix" && (leagueWordUse[it] ?: 0) <= 1 && hasWord(text, it) }
+        /** The text names another event of the same kind running now ("Vienna" for the Basel tournament). */
+        fun namesOther(evId: String, text: String): Boolean {
+            val mine = terms[evId]?.leagueWords.orEmpty().toSet()
+            return multiEvents.any { o ->
+                o.id != evId && terms[o.id]?.leagueWords.orEmpty().any { it in mine } && specificHits(o.id, text) > 0
+            }
+        }
+
         // ---- 1. The guide, a half-hour slot at a time.
         teamEvents.groupBy { it.startMs / (30 * MINUTE) }.forEach { (_, slot) ->
             val slotStart = slot.minOf { it.startMs }
@@ -107,22 +182,37 @@ internal class SportsMatcher(private val db: EpgDatabase) {
                 val ch = byKey[key] ?: return@mapNotNull null
                 val p = if (input.shiftMs == 0L) p0 else p0.copy(startMs = p0.startMs + input.shiftMs, stopMs = p0.stopMs + input.shiftMs)
                 if (fillerOrLoop(ch, p)) return@mapNotNull null
-                val nt = norm(p.title)
+                // The guide's own label for studio shows and replays, when it has one.
+                val cat = norm(p.category.orEmpty())
+                if (hasWord(cat, "sports non event") || hasWord(cat, "classic sport event")) return@mapNotNull null
+                // Many guides put the match-up in the episode title ("MLB Baseball" / "Cubs at
+                // Cardinals"); it's the first line of the description here: read it with the title.
+                val desc = p.description.orEmpty()
+                val sub = if ('\n' in desc) desc.substringBefore('\n').takeIf { it.length <= 90 } else null
+                val nt = norm(p.title + (sub?.let { " $it" } ?: ""))
                 if (SportsCatalog.NOT_LIVE_WORDS.any { hasWord(nt, it) }) return@mapNotNull null
-                Triple(key, p, nt to norm(p.description.orEmpty()))
+                Triple(key, p, nt to norm(desc))
             }
             for (ev in slot) {
                 val t = terms[ev.id] ?: continue
                 for ((key, p, texts) in prepared) {
                     val (nt, nd) = texts
                     // Disc golf shows never count for regular golf.
-                    if (!isDiscGolf(ev) && (hasWord(nt, "disc golf") || hasWord(nd, "disc golf"))) continue
+                    if (ev.id !in discIds && (hasWord(nt, "disc golf") || hasWord(nd, "disc golf"))) continue
                     if (p.startMs > ev.startMs + 60 * MINUTE || p.stopMs < ev.startMs + 15 * MINUTE) continue
                     var score = t.scoreText(nt, nd)
-                    // No start time (a race weekend, a tournament): a show on now that names the competition is enough.
+                    // No start time (a race weekend, a tournament): a show on now that names this
+                    // event, or the competition when nothing else of its kind is on.
                     if (ev.id in noStart) {
-                        if (!t.namesLeague(nt, nd)) continue
-                        if (score <= 0) score = 70
+                        val hits = specificHits(ev.id, nt) + specificHits(ev.id, nd)
+                        if (!t.namesLeague(nt, nd) && hits < 2) continue
+                        when {
+                            score > 0 -> Unit
+                            hits >= 1 -> score = 88
+                            namesOther(ev.id, nt) || namesOther(ev.id, nd) -> continue
+                            distinctLeague(ev.id, nt) || distinctLeague(ev.id, nd) -> score = 70
+                            else -> continue
+                        }
                     }
                     if (score <= 0) continue
                     // Pre-game shows often start an hour early on the same channel; much earlier or later is less likely the game.
@@ -132,18 +222,31 @@ internal class SportsMatcher(private val db: EpgDatabase) {
             }
         }
         byGuide = found.size
+        val tGuide = System.currentTimeMillis()
 
         // ---- 2. The channel's own name.
         for (ev in teamEvents) {
             if (ev.state == GameState.POST && ev.startMs < input.now - 5 * HOUR) continue
             val t = terms[ev.id] ?: continue
-            for ((ch, nn) in names) {
-                if (!isDiscGolf(ev) && hasWord(nn, "disc golf")) continue
+            val discEvent = ev.id in discIds
+            // Only channels whose name has one of the game's words can match: look at those, not
+            // all of them (with tens of thousands of channels, every game against every channel took minutes).
+            forNamed(tokenIndex, t.anchorTokens(), names) { ch, nn ->
+                if (!discEvent && ch.key in discNames) return@forNamed
                 if (t.inName(nn)) { add(ev.id, ch.key, 95, "Channel name", null); byName++ }
-                // A channel named for the competition ("Sky Sports F1") carries it while it's on.
-                else if (ev.id in noStart && t.leagueInName(nn)) { add(ev.id, ch.key, 78, "Channel name", null); byName++ }
+                // A channel named for the event ("Tennis: Swiss Indoors Basel") or for the competition
+                // ("Sky Sports F1") when nothing else of its kind is on.
+                else if (ev.id in noStart) {
+                    val hits = specificHits(ev.id, nn)
+                    when {
+                        (hits >= 1 && t.leagueInName(nn)) || hits >= 2 -> { add(ev.id, ch.key, 90, "Channel name", null); byName++ }
+                        !namesOther(ev.id, nn) && distinctLeague(ev.id, nn) -> { add(ev.id, ch.key, 78, "Channel name", null); byName++ }
+                    }
+                }
             }
         }
+
+        val tNames = System.currentTimeMillis()
 
         // ---- 3. The network ESPN lists, with a sports show on at the time.
         val networkEvents = teamEvents.filter { it.broadcasts.isNotEmpty() && it.startMs > input.now - 5 * HOUR }
@@ -152,7 +255,11 @@ internal class SportsMatcher(private val db: EpgDatabase) {
             val pats = NETWORKS[n] ?: listOf(n).filter { it.length >= 3 }
             if (pats.isEmpty()) return@forEach
             val not = NETWORK_NOT[n].orEmpty()
-            candidates[n] = names.filter { (_, nn) -> pats.any { hasWord(nn, it) } && not.none { hasWord(nn, it) } }.map { it.first }
+            val list = ArrayList<LiveChannel>()
+            forNamed(tokenIndex, pats.mapNotNull { it.trim().substringBefore(' ').takeIf { w -> w.isNotEmpty() } }.toSet(), names) { ch, nn ->
+                if (pats.any { hasWord(nn, it) } && not.none { hasWord(nn, it) }) list += ch
+            }
+            candidates[n] = list
         }
         networkEvents.groupBy { it.startMs / (30 * MINUTE) }.forEach { (_, slot) ->
             val at = slot.minOf { it.startMs } + 20 * MINUTE
@@ -181,7 +288,7 @@ internal class SportsMatcher(private val db: EpgDatabase) {
                             val p = onNow[ch.key]
                             val showText = p?.let { norm(it.title + " " + (it.episode ?: "")) }
                             val score = when {
-                                !isDiscGolf(ev) && showText != null && hasWord(showText, "disc golf") -> 0
+                                ev.id !in discIds && showText != null && hasWord(showText, "disc golf") -> 0
                                 p == null -> if (keys.size < 400 && national) 45 else 0
                                 // The guide says it's a different game: not this one.
                                 terms[ev.id]?.otherGame(showText!!) == true -> 0
@@ -237,8 +344,10 @@ internal class SportsMatcher(private val db: EpgDatabase) {
             "${ev.title.take(32)}: looked for ${t?.leagueWords?.joinToString("/")}, " +
                 "channels named like that ${names.count { (_, nn) -> t?.leagueInName(nn) == true }}, matched ${out[ev.id]?.size ?: 0}"
         }
+        val tEnd = System.currentTimeMillis()
         val summary = "Sports: ${wanted.size} games and events in the next day or so · channels found for ${out.size} " +
-            "(guide $byGuide, channel names $byName, networks $byNetwork)" +
+            "(guide $byGuide, channel names $byName, networks $byNetwork) · ${input.channels.size} channels searched in " +
+            "${(tEnd - tStart) / 1000} s (guide ${(tGuide - tStart) / 1000}, names ${(tNames - tGuide) / 1000}, networks ${(tEnd - tNames) / 1000})" +
             (if (multi.isNotEmpty()) " · multi-day: $multi" else "")
         return Result(out, summary)
     }
@@ -363,6 +472,17 @@ internal class SportsMatcher(private val db: EpgDatabase) {
         /** The show's title or description names the competition itself ("Formula 1", "Grand Prix"). */
         fun namesLeague(nt: String, nd: String): Boolean = leagueWords.any { hasWord(nt, it) || hasWord(nd, it) }
 
+        /** The first word of every name this game looks for in a channel's name (to find those channels quickly). */
+        fun anchorTokens(): Set<String> {
+            val out = HashSet<String>()
+            for (l in listOf(a, b, leagueWords, eventWords)) for (term in l) {
+                term.trim().substringBefore(' ').takeIf { it.isNotEmpty() }?.let { out.add(it) }
+            }
+            abbrA?.let { out.add(it) }
+            abbrB?.let { out.add(it) }
+            return out
+        }
+
         /** The channel's own name carries the competition's name ("Sky Sports F1", "Formula 1 HD"). */
         fun leagueInName(nn: String): Boolean = leagueWords.any { it.length >= 2 && it != "grand prix" && hasWord(nn, it) }
 
@@ -450,6 +570,23 @@ internal class SportsMatcher(private val db: EpgDatabase) {
 
         /** Shows found in the guide for a followed name that isn't one of the listed sports. */
         const val OTHER_ID = "guide/other"
+
+        /** Words too common to tell one tournament or race from another ("Hall of Fame Open" is hall/fame, never open). */
+        private val GENERIC_TOURNAMENT_WORDS = setOf(
+            "atp", "wta", "tour", "tennis", "golf", "open", "cup", "championship", "championships", "masters",
+            "classic", "international", "invitational", "presented", "the", "for", "and", "ladies", "mens", "womens",
+            "grand", "prix", "race", "series", "world", "trophy", "tournament", "challenger", "final", "finals",
+            "round", "qualifying", "practice", "sprint", "week", "weekend", "live", "season", "formula", "edition"
+        )
+
+        private val BANNER_RUN = Regex("([#=*~_▬━─•■◆★|\\-])\\1{2,}")
+
+        /** A separator in the channel list ("##### USA SPORTS #####", "▬▬ UK ▬▬"), not a channel. */
+        fun isBanner(name: String): Boolean {
+            if (BANNER_RUN.containsMatchIn(name)) return true
+            val letters = name.count { it.isLetterOrDigit() }
+            return name.length >= 6 && letters * 10 < name.length * 4
+        }
 
         private val GENERIC_EVENT_WORDS = setOf(
             "grand prix", "grand", "prix", "championship", "championships", "open", "classic", "tour", "the", "final",
@@ -586,12 +723,42 @@ internal class SportsMatcher(private val db: EpgDatabase) {
          * How much a channel is preferred for any game: 2 in a group you chose (Sports settings),
          * 1 from your own region (its group or the start of its name says so), else 0.
          */
+        /** Words that mark a channel's language, at the start of its name or in its group ("ES: ESPN", "Deportes | Spanish"). */
+        private val LANGUAGE_WORDS = mapOf(
+            "es" to listOf("es", "esp", "spain", "spanish", "espanol", "latino", "latin", "latam", "mx", "mexico", "argentina", "deportes"),
+            "fr" to listOf("fr", "fra", "france", "french", "francais"),
+            "de" to listOf("de", "ger", "germany", "german", "deutsch", "deutschland"),
+            "it" to listOf("it", "ita", "italy", "italia", "italian", "italiano"),
+            "pt" to listOf("pt", "por", "portugal", "portuguese", "br", "brasil", "brazil"),
+            "nl" to listOf("nl", "netherlands", "dutch", "nederland"),
+            "pl" to listOf("pl", "poland", "polish", "polska"),
+            "tr" to listOf("tr", "turkey", "turkish", "turkiye"),
+            "ar" to listOf("arabic", "arab", "mena"),
+            "ru" to listOf("ru", "russia", "russian")
+        )
+        private val LANGUAGE_TAG = Regex("[\\[(]([A-Za-z]{2,3})[\\])]")
+
+        /** The language a channel's name or group says it's in, if any. */
+        private fun channelLanguage(ch: LiveChannel): String? {
+            val prefix = if (ch.name.contains(':') || ch.name.contains('|'))
+                norm(ch.name.substringBefore(':').substringBefore('|').take(16)) else " "
+            val tags = norm(LANGUAGE_TAG.findAll(ch.name).joinToString(" ") { it.groupValues[1] })
+            val group = norm(ch.group.substringBefore('|').substringBefore(':'))
+            return LANGUAGE_WORDS.entries.firstOrNull { (_, w) ->
+                w.any { hasWord(prefix, it) || hasWord(tags, it) || (it.length > 3 && hasWord(group, it)) }
+            }?.key
+        }
+
         fun preferenceRank(settings: SportsSettings): (LiveChannel) -> Int {
             val groups = settings.preferredGroups.map { it.lowercase().trim() }.toSet()
             val words = REGION_WORDS[SportsCatalog.regionOf(settings)].orEmpty()
+            // Channels in another language than the TV's go below the rest (a Spanish feed of the
+            // game isn't what most English speakers want first). Your own groups still come first.
+            val myLanguage = java.util.Locale.getDefault().language.lowercase()
             return { ch ->
                 when {
                     groups.isNotEmpty() && ch.group.lowercase().trim() in groups -> 2
+                    channelLanguage(ch)?.let { it != myLanguage } == true -> -1
                     words.isNotEmpty() && (
                         norm(ch.group).let { g -> words.any { hasWord(g, it) } } ||
                             norm(ch.name.substringBefore(':').substringBefore('|').take(16)).let { n ->

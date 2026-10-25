@@ -45,6 +45,12 @@ object XmltvParser {
          * (Before [selectChannels], so `parse(…) { channels -> … }` still means selectChannels.)
          */
         keepUnlisted: ((String) -> Boolean)? = null,
+        /**
+         * Hands over each channel's shows as soon as that channel's run of shows ends (guides list
+         * a channel's shows together), instead of keeping the whole guide in memory. A channel whose
+         * shows are split up arrives in more than one part. With it, the result has no programs.
+         */
+        onPrograms: ((String, List<EpgProgram>) -> Unit)? = null,
         selectChannels: (Map<String, XmltvChannel>) -> Set<String>?
     ): XmltvResult {
         val parser = Xml.newPullParser()
@@ -60,6 +66,14 @@ object XmltvParser {
         var wantedResolved = false
         val seenIds = HashSet<String>()
         val unlistedAnswers = HashMap<String, Boolean>()
+        var bufId: String? = null
+        var buf = ArrayList<EpgProgram>()
+        fun flush() {
+            val id = bufId ?: return
+            if (buf.isNotEmpty()) onPrograms?.invoke(id, buf.sortedBy { it.startMs })
+            buf = ArrayList()
+            bufId = null
+        }
 
         var error: String? = null
         try {
@@ -83,7 +97,12 @@ object XmltvParser {
                         if (keep) {
                             val program = readProgramme(parser, windowStartMs, windowEndMs)
                             if (program != null) {
-                                programs.getOrPut(channelId!!) { ArrayList() }.add(program)
+                                if (onPrograms != null) {
+                                    if (bufId != channelId) { flush(); bufId = channelId }
+                                    buf.add(program)
+                                } else {
+                                    programs.getOrPut(channelId!!) { ArrayList() }.add(program)
+                                }
                             }
                         } else {
                             skipProgramme(parser)
@@ -106,6 +125,8 @@ object XmltvParser {
                 (e.message?.take(140) ?: e.javaClass.simpleName)
             if (!wantedResolved) wanted = null
         }
+        // The last channel's shows (also when the guide broke partway: what was read is kept).
+        runCatching { flush() }
         val sorted = programs.mapValues { (_, list) -> list.sortedBy { it.startMs } }
         return XmltvResult(channels, sorted, error, seenIds)
     }

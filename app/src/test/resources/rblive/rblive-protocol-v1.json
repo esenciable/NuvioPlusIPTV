@@ -1,0 +1,788 @@
+{
+  "schema": "rblive-protocol-vectors/v1",
+  "generatedBy": "tools/protocolVectors.cjs",
+  "generatedFromRepo": "esencial-sport",
+  "generatedFromRev": "dffa4b6f1d50e05277d75d1869619eb0fc2e8853",
+  "generatedAt": "2026-10-26",
+  "howToRegenerate": "node tools/protocolVectors.cjs",
+  "contract": "expected is a SUBSET contract: every key written here must match in the port; extra keys the port carries are fine. bytesB64 is the exact input. If behaviour changes on purpose, regenerate and let the port tests fail until they follow.",
+  "text": {
+    "rot47": {
+      "pairs": [
+        {
+          "in": "!",
+          "out": "P"
+        },
+        {
+          "in": "A",
+          "out": "p"
+        },
+        {
+          "in": "~",
+          "out": "O"
+        },
+        {
+          "in": "",
+          "out": ""
+        },
+        {
+          "in": " ",
+          "out": " "
+        },
+        {
+          "in": "z",
+          "out": "K"
+        },
+        {
+          "in": "0",
+          "out": "_"
+        },
+        {
+          "in": "/",
+          "out": "^"
+        },
+        {
+          "in": "https://fhlsport001.tm3x.ru/cfall/s2001/index.m3u8?_ver=1&_s1=aa",
+          "out": "9EEADi^^79=DA@CE__`]E>bI]CF^472==^Da__`^:?56I]>bFgn0G6Cl`U0D`l22"
+        }
+      ],
+      "printableAscii": [
+        {
+          "in": "!",
+          "out": "P"
+        },
+        {
+          "in": "\"",
+          "out": "Q"
+        },
+        {
+          "in": "#",
+          "out": "R"
+        },
+        {
+          "in": "$",
+          "out": "S"
+        },
+        {
+          "in": "%",
+          "out": "T"
+        },
+        {
+          "in": "&",
+          "out": "U"
+        },
+        {
+          "in": "'",
+          "out": "V"
+        },
+        {
+          "in": "(",
+          "out": "W"
+        },
+        {
+          "in": ")",
+          "out": "X"
+        },
+        {
+          "in": "*",
+          "out": "Y"
+        },
+        {
+          "in": "+",
+          "out": "Z"
+        },
+        {
+          "in": ",",
+          "out": "["
+        },
+        {
+          "in": "-",
+          "out": "\\"
+        },
+        {
+          "in": ".",
+          "out": "]"
+        },
+        {
+          "in": "/",
+          "out": "^"
+        },
+        {
+          "in": "0",
+          "out": "_"
+        },
+        {
+          "in": "1",
+          "out": "`"
+        },
+        {
+          "in": "2",
+          "out": "a"
+        },
+        {
+          "in": "3",
+          "out": "b"
+        },
+        {
+          "in": "4",
+          "out": "c"
+        },
+        {
+          "in": "5",
+          "out": "d"
+        },
+        {
+          "in": "6",
+          "out": "e"
+        },
+        {
+          "in": "7",
+          "out": "f"
+        },
+        {
+          "in": "8",
+          "out": "g"
+        },
+        {
+          "in": "9",
+          "out": "h"
+        },
+        {
+          "in": ":",
+          "out": "i"
+        },
+        {
+          "in": ";",
+          "out": "j"
+        },
+        {
+          "in": "<",
+          "out": "k"
+        },
+        {
+          "in": "=",
+          "out": "l"
+        },
+        {
+          "in": ">",
+          "out": "m"
+        },
+        {
+          "in": "?",
+          "out": "n"
+        },
+        {
+          "in": "@",
+          "out": "o"
+        },
+        {
+          "in": "A",
+          "out": "p"
+        },
+        {
+          "in": "B",
+          "out": "q"
+        },
+        {
+          "in": "C",
+          "out": "r"
+        },
+        {
+          "in": "D",
+          "out": "s"
+        },
+        {
+          "in": "E",
+          "out": "t"
+        },
+        {
+          "in": "F",
+          "out": "u"
+        },
+        {
+          "in": "G",
+          "out": "v"
+        },
+        {
+          "in": "H",
+          "out": "w"
+        },
+        {
+          "in": "I",
+          "out": "x"
+        },
+        {
+          "in": "J",
+          "out": "y"
+        },
+        {
+          "in": "K",
+          "out": "z"
+        },
+        {
+          "in": "L",
+          "out": "{"
+        },
+        {
+          "in": "M",
+          "out": "|"
+        },
+        {
+          "in": "N",
+          "out": "}"
+        },
+        {
+          "in": "O",
+          "out": "~"
+        },
+        {
+          "in": "P",
+          "out": "!"
+        },
+        {
+          "in": "Q",
+          "out": "\""
+        },
+        {
+          "in": "R",
+          "out": "#"
+        },
+        {
+          "in": "S",
+          "out": "$"
+        },
+        {
+          "in": "T",
+          "out": "%"
+        },
+        {
+          "in": "U",
+          "out": "&"
+        },
+        {
+          "in": "V",
+          "out": "'"
+        },
+        {
+          "in": "W",
+          "out": "("
+        },
+        {
+          "in": "X",
+          "out": ")"
+        },
+        {
+          "in": "Y",
+          "out": "*"
+        },
+        {
+          "in": "Z",
+          "out": "+"
+        },
+        {
+          "in": "[",
+          "out": ","
+        },
+        {
+          "in": "\\",
+          "out": "-"
+        },
+        {
+          "in": "]",
+          "out": "."
+        },
+        {
+          "in": "^",
+          "out": "/"
+        },
+        {
+          "in": "_",
+          "out": "0"
+        },
+        {
+          "in": "`",
+          "out": "1"
+        },
+        {
+          "in": "a",
+          "out": "2"
+        },
+        {
+          "in": "b",
+          "out": "3"
+        },
+        {
+          "in": "c",
+          "out": "4"
+        },
+        {
+          "in": "d",
+          "out": "5"
+        },
+        {
+          "in": "e",
+          "out": "6"
+        },
+        {
+          "in": "f",
+          "out": "7"
+        },
+        {
+          "in": "g",
+          "out": "8"
+        },
+        {
+          "in": "h",
+          "out": "9"
+        },
+        {
+          "in": "i",
+          "out": ":"
+        },
+        {
+          "in": "j",
+          "out": ";"
+        },
+        {
+          "in": "k",
+          "out": "<"
+        },
+        {
+          "in": "l",
+          "out": "="
+        },
+        {
+          "in": "m",
+          "out": ">"
+        },
+        {
+          "in": "n",
+          "out": "?"
+        },
+        {
+          "in": "o",
+          "out": "@"
+        },
+        {
+          "in": "p",
+          "out": "A"
+        },
+        {
+          "in": "q",
+          "out": "B"
+        },
+        {
+          "in": "r",
+          "out": "C"
+        },
+        {
+          "in": "s",
+          "out": "D"
+        },
+        {
+          "in": "t",
+          "out": "E"
+        },
+        {
+          "in": "u",
+          "out": "F"
+        },
+        {
+          "in": "v",
+          "out": "G"
+        },
+        {
+          "in": "w",
+          "out": "H"
+        },
+        {
+          "in": "x",
+          "out": "I"
+        },
+        {
+          "in": "y",
+          "out": "J"
+        },
+        {
+          "in": "z",
+          "out": "K"
+        },
+        {
+          "in": "{",
+          "out": "L"
+        },
+        {
+          "in": "|",
+          "out": "M"
+        },
+        {
+          "in": "}",
+          "out": "N"
+        },
+        {
+          "in": "~",
+          "out": "O"
+        }
+      ]
+    },
+    "rot13": [
+      {
+        "in": "abc",
+        "out": "nop"
+      },
+      {
+        "in": "ABC",
+        "out": "NOP"
+      },
+      {
+        "in": "n",
+        "out": "a"
+      },
+      {
+        "in": "Hello World 42",
+        "out": "Uryyb Jbeyq 42"
+      },
+      {
+        "in": "",
+        "out": ""
+      }
+    ],
+    "bruDecode": [
+      {
+        "in": "wODm9tJ7I1p6L2MNMJk2nKZhn3E4rGZlZQN5YaqipzgypaZhMTI2",
+        "out": "WW:cf@elvis.ktxy32009.workers.dev"
+      },
+      {
+        "in": "qj9w3vNWY2AzLJkfY3ZlZQN5YaqipzgypaZhMTI2",
+        "out": "/cfall/s2009.workers.dev"
+      },
+      {
+        "in": "xHdAWTJgZv41",
+        "out": "2.5"
+      },
+      {
+        "in": "",
+        "out": ""
+      },
+      {
+        "in": "short",
+        "out": ""
+      }
+    ],
+    "decodeStoredUrl": [
+      {
+        "in": "!#tux)gg9EEADi^^79=DA@CE__`]E>bI]CF^472==^Da__`^Gb3^E@<^965J^DI0`^:?56I]>bFg",
+        "out": "https://fhlsport001.tm3x.ru/cfall/s2001/v3b/tok/hedy/sx_1/index.m3u8",
+        "note": "8-char prefix stripped after ROT47"
+      }
+    ],
+    "md5": [
+      {
+        "in": "language=4&sportType=1&stream=true",
+        "out": "602ecc60a34010d30da6c2e345c23739"
+      }
+    ]
+  },
+  "walker": [
+    {
+      "name": "varint, length-delimited, fixed32, fixed64",
+      "bytesB64": "CKwCEgJoaR0BAgMEIQECAwQFBgcI",
+      "fields": [
+        {
+          "field": 1,
+          "wire": 0,
+          "varint": "300",
+          "bytesB64": null
+        },
+        {
+          "field": 2,
+          "wire": 2,
+          "varint": null,
+          "bytesB64": "aGk="
+        },
+        {
+          "field": 3,
+          "wire": 5,
+          "varint": null,
+          "bytesB64": "AQIDBA=="
+        },
+        {
+          "field": 4,
+          "wire": 1,
+          "varint": null,
+          "bytesB64": "AQIDBAUGBwg="
+        }
+      ]
+    },
+    {
+      "name": "stops at a malformed tag instead of throwing",
+      "bytesB64": "CAUP",
+      "fields": [
+        {
+          "field": 1,
+          "wire": 0,
+          "varint": "5",
+          "bytesB64": null
+        }
+      ]
+    },
+    {
+      "name": "empty input yields no fields",
+      "bytesB64": "",
+      "fields": []
+    },
+    {
+      "name": "truncated length-delimited payload does not over-read",
+      "bytesB64": "EjJzaG9ydA==",
+      "fields": []
+    }
+  ],
+  "decoders": {
+    "userInfo": [
+      {
+        "name": "modern f1/f2/f3",
+        "bytesB64": "GgdTdWNjZXNzUh0KEzJhMDY6OThjMDozNjAwOjoxMDMSAlVTGgJOQQ==",
+        "expected": {
+          "ip": "2a06:98c0:3600::103",
+          "country": "US",
+          "continent": "NA"
+        }
+      },
+      {
+        "name": "legacy f2/f3/f4",
+        "bytesB64": "GgdTdWNjZXNzUhUSCzIwMy4wLjExMy43GgJFUyICRVU=",
+        "expected": {
+          "ip": "203.0.113.7",
+          "country": "ES",
+          "continent": "EU"
+        }
+      },
+      {
+        "name": "empty input is not a verdict",
+        "bytesB64": "",
+        "expected": null
+      }
+    ],
+    "bodySignature": [
+      {
+        "name": "code -> version",
+        "bytesB64": "GgdTdWNjZXNzUiYKJAhkEiA2OWIwMTBhMmExOWZhZTdkMTAyM2E4NjRiNGZmZWYzNw==",
+        "expected": {
+          "entries": {
+            "100": "69b010a2a19fae7d1023a864b4ffef37"
+          }
+        }
+      }
+    ],
+    "matchCount": [
+      {
+        "name": "skips entries without a sportType",
+        "bytesB64": "GgdTdWNjZXNzUhAKAhAyCgQIARAqCgQICRAD",
+        "expected": {
+          "entries": {
+            "1": 42,
+            "9": 3
+          }
+        }
+      }
+    ],
+    "matchLive": [
+      {
+        "name": "match, league and teams",
+        "bytesB64": "GgdTdWNjZXNzUpIBCo8BCLlgEAEYgIrMpI00IGdSFwjnBxoSCAoSDlByZW1pZXIgTGVhZ3Vl8gExUi8IBxoLCAQSB0Fyc2VuYWwiHmh0dHBzOi8vbG9nb3MudGVzdC9hcnNlbmFsLnBuZ/IBMVIvCAgaCwgEEgdDaGVsc2VhIh5odHRwczovL2xvZ29zLnRlc3QvY2hlbHNlYS5wbmc=",
+        "expected": [
+          {
+            "matchId": 12345,
+            "kickoff": 1790272800000,
+            "status": 103,
+            "live": true,
+            "leagueName": "Premier League",
+            "leagueLogo": "",
+            "leagueId": 999,
+            "country": "",
+            "countryId": 0,
+            "pairing": "",
+            "teams": [
+              {
+                "name": "Arsenal",
+                "logo": "https://logos.test/arsenal.png",
+                "team": true,
+                "side": 1
+              },
+              {
+                "name": "Chelsea",
+                "logo": "https://logos.test/chelsea.png",
+                "team": true,
+                "side": 2
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "same display name, different competition",
+        "bytesB64": "GgdTdWNjZXNzUpQCCocBCL0DGIDgj/WWNCBnUnkIxyMQARoSCAQSDlByZW1pZXIgTGVhZ3VlIidodHRwczovL2xvZ29zLnRlc3QvY29tcGV0aXRpb24vNDU1MS5wbmeCBTQI1AEaCwgEEgdVY3JhbmlhIiJodHRwczovL2xvZ29zLnRlc3QvY291bnRyeS8yMTIucG5nCocBCL4DGIDgj/WWNCBnUnkIxiQQARoSCAQSDlByZW1pZXIgTGVhZ3VlIidodHRwczovL2xvZ29zLnRlc3QvY29tcGV0aXRpb24vNDY3OC5wbmeCBTQI1gEaCwgEEgdBcm1lbmlhIiJodHRwczovL2xvZ29zLnRlc3QvY291bnRyeS8yMTQucG5n",
+        "expected": [
+          {
+            "matchId": 445,
+            "kickoff": 1792857600000,
+            "status": 103,
+            "live": true,
+            "leagueName": "Premier League",
+            "leagueLogo": "https://logos.test/competition/4551.png",
+            "leagueId": 4551,
+            "country": "Ucrania",
+            "countryId": 212,
+            "pairing": "",
+            "teams": []
+          },
+          {
+            "matchId": 446,
+            "kickoff": 1792857600000,
+            "status": 103,
+            "live": true,
+            "leagueName": "Premier League",
+            "leagueLogo": "https://logos.test/competition/4678.png",
+            "leagueId": 4678,
+            "country": "Armenia",
+            "countryId": 214,
+            "pairing": "",
+            "teams": []
+          }
+        ]
+      },
+      {
+        "name": "league without country",
+        "bytesB64": "GgdTdWNjZXNzUh0KGwiEByBnUhQIvyMaDwgEEgtFa3N0cmFrbGFzYQ==",
+        "expected": [
+          {
+            "matchId": 900,
+            "kickoff": 0,
+            "status": 103,
+            "live": true,
+            "leagueName": "Ekstraklasa",
+            "leagueLogo": "",
+            "leagueId": 4543,
+            "country": "",
+            "countryId": 0,
+            "pairing": "",
+            "teams": []
+          }
+        ]
+      },
+      {
+        "name": "PBMatchLiveResp wrapper",
+        "bytesB64": "GgdTdWNjZXNzUggKBgoECE0gZw==",
+        "expected": [
+          {
+            "matchId": 77,
+            "kickoff": 0,
+            "status": 103,
+            "live": true,
+            "leagueName": "",
+            "leagueLogo": "",
+            "leagueId": 0,
+            "country": "",
+            "countryId": 0,
+            "pairing": "",
+            "teams": []
+          }
+        ]
+      },
+      {
+        "name": "truncated transport recovers both",
+        "bytesB64": "GgdTdWNjZXNzUjoKv4Q9CG8gZ/IBFBISQXJzZW5hbCB2cyBDaGVsc2VhCr+EPQjeASBn8gEPEg1Sb21hIHZzIExhemlv",
+        "expected": [
+          {
+            "matchId": 111,
+            "kickoff": 0,
+            "status": 103,
+            "live": true,
+            "leagueName": "",
+            "leagueLogo": "",
+            "leagueId": 0,
+            "country": "",
+            "countryId": 0,
+            "pairing": "Arsenal vs Chelsea",
+            "teams": []
+          },
+          {
+            "matchId": 222,
+            "kickoff": 0,
+            "status": 103,
+            "live": true,
+            "leagueName": "",
+            "leagueLogo": "",
+            "leagueId": 0,
+            "country": "",
+            "countryId": 0,
+            "pairing": "Roma vs Lazio",
+            "teams": []
+          }
+        ]
+      }
+    ],
+    "matchDetail": [
+      {
+        "name": "stream list with priorities",
+        "bytesB64": "GgdTdWNjZXNzUi8KAwirBBITCAUQARoIU3RyZWFtIDVAAUjRDxITCAkQARoIU3RyZWFtIDlAWkjRDw==",
+        "expected": {
+          "match": {
+            "matchId": 555,
+            "kickoff": 0,
+            "status": null,
+            "live": false,
+            "leagueName": "",
+            "leagueLogo": "",
+            "leagueId": 0,
+            "country": "",
+            "countryId": 0,
+            "pairing": "",
+            "teams": []
+          },
+          "streams": [
+            {
+              "streamId": 5,
+              "sportType": 1,
+              "name": "Stream 5",
+              "status": null,
+              "priority": 1,
+              "siteType": 2001,
+              "urlCdnType": null,
+              "matchId": null,
+              "rawUrl": ""
+            },
+            {
+              "streamId": 9,
+              "sportType": 1,
+              "name": "Stream 9",
+              "status": null,
+              "priority": 90,
+              "siteType": 2001,
+              "urlCdnType": null,
+              "matchId": null,
+              "rawUrl": ""
+            }
+          ]
+        }
+      }
+    ],
+    "streamDetail": [
+      {
+        "name": "rot47 url and backup domains",
+        "bytesB64": "GgdTdWNjZXNzUnUINyJMcHBwcHBwcHA5RUVBRGleXjc5PURBQENFX19gXUU+YkldQ0ZeNDcyPT1eRGFfX2BeR2IzXkVAPF45NjVKXkRJMGBeOj81NkldPmJGZ2IjcXFxcXFxcXE5RUVBRGleXjc5PURBQENFX19hXUU+YkldQ0Y=",
+        "expected": {
+          "url": "https://fhlsport001.tm3x.ru/cfall/s2001/v3b/tok/hedy/sx_1/index.m3u8",
+          "backupDomains": [
+            "https://fhlsport002.tm3x.ru"
+          ]
+        }
+      },
+      {
+        "name": "no url field is null",
+        "bytesB64": "GgdTdWNjZXNzUgkSB25vdGhpbmc=",
+        "expected": null
+      }
+    ]
+  }
+}

@@ -46,16 +46,22 @@ Reuse the addon-source pattern end to end:
 
 ## Work units
 
-- [ ] **L1 — la18 feed parser**: `SportsLa18Feed.kt` + fixture JSON from the real response
-      + unit tests (title parse, Lima -> ms, live status, source mapping, skip foreign links).
-- [ ] **L2 — stream resolver**: `la18:<id>` -> signed m3u8, golden HTML fixture from the real
-      response, cache + failure semantics (null, never cached).
-- [ ] **L3 — tab merge**: repository refreshes both feeds; decorate generalized; unmatched
-      la18 events appended as rows; dedupe by teams+time against the addon feed.
-- [ ] **L4 — playback wiring**: resolver registered in DI; `la18:` scheme handled by the
-      controller; recording refused for la18 channels.
-- [ ] **L5 — verify + build**: full unit suite vs baseline (3 known failures), build 19,
-      emulator smoke test, commits per work unit, docs.
+- [x] **L1 — la18 feed parser**: `SportsLa18Feed.kt` + fixture `la18/agenda-v1.json` (real
+      response) + 10 unit tests. Commit `a02976cd9`.
+- [x] **L2 — stream resolver**: `La18StreamResolver.kt`, `la18:<id>` -> signed m3u8 behind
+      `sec-fetch-dest: iframe`, 1h cache of the 5h token, mutex-shared mints, failures never
+      cached; fixture `la18/canales-v1.html`. Commit `98d7aa25d`.
+- [x] **L3 — tab merge**: `SportsAddonChannels.Feed` profile; both feeds decorate; URL joining
+      leaves the `la18:` placeholder alone; `SportsLa18Rows` appends matches nothing else
+      carries (never duplicating a covered one); repository refreshes both feeds. Commit
+      `fd8dee6b6`.
+- [x] **L4 — playback wiring**: `NativeLiveEntry.contributesCatalog` (a resolve-only source
+      must not claim "build has native sources"); la18 entry registered in DI, always
+      configured, zero channels; recording refused by the generic native check. Commit
+      `3bdbaacca`.
+- [x] **L5 — verify + build**: full suite 2401 tests with only the 3 known pre-existing
+      failures; build 19 (`versionCode 107019`) assembled; booted clean on emulator. Device
+      verification of the tab handed to the operator.
 
 ## Evidence
 

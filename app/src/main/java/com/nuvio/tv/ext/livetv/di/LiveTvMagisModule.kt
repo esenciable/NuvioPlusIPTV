@@ -4,10 +4,12 @@ import android.content.Context
 import com.nuvio.tv.BuildConfig
 import com.nuvio.tv.data.remote.api.TmdbApi
 import com.nuvio.tv.core.tmdb.TmdbService
+import com.nuvio.tv.ext.livetv.data.La18StreamResolver
 import com.nuvio.tv.ext.livetv.data.MagisChannelLoader
 import com.nuvio.tv.ext.livetv.data.MagisStreamResolver
 import com.nuvio.tv.ext.livetv.data.NativeLiveSources
 import com.nuvio.tv.ext.livetv.data.NativeVodSources
+import com.nuvio.tv.ext.livetv.domain.NativeLiveCatalogLoader
 import com.nuvio.tv.ext.livetv.magis.DataStoreMagisConfigStore
 import com.nuvio.tv.ext.livetv.magis.DataStoreMagisSessionStore
 import com.nuvio.tv.ext.livetv.magis.MagisConfigProvider
@@ -182,6 +184,18 @@ object LiveTvMagisModule {
                     resolver = MagisStreamResolver(playbackApi),
                 )
             } else null,
+            // la18hd has no catalog of its own: its channels are built by the Sports tab's feed
+            // join, and this entry exists so the player can resolve their `la18:` markers. It
+            // contributes no catalog, so "the build has native sources" stays about Magis.
+            NativeLiveSources.NativeLiveEntry(
+                loader = object : NativeLiveCatalogLoader {
+                    override val sourceId = "la18"
+                    override val isConfigured = true
+                    override suspend fun loadChannels() = emptyList<com.nuvio.tv.livetv.model.LiveChannel>()
+                },
+                resolver = La18StreamResolver(),
+                contributesCatalog = false,
+            ),
         ),
     )
 }

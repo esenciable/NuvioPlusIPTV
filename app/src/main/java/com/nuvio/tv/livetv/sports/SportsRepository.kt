@@ -67,6 +67,19 @@ class SportsRepository @Inject constructor(
     @Volatile
     private var addonCandidates: List<AddonEvent> = emptyList()
 
+    /**
+     * la18hd's events: today's football, each with the channels that carry it. Its matches that
+     * nothing else already covers become rows of their own (see [SportsLa18Rows]); the rest put
+     * their channels under the row that already exists.
+     */
+    private val la18Feed = SportsLa18Feed(dir)
+
+    @Volatile
+    private var la18Candidates: List<AddonEvent> = emptyList()
+
+    /** The la18 events that survive the join against everything else the page knows. */
+    private val la18Rows = MutableStateFlow<List<SportsEvent>>(emptyList())
+
     /** When we last asked the addon for one match's feeds. Keeps a re-open off the network. */
     private val askedAt = HashMap<String, Long>()
 
@@ -130,6 +143,11 @@ class SportsRepository @Inject constructor(
             }
         }
         (espn + (fixtures + guide).filterNot(::coveredByEspn) + tsdb).distinctBy { it.id }
+    }.let { base ->
+        // la18hd's own rows join the page's events AFTER everything else: a match ESPN or the
+        // guide already carries stays as it was (decorate puts la18's channels under it), and a
+        // match only la18 carries gets a row so the tab lists every fixture it can actually play.
+        combine(base, la18Rows) { ev, la18 -> (ev + la18).distinctBy { it.id } }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     /**
@@ -306,6 +324,14 @@ class SportsRepository @Inject constructor(
         val base = addonBaseUrl
         if (base.isBlank()) return
         addonFeed.events(base, force).let { if (it.isNotEmpty()) addonCandidates = it }
+        la18Feed.events(force).let { fresh ->
+            if (fresh.isNotEmpty()) {
+                la18Candidates = fresh
+                // Rows are rebuilt against what the page currently knows; the combine re-runs on
+                // the flow change below and on the next events refresh either way.
+                la18Rows.value = SportsLa18Rows.rows(fresh, events.value)
+            }
+        }
     }
 
     /**
@@ -869,9 +895,14 @@ class SportsRepository @Inject constructor(
                     now = now
                 )
             )
-            _matches.value = SportsAddonChannels.decorate(
+            var decorated = SportsAddonChannels.decorate(
                 addonBaseUrl, result.matches, events.value, addonCandidates, s.blocked
             )
+            // la18hd's channels join the same picker: same score band, own identity, own resolver.
+            decorated = SportsAddonChannels.decorate(
+                SportsAddonChannels.LA18, "", decorated, events.value, la18Candidates, s.blocked
+            )
+            _matches.value = decorated
             if (result.summary != lastSummary) {
                 lastSummary = result.summary
                 LiveTvLoadReport.add(result.summary)

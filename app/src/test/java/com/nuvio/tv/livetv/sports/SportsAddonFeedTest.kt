@@ -372,7 +372,7 @@ class SportsAddonFeedTest {
         assertEquals(listOf("https://addon.example/kt1gh2mfcxry/stream/tv/rb_4441324_1.json"), asked)
         // A readable answer with rows in it is a list, never `null`: `null` is reserved for "the
         // addon could not ask", which the tab must not cache as a fact about the match.
-        val got = sources ?: return fail("a stream list must be an answer, got null")
+        val got = sources.sources ?: return fail("a stream list must be an answer, got null")
         assertEquals(
             listOf("8X VN", "ESPN MX", null),
             got.map { it.label },
@@ -389,7 +389,7 @@ class SportsAddonFeedTest {
         val feed = SportsAddonFeed(dir = dir, now = { 0L })
 
         assertEquals(emptyList<AddonSource>(),
-            feed.sources("https://addon.example", "rb_1_1", httpGet = { """{"streams":[]}""" }))
+            feed.sources("https://addon.example", "rb_1_1", httpGet = { """{"streams":[]}""" }).sources)
     }
 
     @Test
@@ -399,7 +399,7 @@ class SportsAddonFeedTest {
             val feed = SportsAddonFeed(dir = dir, now = { 0L })
             // `null`, not the empty list: an empty list claims the fixture was asked about and has
             // nothing, which is a fact about the match this reply does not establish.
-            assertNull("body: $body", feed.sources("https://addon.example", "rb_1_1", httpGet = { body }))
+            assertNull("body: $body", feed.sources("https://addon.example", "rb_1_1", httpGet = { body }).sources)
         }
     }
 
@@ -411,10 +411,13 @@ class SportsAddonFeedTest {
         // `failed` is the server's rate limit, not the fixture's. Reading it as "no feeds" is what
         // made a viewer keep seeing one row for minutes after the upstream recovered: the tab
         // stored the silence as an answer about that match.
-        assertNull(feed.sources("https://addon.example", "rb_1_1", httpGet = { """{"failed":true,"streams":[]}""" }))
+        val silence = feed.sources("https://addon.example", "rb_1_1", httpGet = { """{"failed":true,"streams":[],"retryAfterMs":90000}""" })
+        assertNull(silence.sources)
+        // The server names its window; guessing six seconds inside it is a retry spent for nothing.
+        assertEquals(90_000L, silence.retryAfterMs)
         // A real list with the flag set is still the odd case worth surviving: the rows it names
         // came from somewhere, so they are the answer.
-        assertEquals(3, feed.sources("https://addon.example", "rb_1_1", httpGet = { """{"failed":true,"streams":[{"url":"https://a/m","resolution":"HD"},{"url":"https://b/m","resolution":"SD"},{"url":"https://c/m"}]}""" })?.size)
+        assertEquals(3, feed.sources("https://addon.example", "rb_1_1", httpGet = { """{"failed":true,"streams":[{"url":"https://a/m","resolution":"HD"},{"url":"https://b/m","resolution":"SD"},{"url":"https://c/m"}]}""" }).sources?.size)
     }
 
     @Test
@@ -424,6 +427,6 @@ class SportsAddonFeedTest {
 
         // The caller keeps `sources` empty, which `decorate` answers with the single stable
         // streamUrl: a rate limit must cost the viewer the extra feeds, never the match.
-        assertNull(feed.sources("https://addon.example", "rb_1_1", httpGet = { throw java.io.IOException("HTTP 429") }))
+        assertNull(feed.sources("https://addon.example", "rb_1_1", httpGet = { throw java.io.IOException("HTTP 429") }).sources)
     }
 }

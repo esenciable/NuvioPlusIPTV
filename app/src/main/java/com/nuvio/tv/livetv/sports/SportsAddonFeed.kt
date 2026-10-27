@@ -110,20 +110,35 @@ internal class SportsAddonFeed(
      * congestion as a fact about this match, which is how a viewer ends up looking at one row for a
      * game the upstream carries eight feeds for, minutes after the upstream recovered.
      */
+    /**
+     * What one ask answered: the feeds, or the reason nothing came back.
+     *
+     * [sources] null means *no answer* (the server could not ask the upstream), and an empty list
+     * means the addon asked and the fixture has no feeds — the difference is the whole point.
+     * [retryAfterMs] is the server's own hint for the first case: the upstream told it to stop for a
+     * while, so asking again at six seconds lands inside that window and is wasted.
+     */
+    data class SourcesAnswer(val sources: List<AddonSource>?, val retryAfterMs: Long = 0)
+
     fun sources(
         baseUrl: String,
         eventId: String,
         httpGet: (url: String) -> String = ::downloadShort,
-    ): List<AddonSource>? {
-        val body = runCatching { httpGet(sourceUrl(baseUrl, eventId)) }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
-        val root = runCatching { json.parseToJsonElement(body) }.getOrNull() as? JsonObject ?: return null
-        val streams = root["streams"] as? JsonArray ?: return null
+    ): SourcesAnswer {
+        val body = runCatching { httpGet(sourceUrl(baseUrl, eventId)) }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: return SourcesAnswer(null)
+        val root = runCatching { json.parseToJsonElement(body) }.getOrNull() as? JsonObject
+            ?: return SourcesAnswer(null)
+        val streams = root["streams"] as? JsonArray ?: return SourcesAnswer(null)
         val list = streams.mapNotNull { s -> streamSource(s as? JsonObject ?: return@mapNotNull null) }.take(MAX_SOURCES)
         // `failed` with rows in it is a contradiction the server does not produce today; if it ever
         // did, the rows it handed over are worth more than the flag. Empty *and* failed is the case
         // that must not be stored as an answer about this fixture.
-        if (list.isNotEmpty()) return list
-        return if ((root["failed"] as? JsonPrimitive)?.booleanOrNull == true) null else list
+        if (list.isNotEmpty()) return SourcesAnswer(list)
+        if ((root["failed"] as? JsonPrimitive)?.booleanOrNull == true) {
+            return SourcesAnswer(null, (root["retryAfterMs"] as? JsonPrimitive)?.content?.toLongOrNull()?.coerceAtLeast(0) ?: 0)
+        }
+        return SourcesAnswer(list)
     }
 
     private fun streamSource(o: JsonObject): AddonSource? {

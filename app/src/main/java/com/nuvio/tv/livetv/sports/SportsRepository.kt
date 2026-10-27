@@ -329,8 +329,21 @@ class SportsRepository @Inject constructor(
      * The screen needs the difference: `CouldNotAsk` is a moment on the server's side, so trying
      * again while the viewer is still looking is worth it; `Answered` is a fact about the fixture,
      * and asking twice for the same fact is traffic somebody else pays for.
+     *
+     * [CouldNotAsk.retryAfterMs] is the server's own hint — while the upstream has it cooling, it
+     * tells us how long to wait. Coming back at six seconds inside a ninety-second window burns a
+     * retry for nothing and is exactly how a viewer ends up staring at the single link.
      */
-    enum class SourcesOutcome { Nothing, Answered, CouldNotAsk }
+    sealed interface SourcesOutcome {
+        /** Nothing to ask about: no feed base, no fixture, or an answer we already have. */
+        data object Nothing : SourcesOutcome
+
+        /** The addon answered about this fixture (feeds, or none). Never re-asked. */
+        data object Answered : SourcesOutcome
+
+        /** The addon could not ask. Worth retrying while the viewer is still here. */
+        data class CouldNotAsk(val retryAfterMs: Long = 0) : SourcesOutcome
+    }
 
     suspend fun loadSources(eventId: String): SourcesOutcome {
         val base = addonBaseUrl
@@ -341,11 +354,12 @@ class SportsRepository @Inject constructor(
         val now = System.currentTimeMillis()
         // The feed named them, or we asked a moment ago and it had nothing: do not go back out.
         if (addon.sources.isNotEmpty() || now - (askedAt[addon.id] ?: 0L) < SOURCE_ASK_MS) return SourcesOutcome.Nothing
-        val got = withContext(Dispatchers.IO) { runCatching { addonFeed.sources(base, addon.id) }.getOrNull() }
+        val answer = withContext(Dispatchers.IO) { runCatching { addonFeed.sources(base, addon.id) }.getOrNull() }
+            ?: return SourcesOutcome.CouldNotAsk()
         // `null` is the addon saying it could not ask — its rate limit, a cold route. Stamping that
         // as an answer about this fixture is what left a viewer with one row for five minutes on a
         // match the upstream carries eight feeds for, so the next open asks again.
-        if (got == null) return SourcesOutcome.CouldNotAsk
+        val got = answer.sources ?: return SourcesOutcome.CouldNotAsk(answer.retryAfterMs)
         askedAt[addon.id] = now
         if (got.isEmpty()) return SourcesOutcome.Answered
         addonCandidates = addonCandidates.map { if (it.id == addon.id) it.copy(sources = got) else it }

@@ -128,6 +128,12 @@ private const val CHIP_MINE = "mine"
  * enough that the viewer still on the screen is the one who gets the rows.
  */
 private const val SOURCE_RETRY_MS = 6_000L
+
+/** How many times one opened fixture asks again while the addon cannot answer. */
+private const val SOURCE_RETRIES = 3
+
+/** The longest a viewer waits for the next ask, whatever window the server names. */
+private const val SOURCE_RETRY_MAX_MS = 45_000L
 private const val CHIP_LIVE = "live"
 private const val CHIP_ALL = "all"
 /** A league from the top bar: "lg:" + its id. */
@@ -1025,9 +1031,18 @@ private fun GamePage(
     // viewer went and played it and came back. An answer, even an empty one, is not retried: that
     // is a fact about the fixture, and re-asking is traffic every other viewer pays for.
     LaunchedEffect(ev.id) {
-        if (viewModel.repo.loadSources(ev.id) == SportsRepository.SourcesOutcome.CouldNotAsk) {
-            delay(SOURCE_RETRY_MS)
-            viewModel.repo.loadSources(ev.id)
+        // A window the server names is waited out, not guessed at: six seconds inside a ninety-second
+        // upstream cooldown was a retry spent for nothing, and the viewer kept seeing one row.
+        var attempt = 0
+        while (attempt < SOURCE_RETRIES) {
+            when (val outcome = viewModel.repo.loadSources(ev.id)) {
+                is SportsRepository.SourcesOutcome.CouldNotAsk -> {
+                    attempt++
+                    val wait = maxOf(SOURCE_RETRY_MS, outcome.retryAfterMs).coerceAtMost(SOURCE_RETRY_MAX_MS)
+                    delay(wait)
+                }
+                else -> return@LaunchedEffect
+            }
         }
     }
     val league = SportsCatalog.league(ev.leagueId)

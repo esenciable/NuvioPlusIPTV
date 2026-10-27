@@ -143,6 +143,36 @@ internal object SportsAddonChannels {
     }
 
     /**
+     * Keeps the feeds we already asked for when a poll answers without them.
+     *
+     * `/events.json` names sources only for the matches the upstream resolved on its own, so a live
+     * match almost always arrives with `sources: []`. Replacing the candidate list with that answer
+     * — which the ten-second poll did — erased the list the viewer had just paid for, and the tab
+     * then gate-kept the next open on "we asked a moment ago" and never asked again: the same match
+     * showed its full shelf once and a single row the next time. Merging keeps what we learned, and
+     * lets a real answer from the upstream replace it.
+     *
+     * [learnedAt] bounds how long a learned shelf is trusted: pauses, rewinds and reconnects re-mint
+     * URLs on the server, and a list older than [ttlMs] is worth asking again for.
+     */
+    fun mergeLearned(
+        fresh: List<AddonEvent>,
+        learned: Map<String, List<AddonSource>>,
+        learnedAt: Map<String, Long>,
+        now: Long,
+        ttlMs: Long = LEARNED_TTL_MS,
+    ): List<AddonEvent> = fresh.map { ev ->
+        if (ev.sources.isNotEmpty()) return@map ev
+        val at = learnedAt[ev.id] ?: return@map ev
+        if (now - at > ttlMs) return@map ev
+        val kept = learned[ev.id].orEmpty()
+        if (kept.isEmpty()) ev else ev.copy(sources = kept)
+    }
+
+    /** How long the feeds a viewer paid for stay attached to a match across polls. */
+    const val LEARNED_TTL_MS = 30 * 60_000L
+
+    /**
      * Puts the feed's links in front of every game it can serve.
      *
      * Returns [matches] itself when there is nothing to do, so a feed that never loaded (or a build

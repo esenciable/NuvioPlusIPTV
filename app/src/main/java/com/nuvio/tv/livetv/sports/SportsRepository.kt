@@ -70,6 +70,10 @@ class SportsRepository @Inject constructor(
     /** When we last asked the addon for one match's feeds. Keeps a re-open off the network. */
     private val askedAt = HashMap<String, Long>()
 
+    /** The feeds each match answered with, and when: kept across polls by `mergeLearned`. */
+    private val learnedSources = HashMap<String, List<AddonSource>>()
+    private val learnedAt = HashMap<String, Long>()
+
     val settings: StateFlow<SportsSettings> = prefs.sportsSettingsJson
         .map { SportsSettings.fromJson(it) }
         .stateIn(scope, SharingStarted.Eagerly, SportsSettings())
@@ -305,7 +309,16 @@ class SportsRepository @Inject constructor(
     private fun refreshAddonFeed(force: Boolean) {
         val base = addonBaseUrl
         if (base.isBlank()) return
-        addonFeed.events(base, force).let { if (it.isNotEmpty()) addonCandidates = it }
+        addonFeed.events(base, force).let { fresh ->
+            if (fresh.isNotEmpty()) {
+                // The poll's answer has no sources for live matches: replacing the list with it wiped
+                // the feeds the viewer had just asked for, and the five-minute ask gate then kept
+                // the next open from asking again. Merge keeps them, bounded by LEARNED_TTL_MS.
+                addonCandidates = SportsAddonChannels.mergeLearned(
+                    fresh, learnedSources, learnedAt, System.currentTimeMillis(),
+                )
+            }
+        }
     }
 
     /**
@@ -363,6 +376,8 @@ class SportsRepository @Inject constructor(
         askedAt[addon.id] = now
         if (got.isEmpty()) return SourcesOutcome.Answered
         addonCandidates = addonCandidates.map { if (it.id == addon.id) it.copy(sources = got) else it }
+        learnedSources[addon.id] = got
+        learnedAt[addon.id] = now
         // `decorate` reads the candidate list and rebuilds the whole match map, so the rows for this
         // fixture are replaced rather than appended: the single link the viewer saw a moment ago
         // does not stay behind as an eleventh row.

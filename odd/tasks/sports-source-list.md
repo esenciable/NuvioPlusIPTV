@@ -137,3 +137,61 @@ lazy source against the upstream every time — 88 metadata calls in 260 s from 
 the shared client in a 429 cooldown 59% of the time. Cached (`ESS_LAZY_TTL_MS`, 60 s), the duty cycle
 went to 0% with playback running. The retry stays because a route can still be cold for other
 reasons, and the viewer sitting on the screen is the one who benefits.
+
+---
+
+## "Sometimes all the links, sometimes none" — three separate defects
+
+Reported as one symptom; it was three, each producing a similar picture. Fixed in that order, each
+one measured before being touched.
+
+### 1. A rate-limit window is not a verdict about a match (server `15b16b4`)
+
+Production counters over 47 h: `match/detail` 5048 calls, `match/live` 4516, `common/bs` 6947 — and
+rate limited: `common/bs` 194, `match/live` 121, `match/detail` 27, `cooldownSkips` 276. Any single
+429 puts the client in a **global** 90 s cooldown, and the viewer's own open then answered
+`failed: true`, so the tab drew the one link the feed already carried.
+
+- The last answer a viewer paid for is now kept 30 min (`ESS_STALE_TTL_MS`) and re-served, marked
+  `stale`, whenever the upstream cannot be asked. Only a complete resolution replaces it.
+- A failed answer carries `retryAfterMs` (the window the upstream named).
+- `fetchBodySignature` was cached under the caller's query, which for match detail contains the
+  `matchId` — so the cache never hit on that path and every open paid two upstream calls instead of
+  one, to the most limited endpoint. Measured: codes 100/101 answer byte-identical versions for two
+  different live matches and with no `matchId` at all. The cache key is the codes now; `common/bs`
+  fell to 2 calls for 5 detail + 11 listing calls.
+
+### 2. The ten-second poll erased what the viewer had just asked for (app `d78beb819`)
+
+`/events.json` carries `sources: []` for live matches (listing does not probe), and
+`refreshAddonFeed` **replaced** the candidate list with every poll. So:
+
+1. open the match → the app asks → the full shelf appears;
+2. within ≤60 s the poll replaces the list → the learned feeds are gone;
+3. reopen inside the five-minute ask gate → `loadSources` says "we asked recently" and does not ask
+   again → one row;
+4. five minutes later it asks again → the full shelf is back.
+
+`SportsAddonChannels.mergeLearned` keeps what was learned across polls, bounded by
+`LEARNED_TTL_MS` (30 min: pauses and reconnects re-mint URLs), and a real answer from the feed still
+replaces it.
+
+### 3. A connector word hid the match entirely (app `40916ec54`)
+
+A live Copa del Rey match (`Recreativo Huelva` vs `Rayo Vallecano`) showed **no rows at all** — "Not
+found in your channels yet" — while the feed carried it as `rb_4520476_1`. The feed writes
+"Recreativo **de** Huelva"; the join required one normalized name to be a contiguous whole-word run
+inside the other, so the connector broke it.
+
+`SportsAddonMatcher.nameMatches` now also compares the words that carry a club's name, dropping only
+connectors and club-suffix filler. The filler list is deliberately small and pinned by tests on both
+sides: it must join `Rayo` ↔ `Rayo Vallecano` and must never merge `Real Madrid` ↔ `Real Sociedad`,
+`Sporting Gijon` ↔ `Sporting Lisbon`, `Manchester United` ↔ `Manchester City`, `Inter` ↔
+`Internazionale`.
+
+### Evidence on the devices
+
+- Box, before: the Copa del Rey match with zero rows.
+- Box, build 25 (`107025`, `40916ec54`): the same match shows its two links.
+- Builds 22–25 installed on the emulator, the Mi Box (`192.168.18.6`) and the TiVo Stream 4K
+  (`192.168.18.59`); full suite 2385 tests with only the three long-standing failures.

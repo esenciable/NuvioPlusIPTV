@@ -134,13 +134,6 @@ android {
         buildConfigField("String", "MAGIS_APK_VER_HEADER", "\"${localProperties.getProperty("MAGIS_APK_VER_HEADER", "43404")}\"")
         buildConfigField("String", "MAGIS_SPKG_VER", "\"${localProperties.getProperty("MAGIS_SPKG_VER", "2025-08-07 05:40:11_36_16_")}\"")
         buildConfigField("String", "MAGIS_3DES_KEY", "\"${localProperties.getProperty("MAGIS_3DES_KEY", "")}\"")
-        // la18hd relay (worker/la18 in esencial-sport): a Cloudflare Worker that mints the
-        // channel's signed playlist from ITS egress and replays the segments, so a viewer whose
-        // IP the CDN flags still plays. The URL is a direct https address the player opens like
-        // any playlist channel's; empty disables the relay and the resolver falls back to the
-        // CDN directly (which only works from unflagged networks).
-        buildConfigField("String", "LA18_WORKER_BASE", "\"${localProperties.getProperty("LA18_WORKER_BASE", "")}\"")
-        buildConfigField("String", "LA18_WORKER_KEY", "\"${localProperties.getProperty("LA18_WORKER_KEY", "")}\"")
         buildConfigField("String", "SIMKL_CLIENT_ID", buildConfigString(resolveProperty(devProperties, localProperties, "SIMKL_CLIENT_ID")))
         buildConfigField("String", "SIMKL_APP_NAME", buildConfigString(resolveProperty(devProperties, localProperties, "SIMKL_APP_NAME", "nuvio")))
         buildConfigField("String", "MDBLIST_CLIENT_ID", buildConfigString(resolveProperty(devProperties, localProperties, "MDBLIST_CLIENT_ID")))

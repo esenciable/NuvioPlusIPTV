@@ -67,18 +67,6 @@ class SportsRepository @Inject constructor(
     @Volatile
     private var addonCandidates: List<AddonEvent> = emptyList()
 
-    /**
-     * la18hd's events: today's football, each with the channels that carry it. Used ONLY as a
-     * source of playback links: its channels join the rows the page already lists through
-     * decorate(), and la18 never generates match rows of its own — the page's list is the one
-     * ESPN, the guide and the fixtures arm (a feed that dedupes against a moving snapshot
-     * produces a shadow list of half-attached rows, which is a defect this model cannot have).
-     */
-    private val la18Feed = SportsLa18Feed(dir)
-
-    @Volatile
-    private var la18Candidates: List<AddonEvent> = emptyList()
-
     /** When we last asked the addon for one match's feeds. Keeps a re-open off the network. */
     private val askedAt = HashMap<String, Long>()
 
@@ -318,7 +306,6 @@ class SportsRepository @Inject constructor(
         val base = addonBaseUrl
         if (base.isBlank()) return
         addonFeed.events(base, force).let { if (it.isNotEmpty()) addonCandidates = it }
-        la18Feed.events(force).let { fresh -> if (fresh.isNotEmpty()) la18Candidates = fresh }
     }
 
     /**
@@ -882,15 +869,9 @@ class SportsRepository @Inject constructor(
                     now = now
                 )
             )
-            var decorated = SportsAddonChannels.decorate(
+            _matches.value = SportsAddonChannels.decorate(
                 addonBaseUrl, result.matches, events.value, addonCandidates, s.blocked
             )
-            // la18hd's channels join the same picker: own identity, own resolver, one band under
-            // the addon's so its named streams stay the automatic pick where both feeds serve.
-            decorated = SportsAddonChannels.decorate(
-                SportsAddonChannels.LA18, "", decorated, events.value, la18Candidates, s.blocked
-            )
-            _matches.value = decorated
             if (result.summary != lastSummary) {
                 lastSummary = result.summary
                 LiveTvLoadReport.add(result.summary)

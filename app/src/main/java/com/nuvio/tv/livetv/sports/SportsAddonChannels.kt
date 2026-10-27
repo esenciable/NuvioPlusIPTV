@@ -50,17 +50,6 @@ internal object SportsAddonChannels {
         how = HOW,
     ) { s, i -> if (s.streamId != 0L) s.streamId.toString() else "i$i" }
 
-    /** la18hd: the channel id is the identity, and the resolver re-marks from it. */
-    val LA18 = Feed(
-        id = "la18",
-        name = "Partidos de Hoy",
-        // One band under the addon's: where both feeds carry the same match, the addon's named
-        // streams (a commentary language each) stay the automatic pick and bestChannel() opens
-        // one of them; la18's channels still rank above every guide guess (`>= 150`).
-        score = SCORE - 10,
-        how = "la18",
-    ) { s, _ -> s.url.removePrefix("la18:") }
-
     /**
      * Stable across refreshes: favourites, the channel you picked for a game and the channels you
      * blocked for it all persist by key, so a key that moved would silently forget what the user
@@ -138,23 +127,16 @@ internal object SportsAddonChannels {
     /**
      * Builds the full URL to the feed's playable address.
      *
-     * A feed may answer paths relative to its own base (`streamUrl` and `sources[].url`), because
+     * The feed answers paths relative to its own base (`streamUrl` and `sources[].url`), because
      * the same build serves `/` and `/kt` equally. The player needs a fully-qualified address, so
      * the base travels with the feed and is joined here — keeping one slash where the path already
      * brought one, or a strict upstream reads `//rblive/...` as a different resource and answers
      * 404 to a signal that is there.
-     *
-     * A placeholder scheme (`la18:espn4`) is neither relative nor absolute: it is left alone, for
-     * the resolver to mint at play time.
      */
     private fun resolveUrl(baseUrl: String, relativeUrl: String): String {
         val trimmed = relativeUrl.trim()
         if (trimmed.isBlank()) return trimmed
         if (trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true)) return trimmed
-        val colon = trimmed.indexOf(':')
-        if (colon in 1..16 && trimmed.substring(0, colon).all { it.isLetterOrDigit() || it in "+.-" } &&
-            !trimmed.substring(colon + 1).startsWith("//")
-        ) return trimmed
         val base = baseUrl.trim().trimEnd('/')
         if (base.isBlank()) return trimmed
         return if (trimmed.startsWith("/")) base + trimmed else "$base/$trimmed"

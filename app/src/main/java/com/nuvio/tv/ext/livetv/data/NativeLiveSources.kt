@@ -37,19 +37,13 @@ class NativeLiveSources(
     data class NativeLiveEntry(
         val loader: NativeLiveCatalogLoader,
         val resolver: NativeLiveResolver,
-        /**
-         * Whether the loader's catalog counts toward "this build has native sources". A source
-         * that exists only to resolve playback for rows built elsewhere (la18hd's Sports-tab
-         * channels) contributes no catalog and must not make the UI claim a source is there.
-         */
-        val contributesCatalog: Boolean = true,
     )
 
     /** The sources with a usable configuration; an unconfigured source is ABSENT, never failed. */
     private val configured: List<NativeLiveEntry> get() = entries.filter { it.loader.isConfigured }
 
-    /** Whether this build has any native live source AT THE CATALOG: one that lists channels. */
-    val isEmpty: Boolean get() = configured.none { it.contributesCatalog }
+    /** Whether this build has any native live source at all. */
+    val isEmpty: Boolean get() = configured.isEmpty()
 
     /** Whether a native source is configured, before its first catalog walk has landed. */
     val hasSources: Boolean get() = configured.isNotEmpty()

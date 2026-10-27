@@ -73,21 +73,6 @@ class NativeLiveSourcesTest {
     }
 
     @Test(timeout = 10_000)
-    fun `an entry without catalog does not claim a source but still resolves`() = runTest {
-        val r = Resolver("la18")
-        val sources = NativeLiveSources(
-            listOf(
-                NativeLiveSources.NativeLiveEntry(Loader("la18"), r, contributesCatalog = false),
-            ),
-        )
-        // The UI's "this build has native sources" stays about catalog sources; the resolver
-        // still owns the rows the Sports tab builds for it.
-        assertTrue(sources.isEmpty)
-        assertEquals(emptyList<LiveChannel>(), sources.loadAll())
-        assertTrue(sources.resolverFor(channel("la18")) === r)
-    }
-
-    @Test(timeout = 10_000)
     fun `the resolver of the owning source answers, and a playlist channel has none`() {
         val a = Resolver("a")
         val sources = NativeLiveSources(listOf(NativeLiveSources.NativeLiveEntry(Loader("a"), a)))

@@ -54,7 +54,10 @@ internal object SportsAddonChannels {
     val LA18 = Feed(
         id = "la18",
         name = "Partidos de Hoy",
-        score = SCORE,
+        // One band under the addon's: where both feeds carry the same match, the addon's named
+        // streams (a commentary language each) stay the automatic pick and bestChannel() opens
+        // one of them; la18's channels still rank above every guide guess (`>= 150`).
+        score = SCORE - 10,
         how = "la18",
     ) { s, _ -> s.url.removePrefix("la18:") }
 
@@ -215,7 +218,10 @@ internal object SportsAddonChannels {
                 )
             }
             if (out === null) out = HashMap(matches)
-            out[ev.id] = ours + existing
+            // Ours are prepended (they outrank the guide's guesses), but the whole list is then
+            // kept score-ordered and STABLE: a feed that runs a second pass must not jump ahead
+            // of a higher-scored row that was already there — `bestChannel()` plays the first.
+            out[ev.id] = (ours + existing).sortedByDescending { it.score }
         }
         return out ?: matches
     }

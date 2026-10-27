@@ -82,6 +82,62 @@ class SportsAddonMatcherTest {
     }
 
     @Test
+    fun `a connector word between the two namings does not hide the match`() {
+        // Measured on the operator's box: ESPN "Recreativo Huelva", the feed "Recreativo de Huelva"
+        // — the whole-string rule missed, so a live match the upstream carries showed no row at all.
+        assertTrue(SportsAddonMatcher.nameMatches("Recreativo Huelva", listOf("recreativo de huelva")))
+        assertTrue(SportsAddonMatcher.nameMatches("Recreativo de Huelva", listOf("recreativo huelva")))
+        assertTrue(SportsAddonMatcher.nameMatches("Rayo", listOf("rayo vallecano")))
+        assertTrue(SportsAddonMatcher.nameMatches("Vitoria de Guimaraes", listOf("vitoria guimaraes")))
+        assertTrue(SportsAddonMatcher.nameMatches("Deportivo La Coruna", listOf("deportivo la coruna")))
+    }
+
+    @Test
+    fun `dropping connectors must not merge different clubs`() {
+        assertFalse(SportsAddonMatcher.nameMatches("Real Madrid", listOf("real sociedad")))
+        assertFalse(SportsAddonMatcher.nameMatches("Real Sociedad", listOf("real madrid")))
+        assertFalse(SportsAddonMatcher.nameMatches("Sporting Gijon", listOf("sporting lisbon")))
+        assertFalse(SportsAddonMatcher.nameMatches("Manchester United", listOf("manchester city")))
+        // A one-word name still has to be that word, not a fragment of it.
+        assertFalse(SportsAddonMatcher.nameMatches("Inter", listOf("internazionale")))
+    }
+
+    @Test
+    fun `the operators match joins, ESPN names against the feeds`() {
+        // The live event the box showed with no rows at all: ESPN's own naming on one side
+        // (shortDisplayName "R Huelva", name "Recreativo Huelva") and the feed's on the other
+        // ("Recreativo de Huelva", "Rayo Vallecano"), same kick-off.
+        val kickoff = 1_793_131_200_000L // 2026-10-27T20:00:00Z
+        val league = League(
+            id = "soccer/esp.copa_del_rey", sport = Sport.FOOTBALL, name = "Copa del Rey",
+            short = "CDR", espnPath = "soccer/esp.copa_del_rey", guideWords = listOf("Copa del Rey"),
+            minutes = 115,
+        )
+        fun side(name: String, full: String, home: Boolean) = Side(
+            team = TeamInfo(
+                leagueId = league.id, id = full.lowercase(), name = name, fullName = full,
+                abbr = full.take(3).uppercase(), location = null, color = null, altColor = null, logo = null,
+            ),
+            score = null, record = null, winner = false, home = home,
+        )
+        val espn = SportsEvent(
+            id = "espn:x:9", leagueId = league.id, startMs = kickoff, hasTime = true,
+            state = GameState.LIVE, title = "Recreativo Huelva v Rayo Vallecano", subtitle = null,
+            status = null,
+            home = side("R Huelva", "Recreativo Huelva", home = true),
+            away = side("Rayo", "Rayo Vallecano", home = false),
+        )
+        val feed = AddonEvent(
+            id = "rb_4520476_1", kickoffMs = kickoff,
+            teams = listOf(AddonTeam(1, "Recreativo de Huelva", ""), AddonTeam(2, "Rayo Vallecano", "")),
+            streamUrl = "https://addon.test/m.m3u8", title = "Recreativo Huelva vs Rayo Vallecano",
+            leagueName = "Copa del Rey", live = true, status = "live",
+        )
+        assertTrue(SportsAddonMatcher.matches(espn, league, feed))
+        assertEquals("rb_4520476_1", SportsAddonMatcher.find(espn, league, listOf(feed))?.id)
+    }
+
+    @Test
     fun `a name only matches on whole words`() {
         assertFalse(SportsAddonMatcher.nameMatches("Man", listOf("manchester united")))
         assertFalse(SportsAddonMatcher.nameMatches("Inter", listOf("internazionale")))

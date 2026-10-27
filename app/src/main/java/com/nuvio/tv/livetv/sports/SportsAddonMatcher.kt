@@ -61,11 +61,39 @@ internal object SportsAddonMatcher {
         val bare = SportsCatalog.norm(rawTeam).trim()
         if (bare.length < 3) return false
         val padded = " $bare "
+        if (variants.any { v ->
+                val variant = v.trim()
+                variant.length >= 3 && (padded.contains(" $variant ") || " $variant ".contains(padded))
+            }
+        ) return true
+        // The two sides name the same club differently across a connector: the feed writes
+        // "Recreativo de Huelva" where ESPN writes "Recreativo Huelva", so the whole-string rule
+        // above never fires and the match ends up with no row at all — the single most common way a
+        // game the upstream carries shows nothing to watch. Compare the words that carry the name.
+        val mine = significant(bare)
+        if (mine.isEmpty()) return false
         return variants.any { v ->
-            val variant = v.trim()
-            variant.length >= 3 && (padded.contains(" $variant ") || " $variant ".contains(padded))
+            val theirs = significant(SportsCatalog.norm(v).trim())
+            theirs.isNotEmpty() && (mine.containsAll(theirs) || theirs.containsAll(mine))
         }
     }
+
+    /**
+     * The words of a club's name that identify it: connectors and club-suffix filler dropped
+     * ("de", "do", "the", "fc"…). Kept deliberately small — anything more aggressive turns
+     * different clubs into the same one ("Real Madrid" must never absorb "Real Sociedad").
+     */
+    private fun significant(name: String): Set<String> =
+        name.split(' ', '\t').asSequence()
+            .map { it.trim() }
+            .filter { it.length >= 2 && it !in FILLER_WORDS }
+            .toSet()
+
+    private val FILLER_WORDS = setOf(
+        "de", "del", "do", "da", "das", "dos", "di", "la", "le", "el", "los", "las",
+        "o", "a", "e", "y", "the", "of", "and", "und", "von",
+        "fc", "cf", "sc", "ac", "afc", "cd", "ud", "ca", "sv", "tsv", "vfb", "club", "cp",
+    )
 
     /**
      * Which event wins when they all fit: one on now, then the nearest kick-off, then the more

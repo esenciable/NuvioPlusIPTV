@@ -1,5 +1,6 @@
 package com.nuvio.tv.ext.livetv.data
 
+import com.nuvio.tv.BuildConfig
 import com.nuvio.tv.ext.livetv.domain.NativeLiveResolver
 import com.nuvio.tv.livetv.model.LiveChannel
 import kotlinx.coroutines.sync.Mutex
@@ -38,6 +39,9 @@ import java.util.concurrent.TimeUnit
 class La18StreamResolver(
     private val now: () -> Long = System::currentTimeMillis,
     private val httpGet: (url: String) -> String = ::download,
+    /** The relay's base address and key, when a build ships them (the addon-like path). */
+    private val workerBase: String = BuildConfig.LA18_WORKER_BASE.trim().trimEnd('/'),
+    private val workerKey: String = BuildConfig.LA18_WORKER_KEY.trim(),
 ) : NativeLiveResolver {
 
     override val sourceId: String get() = SOURCE_ID
@@ -59,6 +63,13 @@ class La18StreamResolver(
 
     override suspend fun resolve(channel: LiveChannel): LiveChannel? {
         val id = idOf(channel) ?: return null
+        // The relay is the addon-like path: the URL is a direct https address the player opens
+        // like any playlist channel's — the worker mints from its own egress and replays the
+        // segments, so the viewer's IP reputation never touches the CDN. No cache, no expiry:
+        // the worker re-mints under its hour and the URL stays valid across re-resolves.
+        if (workerBase.isNotBlank() && workerKey.isNotBlank()) {
+            return channel.copy(url = "$workerBase/la18/stream/$id.m3u8?key=$workerKey", headers = emptyMap())
+        }
         val url = mint(id) ?: return null
         return channel.copy(url = url, headers = emptyMap())
     }

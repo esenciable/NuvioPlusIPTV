@@ -84,6 +84,16 @@ class La18StreamResolverTest {
     }
 
     @Test
+    fun `with a relay configured, the resolved url is the worker's and stays stable`() = runBlocking {
+        val r = La18StreamResolver(now = { 0 }, httpGet = { throw java.io.IOException("must not mint") },
+            workerBase = "https://la18-relay.example.workers.dev", workerKey = "k1")
+        val a = r.resolve(channel())!!
+        assertEquals("https://la18-relay.example.workers.dev/la18/stream/espn4.m3u8?key=k1", a.url)
+        // Re-resolving (reconnect, live-again) returns the same address: the worker owns the mint.
+        assertEquals(a.url, r.resolve(channel())!!.url)
+    }
+
+    @Test
     fun `reMarker rebuilds the placeholder from the key`() {
         val r = La18StreamResolver()
         val resolved = channel(url = "https://dglvz29s.fubo18.com/espn4/mono.m3u8?token=abc")

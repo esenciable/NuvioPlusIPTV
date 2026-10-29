@@ -56,6 +56,14 @@ class LiveTvTimeshift(private val context: Context) {
 
     val isRecording: Boolean get() = recording
 
+    /**
+     * HLS: how much the first look at the provider's playlist saved (ms). Those parts end at the
+     * live edge, which is ahead of where you paused (players play a little behind live): resuming
+     * starts this far in, less how far behind live you were, so it carries on from where you paused.
+     */
+    @Volatile var firstBatchMs: Long = 0L
+        private set
+
     /** Enough room on the device for [minutes] of recording (rough: about 35 MB a minute). */
     /** Where the buffer is kept: the drive set for recordings (this device's cache otherwise). */
     @Volatile var baseDir: File = File(context.cacheDir, "timeshift")
@@ -83,6 +91,7 @@ class LiveTvTimeshift(private val context: Context) {
         val isHls = url.lowercase().substringBefore('?').endsWith(".m3u8") || url.contains("m3u8", ignoreCase = true)
         val now = System.currentTimeMillis()
         trimmedMs = 0L
+        firstBatchMs = 0L
         recording = true
         val s = if (isHls) {
             val local = File(dir, "index.m3u8")
@@ -92,6 +101,7 @@ class LiveTvTimeshift(private val context: Context) {
             Session(Kind.TS, now, Uri.fromFile(local), dir).also { job = scope.launch { recordTs(url, headers, dir, keepMinutes, reconnect, label) } }
         }
         session = s
+        ACTIVE += s.dir
         return s
     }
 
@@ -100,14 +110,27 @@ class LiveTvTimeshift(private val context: Context) {
         recording = false
         job?.cancel()
         job = null
-        session?.dir?.let { d -> scope.launch { runCatching { d.deleteRecursively() } } }
+        session?.dir?.let { d -> ACTIVE -= d; scope.launch { runCatching { d.deleteRecursively() } } }
         session = null
         trimmedMs = 0L
-        // Leftovers from earlier (a crash, the app being closed while paused).
+        // Leftovers from earlier (a crash, the app or the box switched off while paused).
+        // Anything not written to for 15 minutes isn't being recorded any more: a buffer in use
+        // gets a new piece every few seconds.
+        cleanLeftovers(listOf(File(context.cacheDir, "timeshift"), baseDir), olderThanMs = 15 * 60_000L)
+    }
+
+    /**
+     * Deletes buffers and saved replays left in [dirs] (all of them when [olderThanMs] is 0,
+     * except the one being recorded now).
+     */
+    fun cleanLeftovers(dirs: List<File>, olderThanMs: Long = 0L) {
         scope.launch {
+            val keep = ACTIVE.toSet()
             runCatching {
-                (File(context.cacheDir, "timeshift").listFiles()?.toList().orEmpty() + baseDir.listFiles()?.toList().orEmpty()).forEach { f: File ->
-                    if (f.lastModified() < System.currentTimeMillis() - 6 * 60 * 60 * 1000L) f.deleteRecursively()
+                dirs.distinct().flatMap { it.listFiles()?.toList().orEmpty() }.forEach { f: File ->
+                    if (f in keep) return@forEach
+                    val newest = if (f.isDirectory) (f.listFiles()?.maxOfOrNull { it.lastModified() } ?: f.lastModified()) else f.lastModified()
+                    if (olderThanMs == 0L || newest < System.currentTimeMillis() - olderThanMs) f.deleteRecursively()
                 }
             }
         }
@@ -131,7 +154,7 @@ class LiveTvTimeshift(private val context: Context) {
         val began = System.currentTimeMillis()
         // The player has only just let go of its connection: give the provider a moment, or
         // accounts with one connection can refuse (or later cut) this one.
-        delay(1_500)
+        delay(2_500)
         var attempt = 0
         try {
             // Keeps going until you go live or change channel: a dropped connection is opened
@@ -176,7 +199,7 @@ class LiveTvTimeshift(private val context: Context) {
                 }
                 report.add("$label: connection ended after ${(System.currentTimeMillis() - t0) / 1000}s, ${bytes / 1024} KB ($why); reconnecting")
                 // Got nothing at all several times running: give up (the provider won't serve it).
-                if (bytes == 0L && attempt >= 4) { report.add("Pause buffer: gave up (no data)"); break }
+                if (bytes == 0L && attempt >= 9) { report.add("Pause buffer: gave up (no data)"); break }
                 if (bytes > 0) attempt = 1
             }
         } finally {
@@ -254,6 +277,7 @@ class LiveTvTimeshift(private val context: Context) {
                     total -= first.durationSec
                     runCatching { File(dir, first.url).delete() }
                 }
+                if (firstBatchMs == 0L && saved.isNotEmpty()) firstBatchMs = (saved.sumOf { it.durationSec } * 1000).toLong()
                 writeLocalPlaylist(local, saved, target, mapLine)
                 delay((target * 1000L / 2).coerceIn(1_000L, 6_000L))
                 text = runCatching { LiveHttp.fetch(mediaUrl, headers).let { (t, u) -> mediaUrl = u; t } }.getOrElse { delay(2_000); continue }
@@ -330,5 +354,9 @@ class LiveTvTimeshift(private val context: Context) {
 
     fun dataSourceFactory(): DataSource.Factory = DataSource.Factory { GrowingFileDataSource() }
 
-    private companion object { const val TAG = "LiveTvTimeshift" }
+    private companion object {
+        const val TAG = "LiveTvTimeshift"
+        /** Buffers and saved replays in use right now (by any player): never cleaned up. */
+        val ACTIVE: MutableSet<File> = java.util.Collections.synchronizedSet(HashSet())
+    }
 }

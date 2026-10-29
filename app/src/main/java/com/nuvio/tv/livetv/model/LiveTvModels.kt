@@ -44,7 +44,7 @@ data class PlaylistSource(
     val liveEnabled: Boolean get() = enabled && (!isXtream || importLive)
 
     fun resolvedUrl(): String {
-        if (!isXtream) return url.trim()
+        if (!isXtream) return tidyLink(url)
         return "${xtreamBase()}/get.php?username=${enc(xtreamUsername)}&password=${enc(xtreamPassword)}&type=m3u_plus&output=ts"
     }
 
@@ -62,8 +62,26 @@ data class PlaylistSource(
     private fun enc(s: String) = java.net.URLEncoder.encode(s.trim(), "UTF-8")
 
     companion object {
+        /**
+         * A typed or pasted link made safe: dashes that only look like "-" (the longer dashes a
+         * phone keyboard or a chat app swaps in, the non-breaking hyphen) become a real hyphen,
+         * and invisible characters and spaces that came along with a paste are dropped.
+         */
+        fun tidyLink(raw: String): String = raw
+            .replace(Regex("[\\u2010-\\u2015\\u2212\\uFE58\\uFE63\\uFF0D]"), "-")
+            .replace(Regex("[\\u200B-\\u200D\\u2060\\uFEFF\\u00A0\\s]"), "")
+
         fun cleanXtreamServer(raw: String): String {
-            var s = raw.trim()
+            // Whatever dash-like character the keyboard typed (some show as blank on screen)
+            // becomes a plain hyphen. Any other odd non-ASCII character in the server name too.
+            val t = raw.trim()
+            val schemeLen = Regex("^[a-zA-Z]+://").find(t)?.value?.length ?: 0
+            val hostEnd = t.indexOf('/', schemeLen).let { if (it < 0) t.length else it }
+            val hostPart = t.substring(schemeLen, hostEnd)
+                .replace(Regex("[\\u200B-\\u200D\\u2060\\uFEFF\\u00A0\\s]"), "")
+                .replace(Regex("[^\\x00-\\x7F]"), "-")
+            val fixed = t.substring(0, schemeLen) + hostPart + t.substring(hostEnd)
+            var s = tidyLink(fixed)
             if (s.isEmpty()) return s
             if (!s.startsWith("http://", true) && !s.startsWith("https://", true)) s = "http://$s"
             return runCatching {
@@ -216,8 +234,6 @@ data class LiveTvSettings(
     val showEpisodeNumbers: Boolean = true,
     /** Guide Size: COMPACT, STANDARD, LARGE or XLARGE (blank = from the old Slimmer Rows switch). */
     val guideSize: String = "",
-    /** Diagonal stripes on channels (and stretches of time) the guide has nothing for. Off: plain, like a show. */
-    val stripeMissingGuide: Boolean = true,
     val epgOffsetMinutes: Int = 0,
     val reverseZap: Boolean = false,
     val zapMode: ZapMode = ZapMode.GROUP,
@@ -283,8 +299,11 @@ data class LiveTvSettings(
     val showQualityBadges: Boolean = true,
     /** The frame rate ("50 FPS") next to the picture size on the info bar. */
     val showFrameRate: Boolean = true,
-    /** Switch the TV's refresh rate to match the video (auto frame rate). */
-    val matchFrameRate: Boolean = false,
+    /**
+     * Switch the TV's refresh rate to match the video (auto frame rate), as Nuvio's own player
+     * setting: "OFF", "START" (switch when playback starts) or "START_STOP" (and put it back after).
+     */
+    val frameRateMode: String = "OFF",
     /** Show On Demand in Nuvio's side menu (when there's something to show). */
     val onDemandInSidebar: Boolean = true,
     /** Recordings in the side menu (once anything is recorded or set to record). */
@@ -374,13 +393,23 @@ data class LiveTvSettings(
     /** A soft dark pill behind the always-on clock. */
     val clockBackground: Boolean = true,
     /** How dark the info panel's background is: "standard", "darker" or "solid". */
-    val panelBackground: String = "standard",
+    val panelBackground: String = "darker",
+    /** How dark the info panel above the guide and the guide's bars are (the play bar has its own, [panelBackground]). */
+    val guideInfoBackground: String = "darker",
+    /** The backdrop behind the guide, Sports hub and On Demand: "auto" (match the theme, the default), "onyx", or an app icon color: "original", "arctic", "emerald", "rose", "copper", "graphite". */
+    val guideBackdrop: String = "auto",
     /** The row of recently watched channels at the bottom of the full info panel (OK). */
     val recentInPanel: Boolean = true,
     /** The row at the bottom of the full info panel: "RECENT", "FAVORITES" or "OFF". */
     val panelRow: String = "RECENT",
     /** Channel surfing: Up / Down show other channels on the info bar; OK switches. */
-    val channelSurf: Boolean = false
+    val channelSurf: Boolean = false,
+    /** Parts of the full-screen bar switched off (⚙ → Play bar layout), comma separated. */
+    val barHidden: String = "",
+    /** Parts of the guide's info panel that are switched off (see GuideInfoPart), comma separated. */
+    val guideInfoHidden: String = "",
+    /** Rows on the launcher home screen: "sports", "favorites", "recent" (comma separated; empty = none). */
+    val launcherRows: String = ""
 )
 
 data class LiveUserState(
@@ -490,7 +519,6 @@ val LiveTvSettings.effectiveStartPage: String
  * or symbol group, so "US" never cuts the start of "USA Network".
  */
 object ChannelNameEditor {
-    private const val SEP = """[\s:|\-–—/.•*]*"""
 
     fun terms(raw: String): List<String> =
         raw.split(',').map { it.trim() }.filter { it.isNotEmpty() }.distinct().sortedByDescending { it.length }
@@ -518,27 +546,43 @@ object ChannelNameEditor {
      * through all the patterns and made channel lists with these terms slow to load.
      */
     private fun atEdge(lower: String, terms: List<String>): Boolean {
-        val start = lower.trimStart('[', '(', '|', ' ')
-        val end = lower.trimEnd(']', ')', '|', ' ')
-        return terms.any { t -> start.startsWith(t) || end.endsWith(t) }
+        // Providers wrap names in all sorts of symbols ("US ➤ ESPN", "★ UK | Sky", "|US| ESPN"),
+        // so look past any leading or trailing symbols, not just brackets.
+        val start = lower.trimStart { !it.isLetterOrDigit() }
+        val end = lower.trimEnd { !it.isLetterOrDigit() }
+        val rawStart = lower.trimStart()
+        val rawEnd = lower.trimEnd()
+        return terms.any { t ->
+            start.startsWith(t) || end.endsWith(t) || rawStart.startsWith(t) || rawEnd.endsWith(t)
+        }
     }
 
     private fun compile(terms: List<String>): List<Compiled> {
         if (terms == compiledFor) return compiled
         val list = terms.map { t ->
             val q = Regex.escape(t)
-            // Prefix: "USA: ESPN", "[USA] ESPN", "|US| ESPN", "USA - ESPN". A plain word needs
-            // brackets or punctuation after it, so "USA" never eats "USA Network".
+            val opts = setOf(RegexOption.IGNORE_CASE)
+            // A plain ASCII word or number must stand alone ("HD" is not the end of "XHD", "4K"
+            // is not the start of "4KIDS"). Tags written in special letters (ᴴᴰ) can be stuck on.
+            val ascii = t.all { it.code < 128 && it.isLetterOrDigit() }
+            val before = if (ascii) """(?<![\p{L}\p{N}])""" else ""
+            val after = if (ascii) """(?![\p{L}\p{N}])""" else ""
+            // Prefix: "USA: ESPN", "[USA] ESPN", "|US| ESPN", "USA - ESPN", "US ➤ ESPN". A plain
+            // word needs a symbol after it (closing bracket, colon, bar, arrow...), so "USA"
+            // never eats "USA Network".
             val prefix = if (t.all { it.isLetter() }) {
-                Regex("""^(?:[\[(|]$q[\])|]|$q\s*[:|\-–—/.•*]+)\s*""", RegexOption.IGNORE_CASE)
+                Regex(
+                    """^[^\p{L}\p{N}]*$q\s*[^\p{L}\p{N}\s(\[{<][^\p{L}\p{N}(\[{<]*""",
+                    opts
+                )
             } else {
-                Regex("""^[\[(|]?$q[\])|]?$SEP""", RegexOption.IGNORE_CASE)
+                Regex("""^[^\p{L}\p{N}]*$q$after[^\p{L}\p{N}(\[{<]*""", opts)
             }
-            // Suffix: "ESPN HD", "ESPN (US)", "ESPN | FHD", "ESPN 24/7"
+            // Suffix: "ESPN HD", "ESPN (US)", "ESPN | FHD", "ESPN 24/7", "ESPN ➤ US"
             Compiled(
                 prefix,
-                Regex("""$SEP[\[(|]?$q[\])|]?$""", RegexOption.IGNORE_CASE),
-                Regex("""(^|[\s:|\-–—/.•*\[(])[\[(|]?$q[\])|]?$""", RegexOption.IGNORE_CASE)
+                Regex("""[^\p{L}\p{N}+&)\]}]*$before$q[^\p{L}\p{N}]*$""", opts),
+                Regex("""$before$q[^\p{L}\p{N}]*$""", opts)
             )
         }
         compiled = list
@@ -591,6 +635,13 @@ object DeveloperTools {
  * (developer tools): shows whether the saved channel list and guide were used, and why not.
  */
 object LiveTvLoadReport {
+    /** Which Live TV kit this app was built from: changed with every kit, so a report shows the exact build. */
+    const val KIT_STAMP = "2026-10-25 19:05"
+
+    /** The first line of every report: kit and app version, so it's clear which build wrote it. */
+    val buildLine: String
+        get() = "Build: kit $KIT_STAMP · app ${com.nuvio.tv.BuildConfig.VERSION_NAME} (${com.nuvio.tv.BuildConfig.VERSION_CODE})"
+
     private val startedAt = System.currentTimeMillis()
     val lines = kotlinx.coroutines.flow.MutableStateFlow<List<String>>(emptyList())
     fun add(text: String) {
@@ -602,3 +653,6 @@ object LiveTvLoadReport {
 /** Guide Size, with the old "Slimmer Rows" switch standing in until a size is picked. */
 val LiveTvSettings.effectiveGuideSize: String
     get() = guideSize.ifBlank { if (compactRows) "COMPACT" else "STANDARD" }
+
+/** Match Frame Rate is on (either way). */
+val LiveTvSettings.matchFrameRate: Boolean get() = frameRateMode != "OFF"

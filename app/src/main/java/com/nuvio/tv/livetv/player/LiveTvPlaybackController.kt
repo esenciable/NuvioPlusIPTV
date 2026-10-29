@@ -93,7 +93,11 @@ class LiveTvPlaybackController @Inject constructor(
 
     // ---------------------------------------------------------------- pause and rewind
 
-    private val timeshift = LiveTvTimeshift(context)
+    private val timeshift = LiveTvTimeshift(context).also {
+        // Nothing is recording when the app starts: whatever's left from last time (the app
+        // closed or the box switched off while paused) goes.
+        it.cleanLeftovers(listOf(java.io.File(context.cacheDir, "timeshift"), it.baseDir))
+    }
     /**
      * Catch-up replays (TS) saved to the device while they play, and played from there: skipping
      * back is instant, and so is skipping ahead as far as the replay has come in. Before, every
@@ -152,11 +156,17 @@ class LiveTvPlaybackController @Inject constructor(
     /** The buffer goes on the drive set for recordings (a USB drive has far more room). */
     fun setBufferStorage(id: String) {
         if (id == bufferStorageId) return
+        val first = bufferStorageId == null
         bufferStorageId = id
+        val old = timeshift.baseDir
         timeshift.baseDir = java.io.File(
             com.nuvio.tv.livetv.record.RecordingStorage.resolve(context, id).dir.parentFile ?: context.cacheDir,
             "timeshift"
         )
+        // The drive's own leftovers on first use this session (nothing is recording yet), and
+        // the old place's when the setting changes.
+        timeshift.cleanLeftovers(listOf(timeshift.baseDir), olderThanMs = if (first) 60_000L else 15 * 60_000L)
+        if (old != timeshift.baseDir) timeshift.cleanLeftovers(listOf(old), olderThanMs = 15 * 60_000L)
     }
 
     /** The current buffer was started by Rewind Anytime (not by pausing). */
@@ -300,7 +310,11 @@ class LiveTvPlaybackController @Inject constructor(
         shiftJob = scope.launch {
             delay(1_500)
             if (timeshift.session != session) return@launch
-            p.setMediaSource(localRecordingSource(session.playUri), positionMs.coerceAtLeast(0L))
+            // Never below what's actually still in the buffer (older parts may have been
+            // trimmed since): a position earlier than that would just fail the same way again.
+            val startAt = positionMs.coerceAtLeast(timeshift.trimmedMs)
+            shiftStartPending = startAt == 0L
+            p.setMediaSource(localRecordingSource(session.playUri), startAt)
             p.prepare()
             p.playWhenReady = true
             shiftPrepared = true
@@ -314,6 +328,8 @@ class LiveTvPlaybackController @Inject constructor(
     /** Non-null while playing from a pause-and-rewind recording: when the recording started. */
     val shiftStartedAt: StateFlow<Long?> = _shiftStartedAt.asStateFlow()
     private var shiftPrepared = false
+    /** Pause buffer: a start position of 0 that still has to be applied once the buffer's real timeline is in (see onTimelineChanged). */
+    @Volatile private var shiftStartPending = false
     private var shiftJob: Job? = null
 
     /** Wall-clock time of what's on screen while playing a recording, or null. */
@@ -335,6 +351,9 @@ class LiveTvPlaybackController @Inject constructor(
      * both. Pause and skipping back work as in any recording.
      */
     val recordingPlayback: StateFlow<java.io.File?> = _recordingPlayback.asStateFlow()
+    /** True from pressing Record on the channel being watched until its recording starts playing. */
+    private val _recordingStarting = MutableStateFlow(false)
+    val recordingStarting: StateFlow<Boolean> = _recordingStarting.asStateFlow()
 
     /** Lets go of the provider connection, so a recording of this channel can use it. */
     fun handOverForRecording() {
@@ -349,13 +368,22 @@ class LiveTvPlaybackController @Inject constructor(
         currentUrl?.takeIf { currentChannel?.key == channel.key && _state.value.catchupTitle == null } ?: channel.url
 
     /** Plays [playlist] (a recording that's still being made), a few seconds behind live. */
-    fun playFromRecording(playlist: java.io.File) {
+    fun playFromRecording(playlist: java.io.File, fromStart: Boolean = false) {
         val p = _player ?: return
         _recordingPlayback.value = playlist
+        _recordingStarting.value = true
         shiftJob?.cancel()
         shiftJob = scope.launch {
+          try {
             var waited = 0
+            // Wait until about 15 s are saved: playing right behind the newest piece stalls
+            // whenever a piece comes in late (the freezes while watching a channel you record).
+            fun savedSec(): Double = runCatching {
+                playlist.readLines().filter { it.startsWith("#EXTINF:") }
+                    .sumOf { it.removePrefix("#EXTINF:").substringBefore(',').toDoubleOrNull() ?: 0.0 }
+            }.getOrDefault(0.0)
             while (waited < 20_000 && !(playlist.exists() && playlist.length() > 0)) { delay(250); waited += 250 }
+            while (!fromStart && waited < 20_000 && savedSec() < 15.0) { delay(250); waited += 250 }
             if (_recordingPlayback.value != playlist) return@launch
             if (!playlist.exists()) {
                 // Nothing came in: back to the live stream.
@@ -363,9 +391,18 @@ class LiveTvPlaybackController @Inject constructor(
                 currentChannel?.let { ch -> currentUrl = null; play(ch) }
                 return@launch
             }
-            p.setMediaSource(localRecordingSource(android.net.Uri.fromFile(playlist)))
+            p.setMediaSource(localRecordingSource(android.net.Uri.fromFile(playlist), 15_000))
             p.prepare()
             p.playWhenReady = true
+            if (fromStart) {
+                // A growing playlist opens near its newest piece: once it's ready, go back to the start.
+                var ready = 0
+                while (ready < 8_000 && p.playbackState != androidx.media3.common.Player.STATE_READY) { delay(100); ready += 100 }
+                if (_recordingPlayback.value == playlist) p.seekTo(0L)
+            }
+          } finally {
+            _recordingStarting.value = false
+          }
         }
     }
 
@@ -384,18 +421,21 @@ class LiveTvPlaybackController @Inject constructor(
      */
     fun pauseLive() {
         val p = _player ?: return
-        if (_recordingPlayback.value != null) { p.pause(); return }
+        if (_recordingPlayback.value != null) { com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Pause buffer: paused a saved recording"); p.pause(); return }
         val ch = currentChannel
-        if (_shiftStartedAt.value != null) { p.pause(); return }
+        if (_shiftStartedAt.value != null) { com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Pause buffer: paused again inside the buffer"); p.pause(); return }
         if (ch == null || _state.value.catchupTitle != null || !timeshiftEnabled || !timeshift.hasRoomFor(timeshiftMinutes)) {
+            com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Pause buffer: plain pause, no recording (channel=${ch != null}, catchup=${_state.value.catchupTitle != null}, setting on=$timeshiftEnabled, room=${timeshift.hasRoomFor(timeshiftMinutes)})")
             p.pause(); return
         }
+        com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Pause buffer: pausing; recording started")
         val url = currentUrl ?: ch.url
         p.pause()
         p.stop() // hand the provider connection over to the recording
         val session = timeshift.start(url, ch.headers, timeshiftMinutes)
         if (session == null) {
             // Couldn't record: back to the live stream, paused.
+            com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Pause buffer: couldn't start recording (no room, or provider refused); paused live instead")
             p.setMediaSource(buildMediaSource(url, ch.headers, isLive = true)); p.prepare(); p.playWhenReady = false
             return
         }
@@ -407,8 +447,9 @@ class LiveTvPlaybackController @Inject constructor(
     /** Play from the recording (first time: once there's something recorded to play). */
     private fun resumeShift() {
         val p = _player ?: return
-        val session = timeshift.session ?: return
-        if (shiftPrepared) { p.play(); return }
+        val session = timeshift.session
+        if (session == null) { com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Pause buffer: play pressed but there is no recording session"); return }
+        if (shiftPrepared) { com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Pause buffer: play pressed (playing from the buffer)"); p.play(); return }
         shiftJob?.cancel()
         shiftJob = scope.launch {
             // Wait until the first part is saved (a few seconds). Never left stuck: if the
@@ -417,7 +458,9 @@ class LiveTvPlaybackController @Inject constructor(
             _state.value = _state.value.copy(isBuffering = true)
             var waited = 0
             val f = java.io.File(session.playUri.path ?: "")
-            while (waited < 12_000) {
+            // Up to 25 s: a provider that allows one connection can take a while to let go of
+            // the one the player had, and the recording keeps trying meanwhile.
+            while (waited < 25_000) {
                 if (f.exists() && f.length() > 0) break
                 if (!timeshift.isRecording && waited > 2_000) break
                 delay(250); waited += 250
@@ -428,11 +471,21 @@ class LiveTvPlaybackController @Inject constructor(
                 goLive()
                 return@launch
             }
+            com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Pause buffer: first piece saved after ${waited / 1000.0}s; playing from the pause point")
             // Both kinds are a local playlist of pieces now (TS streams are cut up as recorded).
             val source = localRecordingSource(session.playUri)
-            // Start where you paused: the start position is given with the source (a seek to 0
-            // made before the player has read the playlist is ignored, and a growing playlist
-            // would otherwise start near its end).
+            // Start where you paused: the recording began the instant you paused, so its very
+            // start (0) is where you paused, near enough. The start position is given with the
+            // source itself (a seek to 0 made after the player has already read the playlist
+            // would be ignored, and a growing playlist would otherwise start near its end) —
+            // and it has to be 0 exactly: an offset guessed from the provider's own look-back
+            // window could land outside what the player considers the valid live window and
+            // get rejected, which is what made resuming slow and land back near live instead of
+            // where you paused.
+            // A start of 0 given with the source is read as "no start given" and a growing
+            // playlist then begins at its newest end (live). So it's set again as a real seek
+            // as soon as the stream's own timeline arrives (onTimelineChanged).
+            shiftStartPending = true
             p.setMediaSource(source, 0L)
             p.prepare()
             p.playWhenReady = true
@@ -445,14 +498,14 @@ class LiveTvPlaybackController @Inject constructor(
      * growing "live" playlist the player would otherwise speed up a little to catch up with the
      * end of it, creeping towards live.
      */
-    internal fun localRecordingSource(uri: android.net.Uri): androidx.media3.exoplayer.source.MediaSource {
+    internal fun localRecordingSource(uri: android.net.Uri, offsetMs: Long = 8_000): androidx.media3.exoplayer.source.MediaSource {
         val item = MediaItem.Builder()
             .setUri(uri)
             .setMimeType(MimeTypes.APPLICATION_M3U8)
             .setLiveConfiguration(
                 // "Live" here means a few seconds behind the newest piece (not 3 target lengths).
                 MediaItem.LiveConfiguration.Builder().setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f)
-                    .setTargetOffsetMs(8_000).build()
+                    .setTargetOffsetMs(offsetMs).build()
             )
             .build()
         return androidx.media3.exoplayer.hls.HlsMediaSource.Factory(androidx.media3.datasource.DefaultDataSource.Factory(context))
@@ -488,6 +541,7 @@ class LiveTvPlaybackController @Inject constructor(
 
     private fun stopShift() {
         alwaysBuffer = false
+        shiftStartPending = false
         shiftReloads = 0
         shiftJob?.cancel()
         shiftJob = null
@@ -606,6 +660,12 @@ class LiveTvPlaybackController @Inject constructor(
         /** Catch-up: the real time the replay should start at (the show's start). */
         catchupStartMs: Long? = null
     ) {
+        // Something chosen to play (back from the background through a launcher row, say):
+        // that wins over picking up what was on before. Cleared BEFORE the native resolve below:
+        // a native channel returns early from play(), and a state left behind there would still
+        // win over the playback the viewer just asked for.
+        resumeAfterBackground = null
+        shiftStartPending = false
         // A placeholder URL is not a stream: resolve it first, then play the resolved copy. Every
         // playback entry point comes through here, so no screen has to know a channel is native.
         if (overrideUrl == null) {
@@ -633,6 +693,8 @@ class LiveTvPlaybackController @Inject constructor(
         if (currentChannel?.key != channel.key || currentUrl != url) {
             forcedMime = null
             formatGuess = 0
+            // A new stream (catch-up, another link): ask for the saved audio language again.
+            audioPrefPending = true
         }
         // A channel whose "HLS" turned out to be plain TS: read it as TS from the start.
         if (catchupTitle == null && channel.key in plainTs && overrideUrl == null) forcedMime = MimeTypes.VIDEO_MP2T
@@ -921,17 +983,73 @@ class LiveTvPlaybackController @Inject constructor(
 
     private var pausedForBackground = false
 
-    /** The app left the screen (Home button, another app): stop the sound. */
+    private var backgroundJob: Job? = null
+    /** Set when the channel's connection was let go in the background: how to pick it up again. */
+    private var resumeAfterBackground: (() -> Unit)? = null
+
+    /**
+     * The app left the screen (Home button, another app): stop the sound straight away, and
+     * a few seconds later let go of the provider connection (and any pause buffer), so the line
+     * is free for another device. A quick overlay (a voice search, a system message) doesn't
+     * drop the channel; going to the launcher does. Scheduled recordings carry on.
+     */
     fun onAppBackground() {
         val p = _player ?: return
         if (p.playWhenReady) {
             pausedForBackground = true
             p.pause()
         }
+        backgroundJob?.cancel()
+        backgroundJob = scope.launch {
+            delay(5_000)
+            disconnectForBackground()
+        }
+    }
+
+    private fun disconnectForBackground() {
+        val p = _player ?: return
+        val ch = currentChannel ?: return
+        // A recording on this device: nothing to let go of.
+        if (_recordingPlayback.value != null) return
+        if (resumeAfterBackground != null) return
+        val wasPlaying = pausedForBackground
+        val url = currentUrl
+        val title = _state.value.catchupTitle
+        val start = archiveStartWallMs
+        val pos = p.currentPosition
+        resumeAfterBackground = {
+            if (title != null) {
+                // Catch-up: the same replay, back where you were.
+                play(ch, url, title, catchupStartMs = start)
+                scope.launch {
+                    var waited = 0
+                    while (waited < 15_000 && _player?.playbackState != Player.STATE_READY) { delay(200); waited += 200 }
+                    _player?.let { pl -> if (pos > 0) pl.seekTo(pos); if (!wasPlaying) pl.pause() }
+                }
+            } else {
+                currentUrl = null
+                play(ch, overrideUrl = url.takeIf { it != ch.url })
+            }
+        }
+        stopShift()
+        stopReplayCache()
+        reconnectJob?.cancel()
+        stallJob?.cancel()
+        stallJob = null
+        p.stop()
+        com.nuvio.tv.livetv.model.LiveTvLoadReport.add("App in the background: ${ch.name} stopped, so the line is free for another device")
     }
 
     /** Back in the app: carry on, jumping to the live edge for live channels. */
     fun onAppForeground() {
+        backgroundJob?.cancel()
+        backgroundJob = null
+        resumeAfterBackground?.let { r ->
+            resumeAfterBackground = null
+            pausedForBackground = false
+            r()
+            return
+        }
         if (!pausedForBackground) return
         pausedForBackground = false
         val p = _player ?: return
@@ -1108,7 +1226,10 @@ class LiveTvPlaybackController @Inject constructor(
         audioHandled = true
         selectTrack(C.TRACK_TYPE_AUDIO, option)
         val key = currentChannel?.key ?: return
-        val saved = listOf(option.language.orEmpty(), option.label, option.channels.toString()).joinToString("|")
+        // Its place in the list too: streams often have several tracks with the same name and no
+        // language ("AAC 2ch" twice), and the name alone picked the first of them every time.
+        val position = tracksOf(C.TRACK_TYPE_AUDIO).indexOfFirst { it.groupIndex == option.groupIndex && it.trackIndex == option.trackIndex }
+        val saved = listOf(option.language.orEmpty(), option.label, option.channels.toString(), position.toString()).joinToString("|")
         channelAudio = channelAudio + (key to saved)
         _player?.let { p ->
             // Later streams on this channel (catch-up, a reconnect) start in this language too.
@@ -1125,21 +1246,28 @@ class LiveTvPlaybackController @Inject constructor(
      * main or audio description), by its label and number of channels.
      */
     private fun applySavedAudio() {
-        if (audioHandled) return
         val key = currentChannel?.key ?: return
         val options = tracksOf(C.TRACK_TYPE_AUDIO)
         if (options.isEmpty()) return
+        // Checked every time the tracks change, not just once per channel: a reconnect or a
+        // catch-up brings new tracks, and the player went back to the stream's default audio.
         audioHandled = true
         val parts = channelAudio[key]?.split('|') ?: return
         val lang = parts.getOrNull(0).orEmpty()
         val label = parts.getOrNull(1).orEmpty()
         val chans = parts.getOrNull(2)?.toIntOrNull() ?: 0
+        val position = parts.getOrNull(3)?.toIntOrNull() ?: -1
         fun sameLang(o: LiveTrackOption) = lang.isNotBlank() && o.language != null &&
             java.util.Locale.forLanguageTag(o.language).language == java.util.Locale.forLanguageTag(lang).language
-        val pick = options.firstOrNull { it.label == label }
-            ?: options.firstOrNull { sameLang(it) && it.channels == chans }
-            ?: options.firstOrNull { sameLang(it) }
-            ?: return
+        val sameName = options.filter { it.label == label }
+        val pick = when {
+            sameName.size == 1 -> sameName[0]
+            // Several with that name: the one in the same place as before.
+            sameName.size > 1 -> options.getOrNull(position)?.takeIf { it.label == label } ?: sameName[0]
+            else -> options.firstOrNull { sameLang(it) && it.channels == chans }
+                ?: options.firstOrNull { sameLang(it) }
+                ?: options.getOrNull(position)?.takeIf { lang.isBlank() && (chans == 0 || it.channels == chans) }
+        } ?: return
         if (!pick.selected) selectTrack(C.TRACK_TYPE_AUDIO, pick)
     }
     /**
@@ -1356,6 +1484,17 @@ class LiveTvPlaybackController @Inject constructor(
         }
 
         override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+            if (shiftStartPending && !timeline.isEmpty) {
+                val pl = _player
+                if (pl != null) {
+                    val w = timeline.getWindow(pl.currentMediaItemIndex.coerceIn(0, timeline.windowCount - 1), androidx.media3.common.Timeline.Window())
+                    if (!w.isPlaceholder) {
+                        shiftStartPending = false
+                        pl.seekTo(0L)
+                        com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Pause buffer: timeline in (buffer holds ${if (w.durationMs != C.TIME_UNSET) w.durationMs / 1000 else -1} s); started at the pause point (was at ${pl.currentPosition / 1000} s)")
+                    }
+                }
+            }
             if (!archiveStartPending || timeline.isEmpty) return
             val p = _player ?: return
             val window = timeline.getWindow(p.currentMediaItemIndex.coerceIn(0, timeline.windowCount - 1), androidx.media3.common.Timeline.Window())
@@ -1443,7 +1582,11 @@ class LiveTvPlaybackController @Inject constructor(
                 if (System.currentTimeMillis() - bufferStartedAt < 20_000) bufferFailed() else goLiveFresh()
                 return
             }
-            if (_shiftStartedAt.value != null) { Log.w(TAG, "Recording playback failed", error); goLive(); return }
+            if (_shiftStartedAt.value != null) {
+                Log.w(TAG, "Recording playback failed", error)
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Pause buffer: playback error ${error.errorCodeName} (recording=${timeshift.isRecording}, reloads=$shiftReloads); back to live")
+                goLive(); return
+            }
             if (_recordingPlayback.value != null) { Log.w(TAG, "Playing from the recording failed", error); recordingPlaybackEnded(); return }
             // The saved catch-up couldn't be played: play the replay straight from the provider.
             if (replayLocal) {
@@ -1829,6 +1972,9 @@ class LiveTvPlaybackController @Inject constructor(
     }
 
     private fun release() {
+        backgroundJob?.cancel()
+        backgroundJob = null
+        resumeAfterBackground = null
         clearStarting()
         stopShift()
         reconnectJob?.cancel()

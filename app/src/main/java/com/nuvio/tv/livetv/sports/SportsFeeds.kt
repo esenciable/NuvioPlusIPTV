@@ -61,8 +61,13 @@ internal class SportsFeeds {
     fun teamScheduleRaw(leaguePath: String, teamId: String, fixtures: Boolean): String =
         get("$ESPN$leaguePath/teams/$teamId/schedule" + if (fixtures) "?fixture=true" else "")
 
-    fun summary(league: League, espnId: String): List<ScoringPlay> =
-        parseSummary(JSONObject(get("$ESPN${league.espnPath}/summary?event=$espnId")))
+    fun summary(league: League, espnId: String): List<ScoringPlay> = parseSummary(summaryJson(league, espnId))
+
+    /** A game's whole summary (scoring, stats, leaders, standings, venue…). */
+    fun summaryJson(league: League, espnId: String): JSONObject = JSONObject(get("$ESPN${league.espnPath}/summary?event=$espnId"))
+
+    /** A league table (ESPN's standings address, see [Standings.espnUrl]). */
+    fun standingsRaw(url: String): String = get(url)
 
     // ------------------------------------------------------------------ sporting-events.org
 
@@ -231,7 +236,8 @@ internal class SportsFeeds {
             val arr = root.optJSONArray("events") ?: return out
             for (i in 0 until arr.length()) {
                 val e = arr.optJSONObject(i) ?: continue
-                val name = e.str("name") ?: continue
+                // "NXT - October 20th 2026" -> "NXT" (the card shows the date).
+                val name = e.str("name")?.let { withoutAirDate(it) } ?: continue
                 val leagueId = wrestlingLeague(e.str("league"))
                 val league = SportsCatalog.league(leagueId)
                 val hasTime = e.optBoolean("hasTime", true)
@@ -452,7 +458,8 @@ internal class SportsFeeds {
                 // Likewise "not started" between a tournament's first day and its last (no match on
                 // yet that day): it's under way.
                 val nowMs = System.currentTimeMillis()
-                val underWay = multiDay && end != null && end > nowMs && start <= nowMs
+                // (The end date is the start of the last day, so the last day counts too.)
+                val underWay = multiDay && end != null && end + 24 * 3_600_000L > nowMs && start <= nowMs
                 val evState = if (underWay && (state == GameState.POST || state == GameState.PRE)) GameState.LIVE else state
                 return SportsEvent(
                     id = "espn:${league.id}:$espnId",

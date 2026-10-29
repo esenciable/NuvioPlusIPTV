@@ -27,6 +27,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -91,6 +92,10 @@ fun OnDemandHomeScreen(
     LaunchedEffect(Unit) { viewModel.loadHome() }
 
     var showManage by remember { mutableStateOf(false) }
+    // The card last highlighted, for the Menu button's "Fix poster".
+    var lastFocusedCard by remember { mutableStateOf<String?>(null) }
+    var cardMenu by remember { mutableStateOf<VodItem?>(null) }
+    var fixFor by remember { mutableStateOf<VodItem?>(null) }
     var providerItem by remember { mutableStateOf<VodItem?>(null) }
     // "See all" on a row: that row in Nuvio's See all grid, over this page.
     var seeAllUid by remember { mutableStateOf<String?>(null) }
@@ -241,7 +246,7 @@ fun OnDemandHomeScreen(
         }
     }
     val onNavigateToDetail: (String, String, String) -> Unit = { id, _, _ -> open(id) }
-    val onItemFocus: (MetaPreview) -> Unit = { viewModel.focusHome(it.id) }
+    val onItemFocus: (MetaPreview) -> Unit = { lastFocusedCard = it.id; viewModel.focusHome(it.id) }
     // Grid layout: "On Demand - <playlist>" at the top, for the title you're on.
     val homeHeader by viewModel.homeHeader.collectAsStateWithLifecycle()
     val loadMore: (String, String, String) -> Unit = { catalogId, _, _ -> viewModel.loadMoreHome(catalogId) }
@@ -300,7 +305,12 @@ fun OnDemandHomeScreen(
             .fillMaxSize()
             .onPreviewKeyEvent { e ->
                 // Menu button: Manage VOD Groups, from anywhere on the page.
-                if (e.type == KeyEventType.KeyDown && e.key == Key.Menu) { showManage = true; true } else false
+                if (e.type == KeyEventType.KeyDown && e.key == Key.Menu) {
+                    // On a title: Fix poster or Manage VOD Groups. Elsewhere: Manage VOD Groups.
+                    val item = lastFocusedCard?.let { viewModel.homeItem(it) }
+                    if (item != null) cardMenu = item else showManage = true
+                    true
+                } else false
             }
     ) {
         when {
@@ -459,6 +469,32 @@ fun OnDemandHomeScreen(
         )
     }
 
+    cardMenu?.let { item ->
+        val first = remember { androidx.compose.ui.focus.FocusRequester() }
+        com.nuvio.tv.livetv.ui.LiveDialog(onDismiss = { cardMenu = null }, width = 460.dp) {
+            com.nuvio.tv.livetv.ui.LiveText(OnDemandDatabase.displayTitle(item.name), size = 20.sp, weight = androidx.compose.ui.text.font.FontWeight.Bold, maxLines = 2)
+            androidx.compose.foundation.layout.Spacer(Modifier.height(14.dp))
+            androidx.compose.foundation.layout.Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)) {
+                com.nuvio.tv.livetv.ui.MenuItem("Fix poster", Modifier.focusRequester(first)) { cardMenu = null; fixFor = item }
+                com.nuvio.tv.livetv.ui.MenuItem("Manage VOD Groups") { cardMenu = null; showManage = true }
+            }
+        }
+        LaunchedEffect(Unit) { kotlinx.coroutines.delay(60); runCatching { first.requestFocus() } }
+    }
+    fixFor?.let { item ->
+        com.nuvio.tv.livetv.ui.TextInputDialog(
+            title = "Fix poster",
+            initial = OnDemandDatabase.displayTitle(item.name) + (item.year?.let { " ($it)" } ?: ""),
+            hint = "The movie or series name, and the year if you know it, like Dune (2021). Leave it empty to go back to automatic.",
+            confirmLabel = "Save",
+            onDismiss = { fixFor = null },
+            onConfirm = { text ->
+                fixFor = null
+                val (name, year) = splitFixYear(text)
+                viewModel.fixPoster(item, name, year)
+            }
+        )
+    }
     if (showManage) {
         ManageVodGroupsPanel(
             groups = state.groups,
@@ -583,3 +619,14 @@ object OnDemandBackdropGuard {
         com.nuvio.tv.ui.screens.home.HeroBackdropState.lastDisplayedUrl = homeBackdrop
     }
 }
+
+/** "Dune (2021)" or "Dune 2021" -> ("Dune", 2021); a name without a year -> (name, null). */
+internal fun splitFixYear(text: String): Pair<String, Int?> {
+    val t = text.trim()
+    val m = FIX_YEAR.find(t) ?: return t to null
+    val name = t.substring(0, m.range.first).trim()
+    if (name.isEmpty()) return t to null
+    return name to m.groupValues[1].toIntOrNull()
+}
+
+private val FIX_YEAR = Regex("\\s*\\(?((?:19|20)\\d{2})\\)?\\s*$")

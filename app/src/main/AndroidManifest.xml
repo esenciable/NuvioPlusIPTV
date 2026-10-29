@@ -69,6 +69,12 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- Live TV fork: the pictures for the launcher's home screen rows. -->
+        <provider
+            android:name=".livetv.home.LauncherImageProvider"
+            android:authorities="${applicationId}.launcherimg"
+            android:exported="true" />
+
         <receiver
             android:name=".core.sync.androidtv.TvChannelBootReceiver"
             android:exported="true">

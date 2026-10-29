@@ -127,6 +127,8 @@ private fun OverlayModeContent(
     val playback by viewModel.playbackState.collectAsStateWithLifecycle()
     val user by viewModel.userState.collectAsStateWithLifecycle()
     val now by viewModel.now.collectAsStateWithLifecycle()
+    val playlistNames by viewModel.playlistNames.collectAsStateWithLifecycle()
+    val collapsed by viewModel.collapsedPlaylists.collectAsStateWithLifecycle()
     val use24h = settings.use24HourClock
 
     val channels = ui.channels
@@ -138,6 +140,11 @@ private fun OverlayModeContent(
     var panelsWidthPx by remember { mutableStateOf(0) }
     var chIndex by remember { mutableIntStateOf(channels.indexOfFirst { it.key == playback.channelKey }.coerceAtLeast(0)) }
     var groupIndex by remember { mutableIntStateOf(groups.indexOfFirst { it.id == ui.selectedGroupId }.coerceAtLeast(0)) }
+    // Group by Playlist (more than one playlist): playlist headings in the group list, which
+    // OK folds and unfolds like in the guide. [headingAt] is the heading highlighted, if any.
+    val headed = settings.groupPlaylistHeadings && groups.mapNotNull { it.sourceId }.distinct().size > 1
+    val groupRows = remember(groups, headed, collapsed) { overlayGroupRows(groups, headed, collapsed) }
+    var headingAt by remember { mutableStateOf<String?>(null) }
     var scheduleChannel by remember { mutableStateOf<LiveChannel?>(null) }
     var rowIndex by remember { mutableIntStateOf(0) }
     var dateIndex by remember { mutableIntStateOf(0) }
@@ -242,6 +249,17 @@ private fun OverlayModeContent(
         viewModel.selectGroup(groups[groupIndex].id)
     }
 
+    /** Up / Down in the group list: onto the next group or playlist heading. */
+    fun moveGroup(delta: Int) {
+        if (groupRows.isEmpty()) return
+        val at = headingAt
+        val pos = if (at != null) groupRows.indexOfFirst { it.group < 0 && it.source == at }
+        else groupRows.indexOfFirst { it.group == groupIndex }
+        val next = groupRows[(pos.coerceAtLeast(0) + delta).coerceIn(0, groupRows.lastIndex)]
+        if (next.group < 0) headingAt = next.source
+        else { headingAt = null; selectGroupAt(next.group) }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -261,6 +279,11 @@ private fun OverlayModeContent(
                         e.key == Key.PageDown || e.key == Key.ChannelDown -> chIndex = (chIndex + 8).coerceAtMost((channels.size - 1).coerceAtLeast(0))
                         e.key == Key.DirectionLeft -> {
                             groupIndex = groups.indexOfFirst { it.id == ui.selectedGroupId }.coerceAtLeast(0)
+                            headingAt = null
+                            // The group showing is in a folded playlist: unfold it, so it can be seen.
+                            groups.getOrNull(groupIndex)?.sourceId?.let { src ->
+                                if (headed && src in collapsed) viewModel.togglePlaylistCollapsed(src)
+                            }
                             level = OverlayLevel.GROUPS
                         }
                         e.key == Key.DirectionRight -> focusedChannel?.let { openSchedule(it) }
@@ -271,9 +294,11 @@ private fun OverlayModeContent(
                         e.key == Key.Back -> onClose()
                     }
                     OverlayLevel.GROUPS -> when {
-                        e.key == Key.DirectionUp -> selectGroupAt(groupIndex - 1)
-                        e.key == Key.DirectionDown -> selectGroupAt(groupIndex + 1)
-                        e.key == Key.DirectionRight || isOk || e.key == Key.Back -> level = OverlayLevel.CHANNELS
+                        e.key == Key.DirectionUp -> moveGroup(-1)
+                        e.key == Key.DirectionDown -> moveGroup(1)
+                        // OK on a playlist heading: fold or unfold it (the highlight stays on it).
+                        isOk && headingAt != null -> headingAt?.let { viewModel.togglePlaylistCollapsed(it) }
+                        e.key == Key.DirectionRight || isOk || e.key == Key.Back -> { headingAt = null; level = OverlayLevel.CHANNELS }
                         e.key == Key.DirectionLeft -> Unit
                     }
                     OverlayLevel.SCHEDULE -> when {
@@ -300,7 +325,7 @@ private fun OverlayModeContent(
         Row(modifier = Modifier.fillMaxHeight().onSizeChanged { panelsWidthPx = it.width }) {
             when (level) {
                 OverlayLevel.GROUPS -> {
-                    GroupsPanel(groups, groupIndex, settings.showGroupCounts)
+                    GroupsPanel(groups, groupRows, groupIndex, headingAt, settings.showGroupCounts, playlistNames, collapsed)
                     ChannelsPanel(ui.groups.firstOrNull { it.id == ui.selectedGroupId }?.title ?: "Channels",
                         channels, chIndex, focused = false, playback.channelKey, programs, now, user.favorites, settings.showChannelNumbers, settings.showChannelLogos)
                 }
@@ -346,7 +371,7 @@ private fun OverlayModeContent(
                     LiveText(it, size = osp(13f), color = Color.White.copy(alpha = 0.75f))
                 }
                 Spacer(Modifier.height(8.dp))
-                LiveText(about.description.orEmpty(), size = osp(13f), color = Color.White.copy(alpha = 0.85f), maxLines = 6)
+                ScrollingDescription(about.description.orEmpty(), size = osp(13f), color = Color.White.copy(alpha = 0.85f), maxLines = 6)
             }
         }
         rememberShowDetails(cardChannelKey, card)?.takeIf { cardFits }?.let { p ->
@@ -375,7 +400,7 @@ private fun OverlayModeContent(
                 }
                 p.description?.let {
                     Spacer(Modifier.height(8.dp))
-                    LiveText(it, color = NuvioTheme.colors.TextSecondary, size = osp(14f), maxLines = 4)
+                    ScrollingDescription(it, color = NuvioTheme.colors.TextSecondary, size = osp(14f), maxLines = 4)
                 }
             }
         }
@@ -532,15 +557,74 @@ private fun ChannelsPanel(
     }
 }
 
+/** A row of the overlay's group list: a group ([group] is its index) or a playlist heading ([group] -1). */
+private class GroupRow(val source: String?, val group: Int)
+
+/** The group list as the guide lays it out: groups of no playlist first, then each playlist's heading and (unless folded) its groups. */
+private fun overlayGroupRows(groups: List<ChannelGroup>, headed: Boolean, collapsed: Set<String>): List<GroupRow> {
+    if (!headed) return groups.indices.map { GroupRow(groups[it].sourceId, it) }
+    val out = ArrayList<GroupRow>()
+    groups.forEachIndexed { i, g -> if (g.sourceId == null) out += GroupRow(null, i) }
+    groups.mapNotNull { it.sourceId }.distinct().forEach { src ->
+        out += GroupRow(src, -1)
+        if (src !in collapsed) groups.forEachIndexed { i, g -> if (g.sourceId == src) out += GroupRow(src, i) }
+    }
+    return out
+}
+
 @Composable
-private fun GroupsPanel(groups: List<ChannelGroup>, index: Int, showCounts: Boolean) {
-    val state = rememberLazyListState(initialFirstVisibleItemIndex = (index - 3).coerceAtLeast(0))
-    keepVisible(state, index)
+private fun GroupsPanel(
+    groups: List<ChannelGroup>,
+    rows: List<GroupRow>,
+    index: Int,
+    headingAt: String?,
+    showCounts: Boolean,
+    playlistNames: Map<String, String>,
+    collapsed: Set<String>
+) {
+    val itemIndex = if (headingAt != null) rows.indexOfFirst { it.group < 0 && it.source == headingAt }
+    else rows.indexOfFirst { it.group == index }
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = (itemIndex - 3).coerceAtLeast(0))
+    keepVisible(state, itemIndex)
     Column(modifier = Modifier.width(250.dp).fillMaxHeight().background(PanelDark).padding(top = 20.dp)) {
         LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 12.dp)) {
-            itemsIndexed(groups, key = { _, g -> g.id }) { i, g ->
-                val colors = liveCellColors(focused = i == index, idle = Color.Transparent)
+            itemsIndexed(rows, key = { _, row -> if (row.group >= 0) groups[row.group].id else "header:${row.source}" }) { _, row ->
                 val shape = RoundedCornerShape(8.dp)
+                if (row.group < 0) {
+                    val src = row.source.orEmpty()
+                    val focused = headingAt == src
+                    val isCollapsed = src in collapsed
+                    val inSource = groups.filter { it.sourceId == src }
+                    val colors = liveCellColors(focused = focused, idle = Color.Transparent, idleText = NuvioTheme.colors.Secondary)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 2.dp)
+                            .height(orow(34f))
+                            .clip(shape)
+                            .background(colors.background)
+                            .border(2.dp, colors.border, shape)
+                            .padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        LiveText(if (isCollapsed) "▸" else "▾", color = colors.text, size = osp(13f), modifier = Modifier.width(18.dp))
+                        LiveText(
+                            (playlistNames[src] ?: "Playlist").uppercase(),
+                            color = colors.text, size = osp(12f), weight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f), marquee = focused
+                        )
+                        LiveText(
+                            // Folded, but its group is the one showing: a dot says so.
+                            if (isCollapsed && inSource.any { groups.indexOf(it) == index }) "•" else "${inSource.size}",
+                            color = if (focused) colors.text else NuvioTheme.colors.TextSecondary,
+                            size = osp(11f)
+                        )
+                    }
+                    return@itemsIndexed
+                }
+                val i = row.group
+                val g = groups[i]
+                val colors = liveCellColors(focused = headingAt == null && i == index, idle = Color.Transparent)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -552,7 +636,7 @@ private fun GroupsPanel(groups: List<ChannelGroup>, index: Int, showCounts: Bool
                         .padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    LiveText(g.title, color = colors.text, size = osp(16f), modifier = Modifier.weight(1f), marquee = i == index)
+                    LiveText(g.title, color = colors.text, size = osp(16f), modifier = Modifier.weight(1f), marquee = headingAt == null && i == index)
                     if (showCounts) LiveText(g.count.toString(), color = NuvioTheme.colors.TextSecondary, size = osp(12f))
                 }
             }

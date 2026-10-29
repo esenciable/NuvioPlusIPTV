@@ -1,5 +1,10 @@
 package com.nuvio.tv.ui.screens.settings
 
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -43,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.ui.input.key.type
@@ -50,6 +56,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.Key
+import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -74,6 +81,67 @@ import java.util.Date
 private const val LIVE_TV_TITLE = "Live TV"
 private const val LIVE_TV_SUBTITLE = "Playlists, TV guide and channel options"
 
+/**
+ * Live TV settings are one place in Settings with a row of tabs across the top of it (Setup,
+ * Guide, Playback, On Demand, Integration): [HUB] is that tabbed page. [ALL] is the old single
+ * long list, kept for the guide's long-press menu. The others are the tabs themselves.
+ */
+internal enum class LiveTvPage(val title: String, val subtitle: String, val tab: String = "") {
+    ALL("Live TV", "Playlists, TV guide and channel options"),
+    HUB("Live TV", "Playlists, TV guide and channel options"),
+    MAIN("Live TV", "Your playlists, guides, channels, groups and parental controls", "Setup"),
+    GUIDE("Live TV", "How the guide looks and behaves while you're browsing", "Guide"),
+    PLAYBACK("Live TV", "Picture, sound, pausing and recording", "Playback"),
+    ON_DEMAND("Live TV", "Movies and shows from your provider", "On Demand"),
+    INTEGRATION("Live TV", "How Live TV shows up in the rest of Nuvio", "Integration")
+}
+
+private val LIVE_TABS = listOf(LiveTvPage.MAIN, LiveTvPage.GUIDE, LiveTvPage.PLAYBACK, LiveTvPage.ON_DEMAND, LiveTvPage.INTEGRATION)
+
+/** The row of tabs across the top of Live TV settings; moving onto one shows it. */
+@Composable
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+private fun LiveTabRow(selected: LiveTvPage, first: FocusRequester?, onSelect: (LiveTvPage) -> Unit) {
+    // Coming up from the page below lands on the tab you're on, not whichever one is nearest.
+    // Only the tab you're on can take focus from outside the row; once focus is in the row, all can.
+    var rowHasFocus by remember { mutableStateOf(false) }
+    androidx.compose.foundation.layout.Row(
+        Modifier.fillMaxWidth()
+            .onFocusChanged { rowHasFocus = it.hasFocus }
+            .focusGroup(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        LIVE_TABS.forEach { tab ->
+            var focused by remember { mutableStateOf(false) }
+            val on = tab == selected
+            val shape = androidx.compose.foundation.shape.RoundedCornerShape(50)
+            Text(
+                tab.tab,
+                color = if (focused) NuvioTheme.colors.OnSecondary else if (on) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.TextSecondary,
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier
+                    .then(if (on && first != null) Modifier.focusRequester(first) else Modifier)
+                    .focusProperties { canFocus = on || rowHasFocus }
+                    .clip(shape)
+                    .background(
+                        when {
+                            focused -> NuvioTheme.colors.Secondary
+                            on -> androidx.compose.ui.graphics.Color.White.copy(alpha = 0.14f)
+                            else -> androidx.compose.ui.graphics.Color.White.copy(alpha = 0.06f)
+                        }
+                    )
+                    .onFocusChanged { focused = it.isFocused; if (it.isFocused) onSelect(tab) }
+                    .clickable { onSelect(tab) }
+                    .padding(horizontal = 18.dp, vertical = 9.dp)
+            )
+        }
+    }
+}
+
+
+/** On the four sub-tabs the sections sit open (there are only a few per tab), not folded. */
+private val LocalLiveFlat = androidx.compose.runtime.compositionLocalOf { false }
+
 /** Standalone version, opened from the guide's long-press menu. */
 @Composable
 fun LiveTvSettingsScreen(
@@ -81,9 +149,16 @@ fun LiveTvSettingsScreen(
     viewModel: LiveTvSettingsViewModel = hiltViewModel()
 ) {
     SettingsStandaloneScaffold(title = LIVE_TV_TITLE, subtitle = LIVE_TV_SUBTITLE) {
-        LiveTvSettingsContent(viewModel = viewModel)
+        LiveTvSettingsContent(viewModel = viewModel, page = LiveTvPage.ALL)
     }
 }
+
+/** Match Frame Rate's choices, worded as in Nuvio's own Playback settings. */
+private val FRAME_RATE_MODES = listOf(
+    Triple("OFF", "Off", "Don't change display refresh rate."),
+    Triple("START", "On start", "Switch when playback starts."),
+    Triple("START_STOP", "On start/stop", "Switch on start and restore on stop.")
+)
 
 private val CLOCK_MODES = listOf(
     "always" to "Always",
@@ -113,6 +188,7 @@ private sealed interface LiveDialog {
     data object EpgShift : LiveDialog
     data object CatchupShift : LiveDialog
     data object ClockMode : LiveDialog
+    data object FrameRate : LiveDialog
     data object RecordPre : LiveDialog
     data object RecordPost : LiveDialog
     data object ClockPosition : LiveDialog
@@ -189,10 +265,20 @@ private fun sourceStatus(enabled: Boolean, updated: Long, error: String?, count:
 }
 
 @Composable
-fun LiveTvSettingsContent(
+internal fun LiveTvSettingsContent(
     viewModel: LiveTvSettingsViewModel = hiltViewModel(),
-    initialFocusRequester: FocusRequester? = null
+    initialFocusRequester: FocusRequester? = null,
+    page: LiveTvPage = LiveTvPage.ALL
 ) {
+    // HUB: one Live TV page with its own row of tabs; the tab picked is the page shown.
+    val hub = page == LiveTvPage.HUB
+    var tab by remember { mutableStateOf(LiveTvPage.MAIN) }
+    @Suppress("NAME_SHADOWING") val page = if (hub) tab else page
+    fun show(p: LiveTvPage) = page == LiveTvPage.ALL || page == p
+    val flat = page != LiveTvPage.ALL && page != LiveTvPage.MAIN
+    /** The first section takes the focus when you come in from the list on the left (the tab row does, in a hub). */
+    val firstRequester = if (hub) null else initialFocusRequester
+    fun firstFocus(p: LiveTvPage): FocusRequester? = firstRequester.takeIf { page == p }
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
     val epgs by viewModel.epgSources.collectAsStateWithLifecycle()
     val s by viewModel.settings.collectAsStateWithLifecycle()
@@ -222,20 +308,39 @@ fun LiveTvSettingsContent(
         verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.md)
     ) {
         SettingsDetailHeader(
-            title = LIVE_TV_TITLE,
-            subtitle = if (status.loading) (status.message ?: "Updating…") else LIVE_TV_SUBTITLE
+            title = page.title,
+            subtitle = if (status.loading && !flat) (status.message ?: "Updating…") else page.subtitle
         )
+        if (hub) LiveTabRow(selected = tab, first = initialFocusRequester, onSelect = { tab = it })
+        androidx.compose.runtime.key(page) {
+        androidx.compose.runtime.CompositionLocalProvider(LocalLiveFlat provides flat) {
+        val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+        val settleScope = androidx.compose.runtime.rememberCoroutineScope()
+        val hiddenTop = with(androidx.compose.ui.platform.LocalDensity.current) { 150.dp.toPx() }
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f),
+                .weight(1f)
+                .onPreviewKeyEvent { e ->
+                    // Going up onto the first rows of a section: bring its heading into view too
+                    // (it was left cut off at the top, as if behind the tabs).
+                    if (e.key == Key.DirectionUp && e.type == KeyEventType.KeyDown) {
+                        settleScope.launch {
+                            kotlinx.coroutines.delay(90)
+                            val top = listState.layoutInfo.visibleItemsInfo.firstOrNull()
+                            if (top != null && top.offset < 0 && top.offset > -hiddenTop) listState.animateScrollToItem(top.index)
+                        }
+                    }
+                    false
+                },
             contentPadding = PaddingValues(bottom = 18.dp),
             verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.md)
         ) {
             // ------------------------------------------------------------ Backup & Sync
-            item(key = "drive") {
+            if (show(LiveTvPage.MAIN)) item(key = "drive") {
                 DriveSyncCard(
-                    modifier = if (initialFocusRequester != null) Modifier.focusRequester(initialFocusRequester) else Modifier,
+                    modifier = if (firstRequester != null) Modifier.focusRequester(firstRequester) else Modifier,
                     state = drive,
                     expanded = "drive" in open,
                     onToggleExpanded = { toggle("drive") },
@@ -260,7 +365,7 @@ fun LiveTvSettingsContent(
             }
 
             // ------------------------------------------------------------ Playlists & Guides
-            item(key = "sources") {
+            if (show(LiveTvPage.MAIN)) item(key = "sources") {
                 LiveSection(
                     title = "Playlists & Guides",
                     summary = if (status.loading) (status.message ?: "Updating…")
@@ -340,7 +445,7 @@ fun LiveTvSettingsContent(
             }
 
             // ------------------------------------------------------------ Channels
-            item(key = "channels") {
+            if (show(LiveTvPage.MAIN)) item(key = "channels") {
                 LiveSection(
                     title = "Channels",
                     summary = "Name cleanup, hidden channels and groups, your groups, resets",
@@ -352,7 +457,7 @@ fun LiveTvSettingsContent(
                         text = "Tip: long-press a channel in the guide to rename, renumber, hide or favorite it. Long-press a group to rename, move or hide it.",
                         style = MaterialTheme.typography.bodySmall,
                         color = NuvioTheme.colors.TextSecondary,
-                        modifier = Modifier.padding(horizontal = NuvioTheme.spacing.lg, vertical = NuvioTheme.spacing.xs)
+                        modifier = Modifier.padding(horizontal = NuvioTheme.spacing.lg, vertical = NuvioTheme.spacing.sm)
                     )
                     SubHeading("Channel Names")
                     SettingsActionRow(
@@ -413,7 +518,7 @@ fun LiveTvSettingsContent(
             }
 
             // ------------------------------------------------------------ Groups
-            item(key = "groups") {
+            if (show(LiveTvPage.MAIN)) item(key = "groups") {
                 LiveSection(
                     title = "Groups",
                     summary = "The group list on the left of the guide",
@@ -482,7 +587,7 @@ fun LiveTvSettingsContent(
             }
 
             // ------------------------------------------------------------ On Demand
-            item(key = "on_demand") {
+            if (show(LiveTvPage.ON_DEMAND)) item(key = "on_demand") {
                 LiveSection(
                     title = "On Demand",
                     summary = when {
@@ -492,13 +597,14 @@ fun LiveTvSettingsContent(
                     },
                     icon = Icons.Default.Movie,
                     open = "on_demand" in open,
-                    onToggle = { toggle("on_demand") }
+                    onToggle = { toggle("on_demand") },
+                    focusFirst = firstFocus(LiveTvPage.ON_DEMAND)
                 ) {
                     Text(
                         text = "Movies and series from Xtream logins with movies & series switched on below.",
                         style = MaterialTheme.typography.bodySmall,
                         color = NuvioTheme.colors.TextSecondary,
-                        modifier = Modifier.padding(horizontal = NuvioTheme.spacing.lg, vertical = NuvioTheme.spacing.xs)
+                        modifier = Modifier.padding(horizontal = NuvioTheme.spacing.lg, vertical = NuvioTheme.spacing.sm)
                     )
                     if (onDemandStatus.loading) LoadingLine(onDemandStatus.message ?: "Importing movies and series…")
                     SubHeading("Providers")
@@ -565,13 +671,14 @@ fun LiveTvSettingsContent(
             }
 
             // ------------------------------------------------------------ Guide Layout
-            item(key = "layout") {
+            if (show(LiveTvPage.GUIDE)) item(key = "layout") {
                 LiveSection(
                     title = "Guide Layout",
                     summary = "What the guide shows and how much fits",
                     icon = Icons.Default.GridView,
                     open = "layout" in open,
-                    onToggle = { toggle("layout") }
+                    onToggle = { toggle("layout") },
+                    focusFirst = firstFocus(LiveTvPage.GUIDE)
                 ) {
                     SubHeading("Top of the Guide")
                     SettingsToggleRow(
@@ -592,6 +699,16 @@ fun LiveTvSettingsContent(
                         s.smallHeader,
                         { update { it.copy(smallHeader = !it.smallHeader) } }
                     )
+                    SettingsActionRow(
+                        title = "Guide Darkness",
+                        subtitle = "How dark the info panel at the top and the bars in the guide are. Lightest lets more of the background show through. Darkest makes the text easiest to read.",
+                        value = when (s.guideInfoBackground) { "darker" -> "Standard"; "solid" -> "Darkest"; else -> "Lightest" },
+                        onClick = {
+                            update {
+                                it.copy(guideInfoBackground = when (it.guideInfoBackground) { "standard" -> "darker"; "darker" -> "solid"; else -> "standard" })
+                            }
+                        }
+                    )
                     SettingsToggleRow(
                         "Show Posters",
                         "Posters for what's on, from your addons. Off: just the channel logo.",
@@ -603,6 +720,103 @@ fun LiveTvSettingsContent(
                         "Which playlist the highlighted channel comes from",
                         s.showPlaylistInInfo,
                         { update { it.copy(showPlaylistInInfo = !it.showPlaylistInInfo) } }
+                    )
+                    SubHeading("Info Panel Parts")
+                    SettingsToggleRow(
+                        "Show Channel Name & Logo",
+                        "The channel line at the top of the info panel",
+                        com.nuvio.tv.livetv.ui.GuideInfoPart.CHANNEL !in com.nuvio.tv.livetv.ui.BarPart.parse(s.guideInfoHidden),
+                        {
+                            update {
+                                val cur = com.nuvio.tv.livetv.ui.BarPart.parse(it.guideInfoHidden)
+                                val key = com.nuvio.tv.livetv.ui.GuideInfoPart.CHANNEL
+                                it.copy(guideInfoHidden = com.nuvio.tv.livetv.ui.BarPart.join(if (key in cur) cur - key else cur + key))
+                            }
+                        }
+                    )
+                    SettingsToggleRow(
+                        "Show LIVE & Catch-up Tags",
+                        "The small tags beside the channel name",
+                        com.nuvio.tv.livetv.ui.GuideInfoPart.TAGS !in com.nuvio.tv.livetv.ui.BarPart.parse(s.guideInfoHidden),
+                        {
+                            update {
+                                val cur = com.nuvio.tv.livetv.ui.BarPart.parse(it.guideInfoHidden)
+                                val key = com.nuvio.tv.livetv.ui.GuideInfoPart.TAGS
+                                it.copy(guideInfoHidden = com.nuvio.tv.livetv.ui.BarPart.join(if (key in cur) cur - key else cur + key))
+                            }
+                        }
+                    )
+                    SettingsToggleRow(
+                        "Show Title",
+                        "The big show title",
+                        com.nuvio.tv.livetv.ui.GuideInfoPart.TITLE !in com.nuvio.tv.livetv.ui.BarPart.parse(s.guideInfoHidden),
+                        {
+                            update {
+                                val cur = com.nuvio.tv.livetv.ui.BarPart.parse(it.guideInfoHidden)
+                                val key = com.nuvio.tv.livetv.ui.GuideInfoPart.TITLE
+                                it.copy(guideInfoHidden = com.nuvio.tv.livetv.ui.BarPart.join(if (key in cur) cur - key else cur + key))
+                            }
+                        }
+                    )
+                    SettingsToggleRow(
+                        "Show Start & End Time",
+                        "Like 8:00 PM – 9:00 PM",
+                        com.nuvio.tv.livetv.ui.GuideInfoPart.TIME !in com.nuvio.tv.livetv.ui.BarPart.parse(s.guideInfoHidden),
+                        {
+                            update {
+                                val cur = com.nuvio.tv.livetv.ui.BarPart.parse(it.guideInfoHidden)
+                                val key = com.nuvio.tv.livetv.ui.GuideInfoPart.TIME
+                                it.copy(guideInfoHidden = com.nuvio.tv.livetv.ui.BarPart.join(if (key in cur) cur - key else cur + key))
+                            }
+                        }
+                    )
+                    SettingsToggleRow(
+                        "Show Time Left",
+                        "Like 25 min left",
+                        com.nuvio.tv.livetv.ui.GuideInfoPart.LEFT !in com.nuvio.tv.livetv.ui.BarPart.parse(s.guideInfoHidden),
+                        {
+                            update {
+                                val cur = com.nuvio.tv.livetv.ui.BarPart.parse(it.guideInfoHidden)
+                                val key = com.nuvio.tv.livetv.ui.GuideInfoPart.LEFT
+                                it.copy(guideInfoHidden = com.nuvio.tv.livetv.ui.BarPart.join(if (key in cur) cur - key else cur + key))
+                            }
+                        }
+                    )
+                    SettingsToggleRow(
+                        "Show Category",
+                        "Like Drama or Sports",
+                        com.nuvio.tv.livetv.ui.GuideInfoPart.CATEGORY !in com.nuvio.tv.livetv.ui.BarPart.parse(s.guideInfoHidden),
+                        {
+                            update {
+                                val cur = com.nuvio.tv.livetv.ui.BarPart.parse(it.guideInfoHidden)
+                                val key = com.nuvio.tv.livetv.ui.GuideInfoPart.CATEGORY
+                                it.copy(guideInfoHidden = com.nuvio.tv.livetv.ui.BarPart.join(if (key in cur) cur - key else cur + key))
+                            }
+                        }
+                    )
+                    SettingsToggleRow(
+                        "Show Progress Bar",
+                        "How far into the show you are",
+                        com.nuvio.tv.livetv.ui.GuideInfoPart.PROGRESS !in com.nuvio.tv.livetv.ui.BarPart.parse(s.guideInfoHidden),
+                        {
+                            update {
+                                val cur = com.nuvio.tv.livetv.ui.BarPart.parse(it.guideInfoHidden)
+                                val key = com.nuvio.tv.livetv.ui.GuideInfoPart.PROGRESS
+                                it.copy(guideInfoHidden = com.nuvio.tv.livetv.ui.BarPart.join(if (key in cur) cur - key else cur + key))
+                            }
+                        }
+                    )
+                    SettingsToggleRow(
+                        "Show Description",
+                        "The text about the show",
+                        com.nuvio.tv.livetv.ui.GuideInfoPart.DESCRIPTION !in com.nuvio.tv.livetv.ui.BarPart.parse(s.guideInfoHidden),
+                        {
+                            update {
+                                val cur = com.nuvio.tv.livetv.ui.BarPart.parse(it.guideInfoHidden)
+                                val key = com.nuvio.tv.livetv.ui.GuideInfoPart.DESCRIPTION
+                                it.copy(guideInfoHidden = com.nuvio.tv.livetv.ui.BarPart.join(if (key in cur) cur - key else cur + key))
+                            }
+                        }
                     )
                     SubHeading("Channel Rows")
                     SettingsToggleRow(
@@ -660,12 +874,6 @@ fun LiveTvSettingsContent(
                         { update { it.copy(showEpisodeNumbers = !it.showEpisodeNumbers) } }
                     )
                     SettingsToggleRow(
-                        "Striped Bars When There's No Guide",
-                        "Channels with no show listings get striped bars. Turn off to show the channel name in a plain bar instead.",
-                        s.stripeMissingGuide,
-                        { update { it.copy(stripeMissingGuide = !it.stripeMissingGuide) } }
-                    )
-                    SettingsToggleRow(
                         "Show the \"Now\" Line",
                         "The line that marks the current time across the guide",
                         s.showNowLine,
@@ -685,6 +893,12 @@ fun LiveTvSettingsContent(
                     )
                     SubHeading("Look")
                     SettingsActionRow(
+                        title = "Guide & Sports Background",
+                        subtitle = "The backdrop behind the TV Guide and the Sports hub. Follows your color theme, or pick one of the app icon colors.",
+                        value = com.nuvio.tv.livetv.ui.GuideBackdrops.label(s.guideBackdrop),
+                        onClick = { update { it.copy(guideBackdrop = com.nuvio.tv.livetv.ui.GuideBackdrops.next(it.guideBackdrop)) } }
+                    )
+                    SettingsActionRow(
                         title = "Highlight Style",
                         subtitle = "How the selected show is marked: an outline, or filled with your theme color",
                         value = if (s.solidHighlight) "Solid" else "Outline",
@@ -700,13 +914,14 @@ fun LiveTvSettingsContent(
             }
 
             // ------------------------------------------------------------ Watching
-            item(key = "watching") {
+            if (show(LiveTvPage.PLAYBACK)) item(key = "watching") {
                 LiveSection(
-                    title = "Watching",
-                    summary = "Opening Live TV, changing channels, picture & sound",
+                    title = "Opening & Channel Surfing",
+                    summary = "Opening Live TV, changing channels, the info bar",
                     icon = Icons.Default.PlayCircleFilled,
                     open = "watching" in open,
-                    onToggle = { toggle("watching") }
+                    onToggle = { toggle("watching") },
+                    focusFirst = firstFocus(LiveTvPage.PLAYBACK),
                 ) {
                     SubHeading("Opening Live TV")
                     SettingsToggleRow(
@@ -775,9 +990,9 @@ fun LiveTvSettingsContent(
                         }
                     )
                     SettingsActionRow(
-                        title = "Info Panel Background",
-                        subtitle = "How dark the box behind the show info is. Darker or Solid makes the text easier to read over bright, busy pictures.",
-                        value = when (s.panelBackground) { "darker" -> "Darker"; "solid" -> "Solid"; else -> "Standard" },
+                        title = "Play Bar Background",
+                        subtitle = "How dark the play bar is. Standard or Darkest makes the text easier to read over bright, busy pictures.",
+                        value = when (s.panelBackground) { "darker" -> "Standard"; "solid" -> "Darkest"; else -> "Lightest" },
                         onClick = {
                             update {
                                 it.copy(panelBackground = when (it.panelBackground) { "standard" -> "darker"; "darker" -> "solid"; else -> "standard" })
@@ -790,6 +1005,18 @@ fun LiveTvSettingsContent(
                         value = "${s.infoBannerSeconds} seconds",
                         onClick = { dialog = LiveDialog.BannerTime }
                     )
+                }
+            }
+
+            // ------------------------------------------------------------ Picture, Sound & Clock
+            if (show(LiveTvPage.PLAYBACK)) item(key = "picture") {
+                LiveSection(
+                    title = "Picture, Sound & Clock",
+                    summary = "The clock, frame rate, pausing and catch-up",
+                    icon = Icons.Default.PlayCircleFilled,
+                    open = "picture" in open,
+                    onToggle = { toggle("picture") }
+                ) {
                     SubHeading("On-Screen Clock")
                     SettingsActionRow(
                         title = "Show Clock",
@@ -836,11 +1063,11 @@ fun LiveTvSettingsContent(
                         s.audioPassthrough,
                         { update { it.copy(audioPassthrough = !it.audioPassthrough) } }
                     )
-                    SettingsToggleRow(
-                        "Match Frame Rate",
-                        "Switches the TV to the video's frame rate (for example 50 Hz for UK and European channels) for smoother motion, on TVs that support it",
-                        s.matchFrameRate,
-                        { update { it.copy(matchFrameRate = !it.matchFrameRate) } }
+                    SettingsActionRow(
+                        title = "Match Frame Rate",
+                        subtitle = "Switches the TV to the video's frame rate (for example 50 Hz for UK and European channels) for smoother motion, on TVs that support it",
+                        value = FRAME_RATE_MODES.firstOrNull { it.first == s.frameRateMode }?.second ?: "Off",
+                        onClick = { dialog = LiveDialog.FrameRate }
                     )
                     SubHeading("Pause & Catch-Up")
                     SettingsToggleRow(
@@ -915,7 +1142,7 @@ fun LiveTvSettingsContent(
             }
 
             // ------------------------------------------------------------ Guide Listings
-            item(key = "listings") {
+            if (show(LiveTvPage.GUIDE)) item(key = "listings") {
                 LiveSection(
                     title = "Guide Listings",
                     summary = "How far the guide reaches, timing fixes",
@@ -956,13 +1183,14 @@ fun LiveTvSettingsContent(
             }
 
             // ------------------------------------------------------------ Home Screen & Nuvio
-            item(key = "nuvio") {
+            if (show(LiveTvPage.INTEGRATION)) item(key = "nuvio") {
                 LiveSection(
                     title = "Home Screen & Nuvio",
-                    summary = "The Live TV row and the menu",
+                    summary = "The Live TV row inside Nuvio's home page, and the menu",
                     icon = Icons.Default.Home,
                     open = "nuvio" in open,
-                    onToggle = { toggle("nuvio") }
+                    onToggle = { toggle("nuvio") },
+                    focusFirst = firstFocus(LiveTvPage.INTEGRATION)
                 ) {
                     // ---- Live TV row on the home screen
                     // On or off for the Nuvio profile in use (each profile has its own choice).
@@ -973,7 +1201,7 @@ fun LiveTvSettingsContent(
                         ).profileManager()
                     }.activeProfileId.collectAsStateWithLifecycle()
                     val homeRowOn = homeProfileId !in s.homeRowHiddenProfiles
-                    SubHeading("Home Screen Row")
+                    SubHeading("Row Inside Nuvio's Home Page")
                     SettingsToggleRow(
                         "Live TV Row on the Home Screen",
                         "For this profile. Tucked above your top row: press Up to show it.",
@@ -989,8 +1217,8 @@ fun LiveTvSettingsContent(
                     )
                     if (homeRowOn) {
                         SettingsActionRow(
-                            title = "Row Shows",
-                            subtitle = "Favorites, Recently Watched, or one of your own groups",
+                            title = "Channels in the Row",
+                            subtitle = "Which channels appear: Favorites, Recently Watched, or one of your own groups",
                             value = when (s.homeRowSource) {
                                 "favorites", "" -> "Favorites"
                                 "recent" -> "Recently watched"
@@ -1056,7 +1284,7 @@ fun LiveTvSettingsContent(
             }
 
             // ------------------------------------------------------------ Search & Streams
-            item(key = "search_streams") {
+            if (show(LiveTvPage.INTEGRATION)) item(key = "search_streams") {
                 var pickingStreamsPosition by remember { mutableStateOf(false) }
                 LiveSection(
                     title = "Search & Streams",
@@ -1146,7 +1374,7 @@ fun LiveTvSettingsContent(
             }
 
             // ------------------------------------------------------------ Parental Controls
-            item(key = "parental") {
+            if (show(LiveTvPage.MAIN)) item(key = "parental") {
                 LiveSection(
                     title = "Parental Controls",
                     summary = if (hasPin) "On · ${user.lockedGroups.size} locked" else "Off",
@@ -1158,7 +1386,7 @@ fun LiveTvSettingsContent(
                         text = "Locked groups and categories need the PIN to open, and stay out of All Channels and search until unlocked.",
                         style = MaterialTheme.typography.bodySmall,
                         color = NuvioTheme.colors.TextSecondary,
-                        modifier = Modifier.padding(horizontal = NuvioTheme.spacing.lg, vertical = NuvioTheme.spacing.xs)
+                        modifier = Modifier.padding(horizontal = NuvioTheme.spacing.lg, vertical = NuvioTheme.spacing.sm)
                     )
                     SettingsActionRow(
                         if (hasPin) "Change PIN" else "Set a PIN",
@@ -1182,7 +1410,7 @@ fun LiveTvSettingsContent(
             }
 
             // ------------------------------------------------------------ Reminders
-            item(key = "reminders") {
+            if (show(LiveTvPage.GUIDE)) item(key = "reminders") {
                 LiveSection(
                     title = "Reminders",
                     summary = if (user.reminders.isEmpty()) "None set" else "${user.reminders.size} upcoming",
@@ -1200,7 +1428,7 @@ fun LiveTvSettingsContent(
             }
 
             // ------------------------------------------------------------ Recordings
-            item(key = "recordings") {
+            if (show(LiveTvPage.PLAYBACK)) item(key = "recordings") {
                 val recContext = androidx.compose.ui.platform.LocalContext.current
                 // Drives come and go: read again whenever the section is opened.
                 val drives = remember("recordings" in open) { com.nuvio.tv.livetv.record.RecordingStorage.choices(recContext) }
@@ -1289,7 +1517,7 @@ fun LiveTvSettingsContent(
             }
 
             // ------------------------------------------------------------ Help
-            item(key = "help") {
+            if (show(LiveTvPage.MAIN)) item(key = "help") {
                 val crashContext = androidx.compose.ui.platform.LocalContext.current
                 LiveSection(
                     title = "Help",
@@ -1326,6 +1554,8 @@ fun LiveTvSettingsContent(
                 }
             }
         }
+        } // LocalLiveFlat
+        } // key(page)
     }
 
     drive.signIn?.let { prompt ->
@@ -1483,7 +1713,7 @@ fun LiveTvSettingsContent(
             onConfirm = { if (it.trim() == s.parentalPin) { update { st -> st.copy(parentalPin = "") }; close() } else pinWrong = true }
         )
         LiveDialog.HomeRowSource -> SettingsSingleChoiceDialog(
-            title = "Home row shows",
+            title = "Channels in the row",
             options = buildList {
                 add(SettingsPickerOption("favorites", "Favorites"))
                 add(SettingsPickerOption("recent", "Recently watched"))
@@ -1574,13 +1804,23 @@ fun LiveTvSettingsContent(
             onConfirm = { d.action(); close() },
             confirmLabel = d.label
         )
-        LiveDialog.ConfirmRestore -> ConfirmDeleteDialog(
-            title = "Restore from Google Drive?",
-            message = "This TV's Live TV setup (playlists, guides, favorites and settings) is replaced with the copy in your Google Drive.",
-            onDismiss = close,
-            onConfirm = { viewModel.driveSync.restoreNow(); close() },
-            confirmLabel = "Restore"
-        )
+        LiveDialog.ConfirmRestore -> {
+            // When the saved copy was made, and on which TV: restoring an old copy puts back old
+            // playlists and logins (a provider's old address, an old password).
+            var loaded by remember { mutableStateOf(false) }
+            var info by remember { mutableStateOf<com.nuvio.tv.livetv.sync.LiveTvDriveSync.BackupInfo?>(null) }
+            LaunchedEffect(Unit) {
+                info = runCatching { viewModel.driveSync.backupInfo() }.getOrNull()
+                loaded = true
+            }
+            ConfirmDeleteDialog(
+                title = "Restore from Google Drive?",
+                message = restoreMessage(loaded, info, viewModel.driveSync.localChangedAt()),
+                onDismiss = close,
+                onConfirm = { viewModel.driveSync.restoreNow(); close() },
+                confirmLabel = "Restore"
+            )
+        }
         is LiveDialog.ConfirmDeletePlaylist -> ConfirmDeleteDialog(
             title = "Delete \"${d.source.name}\"?",
             message = "Its ${d.source.channelCount} channels leave the guide. Favorites, hidden channels and EPG assignments for them are kept in case you add it back.",
@@ -1632,6 +1872,13 @@ fun LiveTvSettingsContent(
             options = listOf(0, 2, 5, 10, 15, 30).map { SettingsPickerOption(it, padLabel(it)) },
             selectedValue = s.recordPostMinutes,
             onOptionSelected = { v -> update { it.copy(recordPostMinutes = v) }; close() },
+            onDismiss = close
+        )
+        LiveDialog.FrameRate -> SettingsSingleChoiceDialog(
+            title = "Match Frame Rate",
+            options = FRAME_RATE_MODES.map { (v, t, d) -> SettingsPickerOption(v, t, description = d) },
+            selectedValue = s.frameRateMode,
+            onOptionSelected = { v -> update { it.copy(frameRateMode = v) }; close() },
             onDismiss = close
         )
         LiveDialog.ClockMode -> SettingsSingleChoiceDialog(
@@ -2038,6 +2285,34 @@ private fun ConfirmDeleteDialog(
     }
 }
 
+/** The restore prompt's text: what's replaced, when the saved copy was made and where, and a warning when it's old. */
+private fun restoreMessage(loaded: Boolean, info: com.nuvio.tv.livetv.sync.LiveTvDriveSync.BackupInfo?, localChangedAt: Long): String {
+    val base = "This TV's Live TV setup (playlists, guides, favorites and settings) is replaced with the copy in your Google Drive."
+    if (!loaded) return "$base\n\nChecking when it was saved…"
+    if (info == null || info.savedAtMs <= 0L) return base
+    val now = System.currentTimeMillis()
+    val days = ((now - info.savedAtMs) / (24 * 60 * 60_000L)).toInt()
+    val ago = when {
+        now - info.savedAtMs < 60 * 60_000L -> "less than an hour ago"
+        days < 1 -> "today"
+        days == 1 -> "yesterday"
+        days < 14 -> "$days days ago"
+        days < 60 -> "${days / 7} weeks ago"
+        else -> "${days / 30} months ago"
+    }
+    val stamp = java.text.SimpleDateFormat("EEE d MMM, h:mm a", java.util.Locale.getDefault()).format(java.util.Date(info.savedAtMs))
+    val where = if (info.fromThisTv) "this TV" else info.device
+    val saved = "Saved $stamp on $where ($ago)."
+    val warning = when {
+        localChangedAt > info.savedAtMs + 60_000L ->
+            "This TV has changes made after that copy was saved. Restoring puts back the older playlists and logins. If this TV has the latest, press Back Up Now here instead."
+        days >= 7 ->
+            "That copy is $ago. If your playlists or logins have changed since (a new server address or password), press Back Up Now on a TV that has the latest first."
+        else -> null
+    }
+    return listOfNotNull(base, saved, warning).joinToString("\n\n")
+}
+
 @Composable
 private fun UnhideDialog(
     title: String,
@@ -2099,8 +2374,37 @@ private fun LiveSection(
     open: Boolean,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Flat tabs: the first section takes the focus coming in (its first row). */
+    focusFirst: FocusRequester? = null,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
+    if (LocalLiveFlat.current) {
+        // A sub-tab: sections sit open under a plain heading (nothing to fold, only a few per tab).
+        Column(
+            if (focusFirst != null) Modifier.focusRequester(focusFirst).focusGroup() else Modifier
+        ) {
+            SettingsGroupCard {
+                androidx.compose.foundation.layout.Row(
+                    modifier = Modifier.padding(start = NuvioTheme.spacing.lg, top = NuvioTheme.spacing.sm, end = NuvioTheme.spacing.lg, bottom = NuvioTheme.spacing.xxs),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    androidx.tv.material3.Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = NuvioTheme.colors.TextSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Column {
+                        Text(text = title, style = MaterialTheme.typography.titleMedium, color = NuvioTheme.colors.TextPrimary)
+                        Text(text = summary, style = MaterialTheme.typography.bodySmall, color = NuvioTheme.colors.TextSecondary)
+                    }
+                }
+                content()
+            }
+        }
+        return
+    }
     SettingsGroupCard {
         SettingsActionRow(
             title = title,
@@ -2115,6 +2419,16 @@ private fun LiveSection(
 }
 
 /** A small label inside an open section ("Top of the Guide"), like Nuvio's group titles. */
+@Composable
+private fun SettingsNote(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = NuvioTheme.colors.TextSecondary,
+        modifier = Modifier.padding(horizontal = NuvioTheme.spacing.lg, vertical = NuvioTheme.spacing.sm)
+    )
+}
+
 @Composable
 private fun SubHeading(text: String) {
     Text(

@@ -12,23 +12,9 @@
 
 **Downloader code: 6532491**
 
-[What's new](#-whats-new) · [Sports hub](#-sports-hub) · [Download](#-installation) · [Features](#-features) · [Setup](#-getting-started) · [Remote controls](CONTROLS.md) · [Report a bug](#-reporting-bugs-and-requesting-features) · [Support](#-support-the-project)
+[Sports hub](#-sports-hub) · [Download](#-installation) · [Features](#-features) · [Setup](#-getting-started) · [Remote controls](CONTROLS.md) · [Report a bug](#-reporting-bugs-and-requesting-features) · [Support](#-support-the-project)
 
 </div>
-
----
-
-## 🆕 What's new
-
-**Now based on Nuvio 1.1.0-beta.7.**
-
-- **🏆 The Sports hub is here.** Live scores and schedules for 160+ leagues, and every game matched to the channels in *your* playlists. Follow your teams, see what's on, and press OK to watch. [More below](#-sports-hub).
-- **Record a game** from its page: pick the channel and how long, and it starts 5 minutes early.
-- **Never miss kick-off:** reminders can switch to the game by themselves a minute before it starts.
-- **Live TV:**
-  - **Info Panel Background:** Standard, Darker or Solid, for easier reading over bright pictures.
-  - **Channels whose HLS link fails** now play as TS instead.
-- **Smoother on slower boxes:** a lighter guide, less memory used for buffering, old listings let go, and leftover guide files cleaned up, so the app no longer slows down after days of being left on.
 
 ---
 
@@ -46,6 +32,16 @@ Sports in the side menu shows scores and schedules, and works out **which of you
   - **Teams, countries, whole leagues,** or a **name** (a player, driver or fighter) to catch any show that mentions it.
   - **One search** finds teams and leagues alike.
   - **Following a club includes its cups** and European games.
+- **Where they stand:** each team's row on My Sports says where it is in its league ("2nd in Premier League").
+
+### 🏆 Tables
+- **🏆 Tables** in the Sports top bar: your leagues across the top, the table below, opened on your team. The video keeps playing beside it.
+- **Football:** played, won, drawn, lost, goal difference and points, the **last five** as coloured squares, **▲ / ▼ place changes** since the last round, and coloured edges for **Champions League, Europa League and relegation** places.
+- **US sports:** **Division / Conference / League** views, clinched marks (x, y, z, e) and **playoff lines** (Play-In too for the NBA).
+- **Racing:** F1, NASCAR and IndyCar drivers' standings, with points behind the leader.
+- **Team colours** on every row, and your team outlined in gold.
+- **Team cards:** OK on a team for its record, home and away form, last three results, next game, **Watch now** (or Remind me), **Follow**, and **all its games**.
+- **From a game:** OK on a game's Table panel opens the whole table with both teams marked.
 
 ### 160+ leagues and competitions
 - **US sports:** NFL, NBA, NHL, MLB, WNBA, MLS, college football, basketball, hockey and baseball, plus CFL, UFL and G League.
@@ -75,7 +71,10 @@ Sports in the side menu shows scores and schedules, and works out **which of you
 - **Watch from the start** on channels with catch-up.
 - **Game pages:**
   - the score by period, and the latest scoring as it happens
+  - **before it starts:** form, the last meetings, match info, win chance and the table
+  - **once it's on:** team stats, top performers or line-ups, and win chance as it changes
   - race and golf leaderboards, tennis matches and fight cards
+  - **Up to a team** and OK for its team card
 - **Scores everywhere:**
   - the score shows on Live TV's info bar when you're watching a game
   - **scoring alerts** pop up in the corner when your team scores, wherever you are in the app
@@ -98,13 +97,14 @@ Sports in the side menu shows scores and schedules, and works out **which of you
   - **Opening it:** it slides out with a tap of Left.
   - **Grouping:** optionally grouped by playlist.
   - **Browse by channel name** (satellite-box style).
-- **Info panel** with the show's poster (or just the channel logo, if you prefer), time left, description, the playlist it comes from, and a live preview window.
+- **Info panel** with the show's poster (or just the channel logo, if you prefer), time left, the description (as much as fits), the playlist it comes from, and a live preview window.
 - **Make room for more channels:** a smaller info panel, and hiding numbers, logos, names or episode numbers.
 - **Badges:** catch-up icons on channels that support it, and 4K / FHD / HD / SD badges on channels you've watched.
 
 ### 🎬 Overlay mode (while watching)
 - Press **Left** in full screen for a see-through guide over the video: the group's channels, the highlighted channel's schedule, and the show's details.
 - **Left again** switches groups. **Right** opens the channel's full schedule, with a date picker.
+- **Grouped by playlist** (when you have more than one), with headings you can fold, as in the guide.
 
 ### 📡 Your sources, your way
 - **Multiple M3U playlists** and **multiple XMLTV guides,** merged into one guide.
@@ -144,9 +144,12 @@ Sports in the side menu shows scores and schedules, and works out **which of you
 - **Pause and rewind live TV**, even on channels without catch-up.
 - **Reminders:** "Remind me" on any upcoming show, with a pop-up and a Watch button.
 - **Player menu:** audio, **closed captions**, screen size, **picture shape**, stream info, **sleep timer**, record, find & stream, and watch from the beginning.
+- **Your audio choice is remembered for each channel** (a second language, or 5.1 over stereo).
+- **⏪ / ⏩ on the remote** skip 30 seconds in catch-up and paused live TV; hold to go faster.
 - **On-screen clock** in any corner, if you want one.
 - **Smooth playback:**
-  - **Match frame rate** and **audio passthrough** settings.
+  - **Keeps the TV awake** while you watch (no screen saver).
+  - **Match frame rate** (Off, On start, or On start/stop, as in Nuvio's player) and **audio passthrough** settings.
   - **Auto-reconnect,** plus automatic recovery from frozen or stuck streams, with the reason shown when a stream fails.
 
 ### 🔒 Parental controls
@@ -189,7 +192,7 @@ The universal version works everywhere. The device-specific ones are smaller dow
 
 Requires **Android 7.0 or newer** (Fire OS 6 or later). It installs **alongside** the official Nuvio app.
 
-**Updating:** updates appear **inside the app**. Each new Nuvio release is followed by a matching Nuvio + IPTV version.
+**Updating:** updates appear **inside the app**. Each new Nuvio release is followed by a matching Nuvio + IPTV version (currently based on Nuvio 1.1.0-beta.8).
 
 ---
 
@@ -260,9 +263,15 @@ Search for it in **✎ Follow Teams & Leagues**: search covers every league, not
 </details>
 
 <details>
+<summary><b>Why doesn't a league show under Tables?</b></summary>
+
+Tables lists the leagues you follow and your teams' leagues that have a table. Cups and knockout competitions don't have one, and neither do golf, tennis or fights. Turn off **Hide Scores** under **Settings → Sports** to see tables.
+</details>
+
+<details>
 <summary><b>Where do the scores come from?</b></summary>
 
-Scores, schedules, team logos and colors come from ESPN's free public feed. Non-league football, rugby league, cricket, UK ice hockey, Gaelic games, netball, and the wrestling and boxing schedules come from TheSportsDB, and some event dates from sporting-events.org. Sports they don't cover are found in your own TV guide.
+Scores, schedules, tables, team logos and colors come from ESPN's free public feed. Non-league football, rugby league, cricket, UK ice hockey, Gaelic games, netball, and the wrestling and boxing schedules come from TheSportsDB, and some event dates from sporting-events.org. Sports they don't cover are found in your own TV guide.
 </details>
 
 <details>

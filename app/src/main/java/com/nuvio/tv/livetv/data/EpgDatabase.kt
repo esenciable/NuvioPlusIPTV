@@ -17,7 +17,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
-    SQLiteOpenHelper(context, "livetv_guide.db", null, 2) {
+    SQLiteOpenHelper(context, "livetv_guide.db", null, 3) {
 
     init {
         // Readers don't wait for writers: the guide stays readable (scrolling, catch-up) while a
@@ -36,6 +36,7 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
         db.execSQL("CREATE INDEX IF NOT EXISTS programs_start ON programs(start)")
         db.execSQL("CREATE TABLE auto (ch TEXT PRIMARY KEY, source TEXT NOT NULL, xmltv TEXT NOT NULL)")
         db.execSQL("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)")
+        createStageTables(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -50,6 +51,8 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
                     onCreate(db)
                 }
         }
+        // Version 3: guides staged while they're read (see StageWriter).
+        if (oldVersion < 3) createStageTables(db)
     }
 
     /** Replaces the whole guide (after a guide update), in one transaction. */
@@ -361,6 +364,282 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
         }
     }
 
+    // ------------------------------------------------------------ staged guides
+    //
+    // Each guide file's listings (for the channels it could match) are written here while the
+    // file is read, a channel at a time, instead of being held in memory: a big guide used to take
+    // a few hundred MB while it was matched. The guide shown is then built from here in one step
+    // (the best guide for each channel), and a guide file that hasn't changed isn't read again.
+
+    private fun createStageTables(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS stage (
+                src TEXT NOT NULL, xid TEXT NOT NULL, start INTEGER NOT NULL, stop INTEGER NOT NULL, title TEXT NOT NULL,
+                descr TEXT, cat TEXT, ep TEXT, icon TEXT, year INTEGER, people TEXT)"""
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS stage_meta (src TEXT NOT NULL, xid TEXT NOT NULL, cnt INTEGER NOT NULL, " +
+                "last_stop INTEGER NOT NULL, placeholders INTEGER NOT NULL, PRIMARY KEY (src, xid))"
+        )
+        db.execSQL("CREATE TABLE IF NOT EXISTS stage_channels (src TEXT NOT NULL, xid TEXT NOT NULL, names TEXT, icon TEXT)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS stage_info (src TEXT PRIMARY KEY, stamp TEXT NOT NULL, made INTEGER NOT NULL)")
+        // No index on the working copy: keeping one up to date for every listing made storing a
+        // big guide several times slower. The final step looks channels up the other way round.
+        db.execSQL("DROP INDEX IF EXISTS stage_src_xid")
+    }
+
+    /** What's known about one guide channel's staged listings. */
+    class StagedMeta(val count: Int, val lastStop: Long, val placeholders: Int)
+
+    /** One guide file being staged: [add] each channel's shows, then [finish] (or [abort]). */
+    inner class StageWriter internal constructor(private val src: String) {
+        private val db = writableDatabase
+        private val stmt: android.database.sqlite.SQLiteStatement
+        private var rows = 0
+        private val meta = HashMap<String, LongArray>() // count, lastStop, placeholders
+        private var open = true
+
+        init {
+            db.execSQL("DROP INDEX IF EXISTS stage_src_xid")
+            db.beginTransaction()
+            db.delete("stage", "src = ?", arrayOf(src))
+            db.delete("stage_meta", "src = ?", arrayOf(src))
+            db.delete("stage_channels", "src = ?", arrayOf(src))
+            db.delete("stage_info", "src = ?", arrayOf(src))
+            stmt = db.compileStatement(
+                "INSERT INTO stage (src, xid, start, stop, title, descr, cat, ep, icon, year, people) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+            )
+        }
+
+        fun add(xid: String, programs: List<EpgProgram>, isPlaceholder: (String) -> Boolean) {
+            if (programs.isEmpty()) return
+            val m = meta.getOrPut(xid) { LongArray(3) }
+            programs.forEach { p ->
+                stmt.clearBindings()
+                stmt.bindString(1, src); stmt.bindString(2, xid)
+                stmt.bindLong(3, p.startMs); stmt.bindLong(4, p.stopMs); stmt.bindString(5, p.title)
+                p.description?.let { stmt.bindString(6, it) } ?: stmt.bindNull(6)
+                p.category?.let { stmt.bindString(7, it) } ?: stmt.bindNull(7)
+                p.episode?.let { stmt.bindString(8, it) } ?: stmt.bindNull(8)
+                p.icon?.let { stmt.bindString(9, it) } ?: stmt.bindNull(9)
+                p.year?.let { stmt.bindLong(10, it.toLong()) } ?: stmt.bindNull(10)
+                if (p.people.isEmpty()) stmt.bindNull(11) else stmt.bindString(11, p.people.joinToString("\u001F"))
+                stmt.executeInsert()
+                m[0]++
+                if (p.stopMs > m[1]) m[1] = p.stopMs
+                if (isPlaceholder(p.title)) m[2]++
+            }
+            rows += programs.size
+            // Written in parts, so the database's pending changes stay small on big guides.
+            if (rows >= 50_000) {
+                rows = 0
+                db.setTransactionSuccessful(); db.endTransaction(); db.beginTransaction()
+            }
+        }
+
+        /** Stores the guide's channel list (for matching it again without reading the file) and the file's stamp. */
+        fun finish(stamp: String, channels: List<Triple<String, List<String>, String?>>): Map<String, StagedMeta> {
+            meta.forEach { (xid, m) ->
+                db.insertWithOnConflict("stage_meta", null, ContentValues().apply {
+                    put("src", src); put("xid", xid); put("cnt", m[0]); put("last_stop", m[1]); put("placeholders", m[2])
+                }, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            val ch = db.compileStatement("INSERT INTO stage_channels (src, xid, names, icon) VALUES (?,?,?,?)")
+            channels.forEach { (id, names, icon) ->
+                ch.clearBindings()
+                ch.bindString(1, src); ch.bindString(2, id)
+                if (names.isEmpty()) ch.bindNull(3) else ch.bindString(3, names.joinToString("\u001F"))
+                icon?.let { ch.bindString(4, it) } ?: ch.bindNull(4)
+                ch.executeInsert()
+            }
+            db.insertWithOnConflict("stage_info", null, ContentValues().apply {
+                put("src", src); put("stamp", stamp); put("made", System.currentTimeMillis())
+            }, SQLiteDatabase.CONFLICT_REPLACE)
+            db.setTransactionSuccessful()
+            db.endTransaction()
+            open = false
+            return meta.mapValues { (_, m) -> StagedMeta(m[0].toInt(), m[1], m[2].toInt()) }
+        }
+
+        /** Something went wrong: what was written in this round is dropped (earlier parts stay until the next read). */
+        fun abort() {
+            if (!open) return
+            open = false
+            runCatching { db.endTransaction() }
+            runCatching { db.delete("stage_info", "src = ?", arrayOf(src)) }
+        }
+    }
+
+    fun startStage(src: String): StageWriter = StageWriter(src)
+
+    /** The stamp a guide was staged with, and when, or null. */
+    fun stageInfo(src: String): Pair<String, Long>? =
+        readableDatabase.rawQuery("SELECT stamp, made FROM stage_info WHERE src = ?", arrayOf(src)).use { c ->
+            if (c.moveToFirst()) c.getString(0) to c.getLong(1) else null
+        }
+
+    fun stagedMeta(src: String): Map<String, StagedMeta> {
+        val out = HashMap<String, StagedMeta>()
+        readableDatabase.rawQuery("SELECT xid, cnt, last_stop, placeholders FROM stage_meta WHERE src = ?", arrayOf(src)).use { c ->
+            while (c.moveToNext()) out[c.getString(0)] = StagedMeta(c.getInt(1), c.getLong(2), c.getInt(3))
+        }
+        return out
+    }
+
+    /** A staged guide's channel list: id, display names, logo. */
+    fun stagedChannels(src: String): List<Triple<String, List<String>, String?>> {
+        val out = ArrayList<Triple<String, List<String>, String?>>()
+        readableDatabase.rawQuery("SELECT xid, names, icon FROM stage_channels WHERE src = ?", arrayOf(src)).use { c ->
+            while (c.moveToNext()) out += Triple(
+                c.getString(0),
+                if (c.isNull(1)) emptyList() else c.getString(1).split('\u001F'),
+                if (c.isNull(2)) null else c.getString(2)
+            )
+        }
+        return out
+    }
+
+    /** Several staged guide channels' listings (full details), in one pass over the guide. */
+    fun stagedProgramsFor(src: String, xids: Collection<String>): Map<String, List<EpgProgram>> {
+        val out = HashMap<String, ArrayList<EpgProgram>>()
+        xids.distinct().chunked(400).forEach { part ->
+            readableDatabase.rawQuery(
+                "SELECT xid, start, stop, title, descr, cat, ep, icon, year, people FROM stage WHERE src = ? AND xid IN (" +
+                    part.joinToString(",") { "?" } + ")",
+                (listOf(src) + part).toTypedArray()
+            ).use { c ->
+                while (c.moveToNext()) out.getOrPut(c.getString(0)) { ArrayList() } += EpgProgram(
+                    startMs = c.getLong(1), stopMs = c.getLong(2), title = c.getString(3),
+                    description = if (c.isNull(4)) null else c.getString(4),
+                    category = if (c.isNull(5)) null else c.getString(5),
+                    episode = if (c.isNull(6)) null else c.getString(6),
+                    icon = if (c.isNull(7)) null else c.getString(7),
+                    year = if (c.isNull(8)) null else c.getInt(8),
+                    people = if (c.isNull(9)) emptyList() else c.getString(9).split('\u001F')
+                )
+            }
+        }
+        out.values.forEach { l -> l.sortBy { it.startMs } }
+        return out
+    }
+
+    /** One staged guide channel's listings (full details), in time order. */
+    fun stagedPrograms(src: String, xid: String): List<EpgProgram> {
+        val out = ArrayList<EpgProgram>()
+        readableDatabase.rawQuery(
+            "SELECT start, stop, title, descr, cat, ep, icon, year, people FROM stage WHERE src = ? AND xid = ? ORDER BY start",
+            arrayOf(src, xid)
+        ).use { c ->
+            while (c.moveToNext()) out += EpgProgram(
+                startMs = c.getLong(0), stopMs = c.getLong(1), title = c.getString(2),
+                description = if (c.isNull(3)) null else c.getString(3),
+                category = if (c.isNull(4)) null else c.getString(4),
+                episode = if (c.isNull(5)) null else c.getString(5),
+                icon = if (c.isNull(6)) null else c.getString(6),
+                year = if (c.isNull(7)) null else c.getInt(7),
+                people = if (c.isNull(8)) emptyList() else c.getString(8).split('\u001F')
+            )
+        }
+        return out
+    }
+
+    /** A staged guide's listings in [fromMs, toMs), short form (no descriptions), by guide channel. */
+    fun stagedWindow(src: String, fromMs: Long, toMs: Long): Map<String, List<EpgProgram>> {
+        val out = HashMap<String, ArrayList<EpgProgram>>()
+        readableDatabase.rawQuery(
+            "SELECT xid, start, stop, title, ep, icon FROM stage WHERE src = ? AND stop > ? AND start < ?",
+            arrayOf(src, fromMs.toString(), toMs.toString())
+        ).use { c ->
+            while (c.moveToNext()) out.getOrPut(c.getString(0)) { ArrayList() } += EpgProgram(
+                startMs = c.getLong(1), stopMs = c.getLong(2), title = c.getString(3),
+                episode = if (c.isNull(4)) null else c.getString(4),
+                icon = if (c.isNull(5)) null else c.getString(5)
+            )
+        }
+        return out
+    }
+
+    /** Guides no longer used: their staged listings go. */
+    fun dropStagesExcept(keep: Collection<String>) {
+        val db = writableDatabase
+        val stale = ArrayList<String>()
+        db.rawQuery("SELECT src FROM stage_info", null).use { c -> while (c.moveToNext()) stale += c.getString(0) }
+        db.rawQuery("SELECT DISTINCT src FROM stage_meta", null).use { c -> while (c.moveToNext()) stale += c.getString(0) }
+        stale.distinct().filter { it !in keep }.forEach { src ->
+            db.delete("stage", "src = ?", arrayOf(src))
+            db.delete("stage_meta", "src = ?", arrayOf(src))
+            db.delete("stage_channels", "src = ?", arrayOf(src))
+            db.delete("stage_info", "src = ?", arrayOf(src))
+        }
+    }
+
+    /**
+     * Replaces the whole guide from the staged guides in one step: each channel in [choice] gets
+     * the listings of its chosen guide channel (source, guide id) in [fromMs, toMs); [extra] are
+     * listings given directly (hand-picked guides). Like [replaceAll], in one transaction.
+     */
+    fun replaceAllFromStage(
+        fingerprint: String,
+        choice: Map<String, EpgAssignment>,
+        extra: Map<String, List<EpgProgram>>,
+        auto: Map<String, EpgAssignment>,
+        parts: String?,
+        fromMs: Long,
+        toMs: Long
+    ) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.execSQL("DROP INDEX IF EXISTS programs_ch_start")
+            db.execSQL("DROP INDEX IF EXISTS programs_stop")
+            db.execSQL("DROP INDEX IF EXISTS programs_start")
+            db.delete("programs", null, null)
+            db.delete("auto", null, null)
+            db.execSQL("DROP TABLE IF EXISTS temp.choice")
+            db.execSQL("CREATE TEMP TABLE choice (src TEXT NOT NULL, xid TEXT NOT NULL, ch TEXT NOT NULL, PRIMARY KEY (src, xid, ch))")
+            val ins = db.compileStatement("INSERT OR IGNORE INTO temp.choice (src, xid, ch) VALUES (?,?,?)")
+            choice.forEach { (ch, a) ->
+                ins.clearBindings(); ins.bindString(1, a.sourceId); ins.bindString(2, a.xmltvId); ins.bindString(3, ch)
+                ins.executeInsert()
+            }
+            db.execSQL(
+                "INSERT INTO programs (ch, start, stop, title, descr, cat, ep, icon, year, people) " +
+                    "SELECT c.ch, s.start, s.stop, s.title, s.descr, s.cat, s.ep, s.icon, s.year, s.people " +
+                    "FROM stage s JOIN temp.choice c ON c.src = s.src AND c.xid = s.xid WHERE s.stop > ? AND s.start < ?",
+                arrayOf<Any>(fromMs, toMs)
+            )
+            db.execSQL("DROP TABLE IF EXISTS temp.choice")
+            val stmt = db.compileStatement(
+                "INSERT INTO programs (ch, start, stop, title, descr, cat, ep, icon, year, people) VALUES (?,?,?,?,?,?,?,?,?,?)"
+            )
+            extra.forEach { (ch, list) ->
+                list.forEach { p ->
+                    stmt.clearBindings()
+                    stmt.bindString(1, ch); stmt.bindLong(2, p.startMs); stmt.bindLong(3, p.stopMs); stmt.bindString(4, p.title)
+                    p.description?.let { stmt.bindString(5, it) } ?: stmt.bindNull(5)
+                    p.category?.let { stmt.bindString(6, it) } ?: stmt.bindNull(6)
+                    p.episode?.let { stmt.bindString(7, it) } ?: stmt.bindNull(7)
+                    p.icon?.let { stmt.bindString(8, it) } ?: stmt.bindNull(8)
+                    p.year?.let { stmt.bindLong(9, it.toLong()) } ?: stmt.bindNull(9)
+                    if (p.people.isEmpty()) stmt.bindNull(10) else stmt.bindString(10, p.people.joinToString("\u001F"))
+                    stmt.executeInsert()
+                }
+            }
+            auto.forEach { (ch, a) ->
+                db.insertWithOnConflict("auto", null, ContentValues().apply {
+                    put("ch", ch); put("source", a.sourceId); put("xmltv", a.xmltvId)
+                }, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.execSQL("CREATE INDEX IF NOT EXISTS programs_ch_start ON programs(ch, start)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS programs_stop ON programs(stop)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS programs_start ON programs(start)")
+            putFingerprint(db, fingerprint, parts)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     /** Gives back space left empty by deleted listings (see [SqliteCompact]). */
     fun compact(): Long = SqliteCompact.compactIfWasteful(writableDatabase, "guide")
 
@@ -369,6 +648,7 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
         db.delete("programs", null, null)
         db.delete("auto", null, null)
         db.delete("meta", null, null)
+        runCatching { db.delete("stage", null, null); db.delete("stage_meta", null, null); db.delete("stage_channels", null, null); db.delete("stage_info", null, null) }
     }
 }
 

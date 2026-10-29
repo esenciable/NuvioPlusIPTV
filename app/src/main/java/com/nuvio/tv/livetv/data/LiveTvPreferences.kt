@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
 import com.nuvio.tv.livetv.model.ChannelSort
+import com.nuvio.tv.livetv.model.matchFrameRate
 import com.nuvio.tv.livetv.model.CustomGroup
 import com.nuvio.tv.livetv.model.EpgSource
 import com.nuvio.tv.livetv.model.LiveTvSettings
@@ -70,7 +71,6 @@ class LiveTvPreferences @Inject constructor(
         val showProgramTimes = booleanPreferencesKey("show_program_times")
         val showEpisodeNumbers = booleanPreferencesKey("show_episode_numbers")
         val guideSize = stringPreferencesKey("guide_size")
-        val stripeMissingGuide = booleanPreferencesKey("stripe_missing_guide")
         val epgOffset = intPreferencesKey("epg_offset_minutes")
         val reverseZap = booleanPreferencesKey("reverse_zap")
         val zapMode = stringPreferencesKey("zap_mode")
@@ -111,6 +111,7 @@ class LiveTvPreferences @Inject constructor(
         val showQualityBadges = booleanPreferencesKey("show_quality_badges")
         val showFrameRate = booleanPreferencesKey("show_frame_rate")
         val matchFrameRate = booleanPreferencesKey("match_frame_rate")
+        val frameRateMode = stringPreferencesKey("frame_rate_mode")
         val onDemandInSidebar = booleanPreferencesKey("on_demand_in_sidebar")
         val recordingsInSidebar = booleanPreferencesKey("recordings_in_sidebar")
         val onDemandInStreams = booleanPreferencesKey("on_demand_in_streams")
@@ -122,6 +123,8 @@ class LiveTvPreferences @Inject constructor(
         val groupPlaylistHeadings = booleanPreferencesKey("group_playlist_headings")
         /** This TV has had Group by Playlist turned on once (per TV, never synced). */
         val groupPlaylistTurnedOn = booleanPreferencesKey("group_playlist_turned_on_once")
+        /** This TV only: ids of playlists and guides removed here, not yet passed on by sync. */
+        val removedSources = stringSetPreferencesKey("removed_sources")
         val nameRemovals = stringPreferencesKey("name_removals")
         val developerTools = booleanPreferencesKey("developer_tools")
         val browseByChannelName = booleanPreferencesKey("browse_by_channel_name")
@@ -160,9 +163,14 @@ class LiveTvPreferences @Inject constructor(
         val clockOpacity = intPreferencesKey("clock_opacity")
         val clockBackground = booleanPreferencesKey("clock_background")
         val panelBackground = stringPreferencesKey("panel_background")
+        val guideInfoBackground = stringPreferencesKey("guide_info_background")
+        val guideBackdrop = stringPreferencesKey("guide_backdrop")
         val recentInPanel = booleanPreferencesKey("recent_in_panel")
         val panelRow = stringPreferencesKey("panel_row")
         val channelSurf = booleanPreferencesKey("channel_surf")
+        val barHidden = stringPreferencesKey("bar_hidden")
+        val guideInfoHidden = stringPreferencesKey("guide_info_hidden")
+        val launcherRows = stringPreferencesKey("launcher_rows")
         val lockedGroups = stringSetPreferencesKey("locked_groups")
         val reminders = stringPreferencesKey("reminders")
         val channelQuality = stringPreferencesKey("channel_quality")
@@ -300,7 +308,6 @@ class LiveTvPreferences @Inject constructor(
             showProgramTimes = p[Keys.showProgramTimes] ?: d.showProgramTimes,
             showEpisodeNumbers = p[Keys.showEpisodeNumbers] ?: d.showEpisodeNumbers,
             guideSize = p[Keys.guideSize] ?: d.guideSize,
-            stripeMissingGuide = p[Keys.stripeMissingGuide] ?: d.stripeMissingGuide,
             epgOffsetMinutes = p[Keys.epgOffset] ?: d.epgOffsetMinutes,
             reverseZap = p[Keys.reverseZap] ?: d.reverseZap,
             zapMode = p[Keys.zapMode]?.let { runCatching { ZapMode.valueOf(it) }.getOrNull() } ?: d.zapMode,
@@ -340,7 +347,8 @@ class LiveTvPreferences @Inject constructor(
             lockAdultContent = p[Keys.lockAdultContent] ?: d.lockAdultContent,
             showQualityBadges = p[Keys.showQualityBadges] ?: d.showQualityBadges,
             showFrameRate = p[Keys.showFrameRate] ?: d.showFrameRate,
-            matchFrameRate = p[Keys.matchFrameRate] ?: d.matchFrameRate,
+            // Before the three choices it was on or off; on worked like "On start/stop".
+            frameRateMode = p[Keys.frameRateMode] ?: if (p[Keys.matchFrameRate] == true) "START_STOP" else d.frameRateMode,
             onDemandInSidebar = p[Keys.onDemandInSidebar] ?: d.onDemandInSidebar,
             recordingsInSidebar = p[Keys.recordingsInSidebar] ?: d.recordingsInSidebar,
             onDemandInStreams = p[Keys.onDemandInStreams] ?: d.onDemandInStreams,
@@ -389,10 +397,15 @@ class LiveTvPreferences @Inject constructor(
             clockOpacity = p[Keys.clockOpacity] ?: d.clockOpacity,
             clockBackground = p[Keys.clockBackground] ?: d.clockBackground,
             panelBackground = p[Keys.panelBackground] ?: d.panelBackground,
+            guideInfoBackground = p[Keys.guideInfoBackground] ?: d.guideInfoBackground,
+            guideBackdrop = p[Keys.guideBackdrop] ?: d.guideBackdrop,
             recentInPanel = p[Keys.recentInPanel] ?: d.recentInPanel,
             // Before the choice existed it was an on / off switch for Recent.
             panelRow = p[Keys.panelRow] ?: if (p[Keys.recentInPanel] == false) "OFF" else d.panelRow,
-            channelSurf = p[Keys.channelSurf] ?: d.channelSurf
+            channelSurf = p[Keys.channelSurf] ?: d.channelSurf,
+            barHidden = p[Keys.barHidden] ?: d.barHidden,
+            guideInfoHidden = p[Keys.guideInfoHidden] ?: d.guideInfoHidden,
+            launcherRows = p[Keys.launcherRows] ?: d.launcherRows
         )
     }.distinctUntilChanged()
 
@@ -460,11 +473,41 @@ class LiveTvPreferences @Inject constructor(
     // ---------- sources ----------
 
     suspend fun updatePlaylists(transform: (List<PlaylistSource>) -> List<PlaylistSource>) {
-        store.edit { p -> p[Keys.playlists] = encodePlaylists(transform(decodePlaylists(p[Keys.playlists]))) }
+        var removed = emptySet<String>()
+        store.edit { p ->
+            val before = decodePlaylists(p[Keys.playlists])
+            val after = transform(before)
+            removed = before.map { it.id }.toSet() - after.map { it.id }.toSet()
+            p[Keys.playlists] = encodePlaylists(after)
+        }
+        noteRemovedSources(removed)
     }
 
     suspend fun updateEpgSources(transform: (List<EpgSource>) -> List<EpgSource>) {
-        store.edit { p -> p[Keys.epgs] = encodeEpgs(transform(decodeEpgs(p[Keys.epgs]))) }
+        var removed = emptySet<String>()
+        store.edit { p ->
+            val before = decodeEpgs(p[Keys.epgs])
+            val after = transform(before)
+            removed = before.map { it.id }.toSet() - after.map { it.id }.toSet()
+            p[Keys.epgs] = encodeEpgs(after)
+        }
+        noteRemovedSources(removed)
+    }
+
+    // Playlists and guides removed on this TV (by you), until Google Drive sync has passed that on.
+    // Sync only takes a source out of the saved copy when it's listed here, so a TV that simply
+    // never had a playlist (or lost it) can't delete it from your other TVs.
+    private suspend fun noteRemovedSources(ids: Set<String>) {
+        val clean = ids.filter { it.isNotBlank() }
+        if (clean.isEmpty()) return
+        deviceStore.edit { it[Keys.removedSources] = (it[Keys.removedSources] ?: emptySet()) + clean }
+    }
+
+    suspend fun removedSourceIds(): Set<String> = deviceStore.data.first()[Keys.removedSources] ?: emptySet()
+
+    suspend fun forgetRemovedSources(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        deviceStore.edit { it[Keys.removedSources] = (it[Keys.removedSources] ?: emptySet()) - ids }
     }
 
     /**
@@ -502,7 +545,6 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.showProgramTimes] = s.showProgramTimes
         p[Keys.showEpisodeNumbers] = s.showEpisodeNumbers
         p[Keys.guideSize] = s.guideSize
-        p[Keys.stripeMissingGuide] = s.stripeMissingGuide
         p[Keys.epgOffset] = s.epgOffsetMinutes
         p[Keys.reverseZap] = s.reverseZap
         p[Keys.zapMode] = s.zapMode.name
@@ -542,6 +584,7 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.lockAdultContent] = s.lockAdultContent
         p[Keys.showQualityBadges] = s.showQualityBadges
         p[Keys.showFrameRate] = s.showFrameRate
+        p[Keys.frameRateMode] = s.frameRateMode
         p[Keys.matchFrameRate] = s.matchFrameRate
         p[Keys.onDemandInSidebar] = s.onDemandInSidebar
         p[Keys.recordingsInSidebar] = s.recordingsInSidebar
@@ -588,9 +631,14 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.clockOpacity] = s.clockOpacity
         p[Keys.clockBackground] = s.clockBackground
         p[Keys.panelBackground] = s.panelBackground
+        p[Keys.guideInfoBackground] = s.guideInfoBackground
+        p[Keys.guideBackdrop] = s.guideBackdrop
         p[Keys.recentInPanel] = s.recentInPanel
         p[Keys.panelRow] = s.panelRow
         p[Keys.channelSurf] = s.channelSurf
+        p[Keys.barHidden] = s.barHidden
+        p[Keys.guideInfoHidden] = s.guideInfoHidden
+        p[Keys.launcherRows] = s.launcherRows
     }
 
     // ---------- channel management ----------
@@ -1049,6 +1097,14 @@ class LiveTvPreferences @Inject constructor(
             out.put(name, entry)
         }
         return out
+    }
+
+    /** Whether a setup from [exportForSync] has any playlist or guide in it. */
+    fun syncHasSources(data: JSONObject?): Boolean {
+        if (data == null) return false
+        fun raw(key: String) = data.optJSONObject(key)?.optString("v")
+        return runCatching { decodePlaylists(raw(Keys.playlists.name)).isNotEmpty() }.getOrDefault(false) ||
+            runCatching { decodeEpgs(raw(Keys.epgs.name)).isNotEmpty() }.getOrDefault(false)
     }
 
     /** Replaces this TV's Live TV setup with [data] from [exportForSync], keeping per-TV state. */

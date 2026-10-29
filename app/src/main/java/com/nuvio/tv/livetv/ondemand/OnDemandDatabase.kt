@@ -99,7 +99,7 @@ data class VodCategory(
  */
 @Singleton
 class OnDemandDatabase @Inject constructor(@ApplicationContext private val appContext: Context) :
-    SQLiteOpenHelper(appContext, "livetv_on_demand.db", null, 8) {
+    SQLiteOpenHelper(appContext, "livetv_on_demand.db", null, 9) {
 
     init {
         // Browsing On Demand doesn't wait while an import or genre lookup is writing.
@@ -112,7 +112,7 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext private val appCo
                 pl TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL,
                 name TEXT NOT NULL, norm TEXT NOT NULL, icon TEXT, cat TEXT NOT NULL,
                 ext TEXT, tmdb TEXT, year INTEGER, rating TEXT, added INTEGER NOT NULL DEFAULT 0,
-                genre TEXT,
+                genre TEXT, h INTEGER,
                 PRIMARY KEY (pl, kind, id))"""
         )
         db.execSQL("CREATE INDEX items_cat ON items(kind, pl, cat)")
@@ -121,6 +121,7 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext private val appCo
         db.execSQL("CREATE INDEX items_added ON items(kind, added)")
         createPosterTable(db)
         createPrefixTable(db)
+        createPosterFixTable(db)
         db.execSQL(
             """CREATE TABLE categories (
                 pl TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL,
@@ -154,6 +155,14 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext private val appCo
         // Version 8: titles are only matched to a same-named title from (about) the same year,
         // so look posters up again (some showed another film's poster and details).
         if (oldVersion < 8) db.execSQL("DELETE FROM posters")
+        // Version 9: each title's fingerprint (imports only write what changed), titles you've
+        // fixed by hand ("Fix poster"), and posters looked up again: matched by the provider's
+        // TMDB id where it has one, and with cleaner titles.
+        if (oldVersion < 9) {
+            runCatching { db.execSQL("ALTER TABLE items ADD COLUMN h INTEGER") }
+            createPosterFixTable(db)
+            db.execSQL("DELETE FROM posters")
+        }
     }
 
     private fun fixYearsFromNames(db: SQLiteDatabase) {
@@ -284,6 +293,26 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext private val appCo
         knownPrefixes = set
     }
 
+    private fun createPosterFixTable(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS poster_fix (uid TEXT PRIMARY KEY, title TEXT NOT NULL, year INTEGER)")
+    }
+
+    /** The name (and year) you typed for a title with "Fix poster", if any. */
+    fun posterFix(uid: String): Pair<String, Int?>? =
+        readableDatabase.rawQuery("SELECT title, year FROM poster_fix WHERE uid = ?", arrayOf(uid)).use { c ->
+            if (c.moveToFirst()) c.getString(0) to (if (c.isNull(1)) null else c.getInt(1)) else null
+        }
+
+    /** Sets (or with a blank [title], clears) a title's "Fix poster" name, and forgets its old poster. */
+    fun setPosterFix(uid: String, title: String, year: Int?) {
+        val db = writableDatabase
+        if (title.isBlank()) db.delete("poster_fix", "uid = ?", arrayOf(uid))
+        else db.insertWithOnConflict("poster_fix", null, ContentValues().apply {
+            put("uid", uid); put("title", title.trim()); if (year != null) put("year", year) else putNull("year")
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+        db.delete("posters", "uid = ?", arrayOf(uid))
+    }
+
     private fun createPosterTable(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS posters (uid TEXT PRIMARY KEY, poster TEXT, checked INTEGER NOT NULL, title TEXT)")
     }
@@ -321,13 +350,44 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext private val appCo
 
     // ------------------------------------------------------------------ writing
 
-    /** Replaces one provider's catalog of [kind] in a single transaction. */
+    /** What the last [replace] actually changed: titles written, and titles removed. */
+    @Volatile var lastChanges: Pair<Int, Int> = 0 to 0
+        private set
+
+    /** A title's details as one number: the same number means nothing to write. */
+    private fun fingerprint(it: VodItem): Long {
+        var h = 1125899906842597L
+        for (s in arrayOf(it.name, it.icon, it.categoryId, it.ext, it.tmdbId, it.year?.toString(), it.rating, it.addedSec.toString(), it.genre)) {
+            h = 31 * h + (s?.hashCode() ?: 7)
+        }
+        return if (h == 0L) 1L else h
+    }
+
+    /**
+     * Brings one provider's catalog of [kind] up to date in a single transaction. Only titles that
+     * are new or changed are written, and titles the provider no longer lists are removed: every
+     * import used to delete and write back the whole catalog (100,000+ titles), even when only a
+     * few had changed. The first import of a catalog writes with the search indexes off and builds
+     * them once at the end, which is much quicker than keeping them up to date title by title.
+     */
     fun replace(playlistId: String, kind: VodKind, categories: List<Pair<String, String>>, items: Sequence<VodItem>): Int {
         val db = writableDatabase
+        val existing = HashMap<String, Long>()
+        db.rawQuery("SELECT id, h FROM items WHERE pl = ? AND kind = ?", arrayOf(playlistId, kind.key)).use { c ->
+            while (c.moveToNext()) existing[c.getString(0)] = if (c.isNull(1)) 0L else c.getLong(1)
+        }
+        val bulk = existing.isEmpty()
         var count = 0
+        var written = 0
+        var removed = 0
         db.beginTransaction()
         try {
-            db.delete("items", "pl = ? AND kind = ?", arrayOf(playlistId, kind.key))
+            if (bulk) {
+                db.execSQL("DROP INDEX IF EXISTS items_cat")
+                db.execSQL("DROP INDEX IF EXISTS items_norm")
+                db.execSQL("DROP INDEX IF EXISTS items_tmdb")
+                db.execSQL("DROP INDEX IF EXISTS items_added")
+            }
             db.delete("categories", "pl = ? AND kind = ?", arrayOf(playlistId, kind.key))
             categories.forEachIndexed { i, (id, name) ->
                 db.insertWithOnConflict("categories", null, ContentValues().apply {
@@ -335,9 +395,14 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext private val appCo
                 }, SQLiteDatabase.CONFLICT_REPLACE)
             }
             val stmt = db.compileStatement(
-                "INSERT OR REPLACE INTO items (pl, kind, id, name, norm, icon, cat, ext, tmdb, year, rating, added, genre) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                "INSERT OR REPLACE INTO items (pl, kind, id, name, norm, icon, cat, ext, tmdb, year, rating, added, genre, h) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
             )
+            val seen = HashSet<String>(maxOf(16, existing.size))
             items.forEach { it ->
+                count++
+                seen.add(it.id)
+                val h = fingerprint(it)
+                if (existing[it.id] == h) return@forEach // unchanged
                 stmt.clearBindings()
                 stmt.bindString(1, playlistId)
                 stmt.bindString(2, kind.key)
@@ -352,13 +417,30 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext private val appCo
                 it.rating?.let { v -> stmt.bindString(11, v) } ?: stmt.bindNull(11)
                 stmt.bindLong(12, it.addedSec)
                 it.genre?.let { v -> stmt.bindString(13, v) } ?: stmt.bindNull(13)
+                stmt.bindLong(14, h)
                 stmt.executeInsert()
-                count++
+                existing[it.id] = h // a title listed twice is written once
+                written++
+            }
+            // Titles the provider no longer lists.
+            if (existing.size > seen.size) {
+                val del = db.compileStatement("DELETE FROM items WHERE pl = ? AND kind = ? AND id = ?")
+                existing.keys.filter { it !in seen }.forEach { id ->
+                    del.clearBindings(); del.bindString(1, playlistId); del.bindString(2, kind.key); del.bindString(3, id)
+                    removed += del.executeUpdateDelete()
+                }
+            }
+            if (bulk) {
+                db.execSQL("CREATE INDEX IF NOT EXISTS items_cat ON items(kind, pl, cat)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS items_norm ON items(kind, norm)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS items_tmdb ON items(kind, tmdb)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS items_added ON items(kind, added)")
             }
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
+        lastChanges = written to removed
         return count
     }
 
@@ -633,13 +715,38 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext private val appCo
 
         private fun cleanTitle(raw: String): String {
             val s = undotted(raw)
-            val t = stripTags(s).replace(PREFIX, "")
+            var t = stripTags(s).replace(PREFIX, "")
                 .replace(YEAR_IN_BRACKETS_TRAIL, "")
                 .replace(YEAR_AT_END, "")
                 .replace(QUALITY_AT_END, "")
                 .trim()
+            // More of the decorations other IPTV apps take off (OwnTV's title cleaner): flags,
+            // tags in brackets ("[MULTI-SUB]", "(VOSTFR)"), release words anywhere ("WEB-DL",
+            // "x265", "5.1"), and a capital language tag at the very end ("Movie FR").
+            // Never down to nothing.
+            val before = t
+            t = t.replace(EMOJI_FLAG, " ")
+                .replace(BRACKET_TAG) { m -> if (RELEASE_WORDS.containsMatchIn(m.value) || SHORT_CAPS.matches(m.value)) " " else m.value }
+                .replace(RELEASE_WORDS, " ")
+                .replace(TRAILING_LANG_TAG, "")
+                .replace(MULTI_SPACE, " ")
+                .trim()
+                .trim('-', '–', '—', '|', ':', '.', '_', ' ')
+            if (t.isBlank() || t.none { it.isLetterOrDigit() }) t = before
             return t.ifBlank { s.trim() }
         }
+
+        private val EMOJI_FLAG = Regex("[\\x{1F1E6}-\\x{1F1FF}]")
+        private val BRACKET_TAG = Regex("""[\[{(][^\[\]{}()]*[\]})]""")
+        private val SHORT_CAPS = Regex("""[\[{(]\s*[A-Z]{2,4}\s*[\]})]""")
+        private val RELEASE_WORDS = Regex(
+            "(?i)\\b(uhd|fhd|hevc|h\\.?265|h\\.?264|x265|x264|hdr10\\+?|hdr|dolby\\s+vision|atmos|" +
+                "multi[- ]?subs?|multisub|dual[- ]?audio|remux|web[- ]?dl|webrip|bluray|blu-ray|bdrip|dvdrip|hdrip|" +
+                "vostfr|vost|subbed|dubbed|dublado|legendado|truefrench|hdlight|" +
+                "10bit|8bit|60fps|50fps|aac|e?ac3|dts|ddp|[257]\\.1|hdtc|hdcam|camrip|1080p|720p|2160p|480p)\\b"
+        )
+        private val TRAILING_LANG_TAG = Regex("""\s+(?:FR|EN|DE|ES|PT|NL|PL|TR|AR|RU|LAT|SUB|DUB|MULTI)$""")
+        private val MULTI_SPACE = Regex("""\s{2,}""")
 
         private val TRAILING_EXTRA = setOf("uk", "us", "usa", "au", "aus", "ca", "nz", "ie", "gb", "de", "fr", "es", "it", "nl")
 

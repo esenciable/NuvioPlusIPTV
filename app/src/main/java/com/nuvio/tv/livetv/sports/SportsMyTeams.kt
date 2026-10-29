@@ -107,6 +107,8 @@ private val ROW_TOP_INSET = 33.dp
 @Composable
 internal fun MyTeamsRows(
     page: MyTeamsPage,
+    /** Team key -> where it stands ("2nd in Premier League"), shown by its row's name. */
+    places: Map<String, String> = emptyMap(),
     /** The sport picked on the top bar (null: everything you follow). */
     sport: Sport?,
     follows: SportsFollows,
@@ -244,7 +246,7 @@ internal fun MyTeamsRows(
             ) {
                 items(page.rows, key = { it.key }) { row ->
                     Column {
-                        RowHeader(row, follows)
+                        RowHeader(row, follows, row.team?.let { places[it.key] })
                         if (row.events.isEmpty()) {
                             LiveText(
                                 "No games found for ${row.title} yet. They show here as soon as the schedule has them.",
@@ -253,16 +255,19 @@ internal fun MyTeamsRows(
                         } else {
                             val state = rowState(row.key, row.startIndex)
                             val keyAt: (Int) -> String = { i -> "${row.key}|${row.events[i].id}" }
+                            // The card you left this row on, by game (not by position, which shifts).
+                            val lastOnRow = remember(row.key) { arrayOfNulls<String>(1) }
                             androidx.compose.runtime.CompositionLocalProvider(androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides rowSpec) {
                                 LazyRow(
                                     state = state,
-                                    // Coming back to a row: the game you were on; the first time: the
-                                    // game on now or next (not whichever is under the row above).
+                                    // Coming back to a row: the exact game you left it on; the first
+                                    // time: the game on now or next (not whichever is under the row above).
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .focusRestorer {
                                             val visible = state.layoutInfo.visibleItemsInfo.map { it.index }
-                                            val idx = row.startIndex.takeIf { it in visible } ?: visible.firstOrNull()
+                                            val back = lastOnRow[0]?.let { id -> row.events.indexOfFirst { it.id == id } }?.takeIf { it >= 0 && it in visible }
+                                            val idx = back ?: row.startIndex.takeIf { it in visible } ?: visible.firstOrNull()
                                             idx?.let { requesterFor(keyAt(it)) } ?: FocusRequester.Default
                                         }
                                         .focusGroup(),
@@ -281,7 +286,7 @@ internal fun MyTeamsRows(
                                             playing = playing(ev),
                                             modifier = Modifier
                                                 .focusRequester(requesterFor(key))
-                                                .onFocusChanged { if (it.isFocused) onFocusKey(key) }
+                                                .onFocusChanged { if (it.isFocused) { lastOnRow[0] = ev.id; onFocusKey(key) } }
                                                 .steadyRowKeys(state, i, row.events.size) { j -> requesterFor(keyAt(j)) },
                                             onClick = { onOpen(ev) },
                                             onLongClick = { onQuickWatch(ev) }
@@ -299,7 +304,7 @@ internal fun MyTeamsRows(
 
 /** A row's heading: the team's badge (or the league's mark), its name, and how many games. */
 @Composable
-private fun RowHeader(row: SportsRow, follows: SportsFollows) {
+private fun RowHeader(row: SportsRow, follows: SportsFollows, place: String? = null) {
     Row(Modifier.fillMaxWidth().height(30.dp).padding(top = 6.dp, bottom = 2.dp, start = 4.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         when (row.kind) {
             SportsRow.Kind.UPCOMING -> Box(Modifier.size(10.dp).clip(RoundedCornerShape(5.dp)).background(SportsLook.Live))
@@ -311,6 +316,8 @@ private fun RowHeader(row: SportsRow, follows: SportsFollows) {
         }
         Spacer(Modifier.width(9.dp))
         LiveText(row.title, size = 15.sp, weight = FontWeight.Black)
+        // Just to read (not a stop): where the team stands, from its league's table.
+        place?.let { LiveText("  ·  $it", color = SportsLook.Dim, size = 12.sp, weight = FontWeight.Bold) }
         Spacer(Modifier.weight(1f))
         val ahead = row.events.count { it.state != GameState.POST }
         LiveText(

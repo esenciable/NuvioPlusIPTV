@@ -13,7 +13,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -134,6 +137,9 @@ class OnDemandRepository @Inject constructor(
     private val infoCache = com.nuvio.tv.livetv.data.boundedCache<String, VodInfo>(300)
     /** The last import problem, shown in settings (cleared by a clean import). */
     @Volatile private var lastProblem: String? = null
+
+    /** Each login's own last problem (by playlist id), so one login's success or failure doesn't hide another's. */
+    private val problemByPlaylist = java.util.concurrent.ConcurrentHashMap<String, String>()
     private var started = false
 
     @Synchronized
@@ -175,6 +181,16 @@ class OnDemandRepository @Inject constructor(
             }
             refresh(force = false)
         }
+        // A login with movies and series that arrives or is switched on later (from Google Drive
+        // sync or a restore, which used to leave On Demand empty until "Update now" or a restart):
+        // import it straight away. One that's gone is dropped the same way.
+        scope.launch {
+            prefs.playlists
+                .map { list -> list.filter { it.enabled && it.isXtream && it.importVod }.map { it.id }.toSet() }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect { refreshSoon() }
+        }
     }
 
     /** Imports new providers and drops ones that were turned off (no re-download of the rest). */
@@ -209,17 +225,21 @@ class OnDemandRepository @Inject constructor(
             if (onlyId != null && pl.id != onlyId) continue
             val last = stamps[pl.id] ?: 0L
             if (!force && now - last < REFRESH_MS) continue
-            // Automatic imports wait while a movie or episode is playing in Nuvio's player.
+            // Automatic imports wait while a movie or episode is playing in Nuvio's player, and
+            // while the guide is being built or Sports is finding channels.
             if (!force) com.nuvio.tv.livetv.data.BackgroundWork.awaitIdle()
+            if (!force) com.nuvio.tv.livetv.data.BackgroundWork.awaitNoHeavy()
             _status.value = OnDemandStatus(true, "Importing movies and series from ${pl.name}…")
             lastProblem = null
             // Movies and series import separately, so a problem with one keeps the other.
             val movies = runCatching { importKind(pl, VodKind.MOVIE) }
                 .onFailure { Log.w(TAG, "Movies for ${pl.name} failed", it); lastProblem = "Couldn't import movies from ${pl.name}: ${it.message ?: it.javaClass.simpleName}" }
             if (!force) com.nuvio.tv.livetv.data.BackgroundWork.awaitIdle()
+            if (!force) com.nuvio.tv.livetv.data.BackgroundWork.awaitNoHeavy()
             val series = runCatching { importKind(pl, VodKind.SERIES) }
                 .onFailure { Log.w(TAG, "Series for ${pl.name} failed", it); lastProblem = "Couldn't import series from ${pl.name}: ${it.message ?: it.javaClass.simpleName}" }
             val ok = movies.isSuccess && series.isSuccess && lastProblem == null
+            lastProblem?.let { problemByPlaylist[pl.id] = it } ?: problemByPlaylist.remove(pl.id)
             // Success: next import in a day. Failure: try again in an hour, not on every start.
             prefs.setOnDemandImportTime(
                 pl.id,
@@ -230,7 +250,9 @@ class OnDemandRepository @Inject constructor(
         }
         _hasContent.value = runCatching { db.hasAny() }.getOrDefault(_hasContent.value)
         // A problem stays visible in Settings → Live TV → On Demand (no more silent failures).
-        _status.value = OnDemandStatus(false, lastProblem)
+        // Every login's problem, not only the last one imported.
+        problemByPlaylist.keys.retainAll(keep)
+        _status.value = OnDemandStatus(false, problemByPlaylist.values.joinToString("\n").ifBlank { null })
     }
 
     /**
@@ -291,6 +313,15 @@ class OnDemandRepository @Inject constructor(
     }
 
     private fun importKind(pl: PlaylistSource, kind: VodKind) {
+        val t0 = System.currentTimeMillis()
+        try { importKindInner(pl, kind) } finally {
+            com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                "On Demand \"${pl.name}\": ${if (kind == VodKind.MOVIE) "movies" else "series"} imported in ${(System.currentTimeMillis() - t0) / 1000} s"
+            )
+        }
+    }
+
+    private fun importKindInner(pl: PlaylistSource, kind: VodKind) {
         val api = pl.xtreamApiUrl()
         val catAction = if (kind == VodKind.MOVIE) "get_vod_categories" else "get_series_categories"
         val listAction = if (kind == VodKind.MOVIE) "get_vod_streams" else "get_series"
@@ -314,6 +345,10 @@ class OnDemandRepository @Inject constructor(
         val saved = db.replace(
             pl.id, kind, categories,
             streamItems(pl, kind, "$api&action=$listAction", onStop = { stoppedEarly = it }, onItem = ::progress)
+        )
+        com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+            "On Demand \"${pl.name}\": ${"%,d".format(saved)} $what, ${categories.size} categories; " +
+                "${"%,d".format(db.lastChanges.first)} new or changed, ${"%,d".format(db.lastChanges.second)} removed"
         )
         val firstProblem = stoppedEarly ?: return
 
@@ -584,6 +619,17 @@ class OnDemandRepository @Inject constructor(
 
     suspend fun cachedTitle(item: VodItem): String? = withContext(Dispatchers.IO) {
         runCatching { db.cachedTitle(item.uid) }.getOrNull()
+    }
+
+    /** The name (and year) typed for this title with "Fix poster", if any. */
+    suspend fun posterFix(item: VodItem): Pair<String, Int?>? = withContext(Dispatchers.IO) {
+        runCatching { db.posterFix(item.uid) }.getOrNull()
+    }
+
+    /** "Fix poster": the name (and year) to look this title up by; a blank name goes back to automatic. */
+    suspend fun setPosterFix(item: VodItem, title: String, year: Int?) = withContext(Dispatchers.IO) {
+        runCatching { db.setPosterFix(item.uid, title, year) }
+        Unit
     }
 
     // ------------------------------------------------------------------ "Watch On Demand"

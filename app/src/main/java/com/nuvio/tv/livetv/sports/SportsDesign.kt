@@ -77,9 +77,12 @@ import kotlinx.coroutines.launch
  */
 
 internal object SportsLook {
-    val Card = Color(0xFF12141B)
-    val CardRaised = Color(0xFF1A1D26)
-    val Border = Color.White.copy(alpha = 0.09f)
+    // Translucent and a shade lighter (not flat near-black), so cards read as glass over the
+    // hub's own background, matching the full-screen player's bar and gear panel. Alpha alone
+    // barely shows against a background this close in tone, so the edge is bumped up too.
+    val Card = Color(0xAD1E212C)
+    val CardRaised = Color(0xB8282C3A)
+    val Border = Color.White.copy(alpha = 0.20f)
     val Divider = Color.White.copy(alpha = 0.08f)
     val Dim = Color(0xFF8B90A0)
     val Faint = Color(0xFF5D6170)
@@ -261,7 +264,9 @@ internal fun TeamBand(
     logo: Dp = 30.dp,
     name: TextUnit = 13.sp,
     score: TextUnit = 22.sp,
-    extra: String? = side.record
+    extra: String? = side.record,
+    /** Before the game: this team's place, form and chances, where the score goes later. */
+    trailing: (@Composable () -> Unit)? = null
 ) {
     val c = bandColor(teamColor(side.team))
     Row(
@@ -281,6 +286,7 @@ internal fun TeamBand(
             extra?.takeIf { it.isNotBlank() }?.let { LiveText(it, color = Color.White.copy(alpha = 0.6f), size = name * 0.68f, weight = FontWeight.SemiBold) }
         }
         if (showScore) ScoreLabel(side.score.orEmpty(), dim, score)
+        else trailing?.invoke()
     }
 }
 
@@ -594,22 +600,16 @@ internal fun DayTab(text: String, selected: Boolean, modifier: Modifier = Modifi
         text,
         modifier = modifier
             .clip(shape)
-            .background(
-                when {
-                    focused -> Color.White
-                    selected -> accent.copy(alpha = 0.14f)
-                    else -> Color.Transparent
-                }
+            .background(if (selected) accent.copy(alpha = 0.14f) else Color.Transparent)
+            .border(
+                if (focused) NuvioTheme.focusRing.border(1.5.dp)
+                else androidx.compose.foundation.BorderStroke(1.5.dp, if (selected) accent else Color.Transparent),
+                shape
             )
-            .border(1.5.dp, if (selected && !focused) accent else Color.Transparent, shape)
             .onFocusChanged { focused = it.isFocused }
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 5.dp),
-        color = when {
-            focused -> SportsLook.Ink
-            selected -> Color.White
-            else -> SportsLook.Dim
-        },
+        color = if (selected) Color.White else SportsLook.Dim,
         size = 12.sp, weight = FontWeight.Bold
     )
 }
@@ -671,26 +671,47 @@ internal fun SportsAction(
     text: String,
     modifier: Modifier = Modifier,
     selected: Boolean = false,
+    /** A coloured dot before the text (Record's red one). */
+    dot: Color? = null,
     onClick: () -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(50)
+    if (dot != null) {
+        Row(
+            modifier
+                .clip(shape)
+                .background(if (selected) Color.White.copy(alpha = 0.14f) else SportsLook.Card)
+                .border(
+                    if (focused) NuvioTheme.focusRing.border(2.dp)
+                    else androidx.compose.foundation.BorderStroke(1.dp, if (selected) Color.White.copy(alpha = 0.35f) else SportsLook.Border),
+                    shape
+                )
+                .onFocusChanged { focused = it.isFocused }
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
+                .padding(horizontal = 14.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(10.dp).clip(RoundedCornerShape(50)).background(dot))
+            Spacer(Modifier.width(7.dp))
+            LiveText(text, color = Color.White, size = 12.sp, weight = FontWeight.ExtraBold)
+        }
+        return
+    }
     LiveText(
         text,
         modifier = modifier
             .clip(shape)
-            .background(
-                when {
-                    focused -> Color.White
-                    selected -> Color.White.copy(alpha = 0.14f)
-                    else -> SportsLook.Card
-                }
+            .background(if (selected) Color.White.copy(alpha = 0.14f) else SportsLook.Card)
+            .border(
+                if (focused) NuvioTheme.focusRing.border(2.dp)
+                else androidx.compose.foundation.BorderStroke(1.dp, if (selected) Color.White.copy(alpha = 0.35f) else SportsLook.Border),
+                shape
             )
-            .border(1.dp, if (focused) Color.White else if (selected) Color.White.copy(alpha = 0.35f) else SportsLook.Border, shape)
             .onFocusChanged { focused = it.isFocused }
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 7.dp),
-        color = if (focused) SportsLook.Ink else Color.White,
+        color = Color.White,
         size = 12.sp, weight = FontWeight.ExtraBold
     )
 }
@@ -703,14 +724,15 @@ internal fun SportsMenuRow(label: String, modifier: Modifier = Modifier, detail:
         modifier
             .fillMaxWidth()
             .clip(SportsLook.SmallShape)
-            .background(if (focused) Color.White else Color.Transparent)
+            .background(if (focused) NuvioTheme.colors.FocusBackground.copy(alpha = 0.25f) else Color.Transparent)
+            .border(if (focused) NuvioTheme.focusRing.border(2.dp) else androidx.compose.foundation.BorderStroke(0.dp, Color.Transparent), SportsLook.SmallShape)
             .onFocusChanged { focused = it.isFocused }
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        LiveText(label, color = if (focused) SportsLook.Ink else Color.White, size = 15.sp, weight = FontWeight.Bold, modifier = Modifier.weight(1f))
-        detail?.let { LiveText(it, color = if (focused) Color(0xFF555A66) else SportsLook.Dim, size = 12.sp) }
+        LiveText(label, color = Color.White, size = 15.sp, weight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        detail?.let { LiveText(it, color = SportsLook.Dim, size = 12.sp) }
     }
 }
 
@@ -788,20 +810,20 @@ internal fun SportsChannelRow(
 ) {
     var focused by remember { mutableStateOf(false) }
     val accent = NuvioTheme.colors.Secondary
-    val ink = if (focused) SportsLook.Ink else Color.White
-    val sub = if (focused) Color(0xFF555A66) else SportsLook.Dim
+    val ink = Color.White
+    val sub = SportsLook.Dim
     Box(
         modifier
             .fillMaxWidth()
             .height(56.dp)
-            .sportsFrame(focused, false, accent, radius = 12.dp, background = if (focused) Color.White else SportsLook.Card)
+            .sportsFrame(focused, false, accent, radius = 12.dp)
             .onFocusChanged { focused = it.isFocused }
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
     ) {
         Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(width = 46.dp, height = 30.dp).clip(RoundedCornerShape(6.dp))
-                    .background(if (focused) Color(0xFFE8E9EE) else Color.White.copy(alpha = 0.08f)),
+                    .background(Color.White.copy(alpha = 0.08f)),
                 contentAlignment = Alignment.Center
             ) { ChannelLogo(m.channel.logo, 24.dp) }
             Spacer(Modifier.width(11.dp))
@@ -814,9 +836,9 @@ internal fun SportsChannelRow(
                         LiveText(
                             src,
                             modifier = Modifier.widthIn(max = 150.dp)
-                                .background(if (focused) Color(0xFFE3E5EB) else Color.White.copy(alpha = 0.10f), RoundedCornerShape(5.dp))
+                                .background(Color.White.copy(alpha = 0.10f), RoundedCornerShape(5.dp))
                                 .padding(horizontal = 6.dp, vertical = 1.dp),
-                            color = if (focused) Color(0xFF3A3E48) else Color(0xFFC9CCD6), size = 9.sp, weight = FontWeight.Bold, maxLines = 1
+                            color = Color(0xFFC9CCD6), size = 9.sp, weight = FontWeight.Bold, maxLines = 1
                         )
                     }
                 }
@@ -834,20 +856,20 @@ internal fun SportsChannelRow(
             Spacer(Modifier.width(8.dp))
             when {
                 playing -> SportsBadge("▶ PLAYING", accent, NuvioTheme.colors.OnSecondary)
-                m.sure -> SportsBadge("SHOWING IT", if (focused) SportsLook.Ink else accent, if (focused) Color.White else NuvioTheme.colors.OnSecondary)
+                m.sure -> SportsBadge("SHOWING IT", accent, NuvioTheme.colors.OnSecondary)
                 else -> LiveText(
                     "MAYBE",
-                    modifier = Modifier.border(1.dp, if (focused) Color(0xFF999999) else Color.White.copy(alpha = 0.35f), RoundedCornerShape(9.dp))
+                    modifier = Modifier.border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(9.dp))
                         .padding(horizontal = 7.dp, vertical = 1.dp),
-                    color = if (focused) Color(0xFF555555) else Color(0xFFC9CCD6), size = 9.sp, weight = FontWeight.Black
+                    color = Color(0xFFC9CCD6), size = 9.sp, weight = FontWeight.Black
                 )
             }
             m.quality?.let { q ->
                 Spacer(Modifier.width(6.dp))
                 LiveText(
                     q,
-                    modifier = Modifier.border(1.dp, if (focused) SportsLook.Ink else accent.copy(alpha = 0.7f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp),
-                    color = if (focused) SportsLook.Ink else accent, size = 9.sp, weight = FontWeight.Black
+                    modifier = Modifier.border(1.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp),
+                    color = accent, size = 9.sp, weight = FontWeight.Black
                 )
             }
         }

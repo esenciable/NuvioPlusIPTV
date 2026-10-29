@@ -21,6 +21,13 @@ import android.widget.TextView
  */
 class CrashReportActivity : Activity() {
 
+    private var server: ReportServer.Handle? = null
+
+    override fun onDestroy() {
+        server?.stop()
+        super.onDestroy()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val report = intent.getStringExtra(CrashCatcher.EXTRA_REPORT)
@@ -36,17 +43,22 @@ class CrashReportActivity : Activity() {
             typeface = Typeface.DEFAULT_BOLD
         }
         val hint = TextView(this).apply {
-            text = "Scan the code with your phone's camera to copy this report (app version, device and " +
-                "what went wrong), then send it to whoever maintains this build. Or take a photo of " +
-                "this screen. Use up/down to scroll."
+            text = "To send this report: put your phone on the same Wi-Fi as this TV, scan the code with " +
+                "your phone's camera, tap Copy report and paste it in your message. No Wi-Fi? Take a " +
+                "photo of this screen instead. Use up/down to scroll."
             setTextColor(Color.parseColor("#B0B0B8"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setPadding(0, dp(6), dp(16), dp(12))
         }
         // The important part (version, device, root cause) as a QR code; a QR code holds about
         // 2,000 characters comfortably, so the full trace stays on screen only.
+        // The whole report is a web page on the home network (opened from a phone on the same
+        // Wi-Fi); the code holds its address. Without a network, the start of the report instead.
+        server = ReportServer.start("Nuvio + IPTV crash report") { report }
         val summary = report.substringBefore("FULL TRACE:").trim().take(1_800)
-        val qr = runCatching { com.nuvio.tv.core.qr.QrCodeGenerator.generate(summary, dp(200)) }.getOrNull()
+        val qr = runCatching {
+            com.nuvio.tv.core.qr.QrCodeGenerator.generate(server?.url ?: summary, dp(200))
+        }.getOrNull()
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL

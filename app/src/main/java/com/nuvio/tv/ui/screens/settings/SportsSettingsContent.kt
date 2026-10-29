@@ -184,6 +184,14 @@ fun SportsSettingsContent(
                         onClick = { viewModel.repo.refreshNow(); LiveTvNotice.show("Updating Sports…") }
                     )
                     SettingsActionRow(
+                        title = "Preferred Channel Groups",
+                        subtitle = "Channels in these groups go to the top of every game's list (your UK sports channels, say). " +
+                            "Without any, channels from your region come first",
+                        value = if (s.preferredGroups.isEmpty()) "None" else s.preferredGroups.size.toString(),
+                        leadingIcon = Icons.Default.Star,
+                        onClick = { dialog = "groups" }
+                    )
+                    SettingsActionRow(
                         title = "Forget My Channel Fixes",
                         subtitle = "Channels you picked (or took off) with Fix Channel, including the ones used for whole networks",
                         value = if (fixes == 0) "None" else fixes.toString(),
@@ -221,6 +229,15 @@ fun SportsSettingsContent(
             options = REMIND_TIMES.map { SettingsPickerOption(it, remindLabel(it)) },
             selectedValue = s.remindMinutes,
             onOptionSelected = { v -> update { it.copy(remindMinutes = v) }; close() },
+            onDismiss = close
+        )
+        "groups" -> GroupsDialog(
+            viewModel = viewModel,
+            chosen = s.preferredGroups,
+            onToggle = { g ->
+                val key = g.lowercase().trim()
+                update { cur -> cur.copy(preferredGroups = if (key in cur.preferredGroups) cur.preferredGroups - key else cur.preferredGroups + key) }
+            },
             onDismiss = close
         )
         "leagues" -> LeaguesDialog(s, onToggle = { l -> update { cur -> toggleShown(l, cur) } }, onDismiss = close)
@@ -280,6 +297,46 @@ private fun LeaguesDialog(s: SportsSettings, onToggle: (League) -> Unit, onDismi
                         if (l.guideOnly) "From your guide" else l.sport.label,
                         color = if (focused) focusedTextColor(true) else NuvioTheme.colors.TextSecondary, size = 12.sp
                     )
+                }
+            }
+        }
+    }
+    LaunchedEffect(Unit) { delay(80); runCatching { first.requestFocus() } }
+}
+
+/** Your channel groups (most channels first, sports-looking ones at the top); OK ticks one. */
+@Composable
+private fun GroupsDialog(viewModel: SportsViewModel, chosen: Set<String>, onToggle: (String) -> Unit, onDismiss: () -> Unit) {
+    val first = remember { FocusRequester() }
+    val groups = remember {
+        viewModel.repo.channelsForPicker()
+            .filter { it.group.isNotBlank() }
+            .groupingBy { it.group }.eachCount()
+            .entries
+            .sortedWith(
+                compareByDescending<Map.Entry<String, Int>> { it.key.contains("sport", ignoreCase = true) }
+                    .thenBy { it.key.lowercase() }
+            )
+            .map { it.key to it.value }
+    }
+    LiveDialog(onDismiss = onDismiss, width = 620.dp) {
+        LiveText("Preferred channel groups", size = 20.sp, weight = FontWeight.Bold)
+        LiveText(
+            "OK ticks a group. Its channels go to the top of each game's list, above channels from elsewhere. Channels you picked with Fix Channel still come first.",
+            color = NuvioTheme.colors.TextSecondary, size = 13.sp, maxLines = 3
+        )
+        Spacer(Modifier.height(10.dp))
+        if (groups.isEmpty()) LiveText("No channel groups yet. Add a playlist in Live TV first.", color = NuvioTheme.colors.TextSecondary, size = 13.sp)
+        LazyColumn(Modifier.heightIn(max = 420.dp)) {
+            items(groups, key = { it.first }) { (g, n) ->
+                val on = g.lowercase().trim() in chosen
+                LiveFocusRow(
+                    modifier = (if (g == groups.first().first) Modifier.focusRequester(first) else Modifier).fillMaxWidth(),
+                    onClick = { onToggle(g) }
+                ) { focused ->
+                    LiveText(if (on) "✓" else " ", color = focusedTextColor(focused), size = 16.sp, weight = FontWeight.Bold)
+                    LiveText(g, color = focusedTextColor(focused), size = 15.sp, modifier = Modifier.weight(1f))
+                    LiveText("$n", color = if (focused) focusedTextColor(true) else NuvioTheme.colors.TextSecondary, size = 12.sp)
                 }
             }
         }

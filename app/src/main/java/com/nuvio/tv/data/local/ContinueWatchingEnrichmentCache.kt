@@ -3,6 +3,10 @@ package com.nuvio.tv.data.local
 import android.content.Context
 import android.util.Log
 import com.google.gson.Gson
+import com.google.gson.JsonArray
+import com.google.gson.JsonNull
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 import com.nuvio.tv.core.profile.ProfileManager
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -76,6 +80,42 @@ class ContinueWatchingEnrichmentCache @Inject constructor(
     companion object {
         private const val TAG = "CwEnrichCache"
         private const val THROTTLE_MS = 1_000L
+
+        /**
+         * The snapshot file as objects the rest of the app can trust.
+         *
+         * The file is read with Gson, which builds Kotlin data classes WITHOUT honoring their
+         * non-null types: a cache written by an older build — or by a writer that put a null
+         * where the model says String — comes back as an object whose `contentId: String` really
+         * is null. Nothing notices until somebody passes it to a non-null parameter, which is what
+         * the home screen does first thing after a profile is chosen
+         * (`isDroppedShow(contentId: String)`); the parameter check throws a NullPointerException,
+         * the crash catcher reports "app closed" and kills the process.
+         *
+         * So the field is validated BEFORE deserializing: an item whose contentId is not a usable
+         * string never reaches the rest of the app. Pure by design — it touches Gson and nothing
+         * else, so it can be tested without a Context.
+         */
+        internal fun <T> parseSnapshot(text: String, type: java.lang.reflect.Type): List<T> {
+            val root = runCatching { JsonParser.parseString(text) }.getOrNull()
+            if (root !is JsonArray) return emptyList()
+            // Validate before deserializing: Gson will happily put null into `contentId: String`.
+            val trusted = JsonArray()
+            for (element in root) {
+                if (element !is JsonObject) continue
+                val id = element.get("contentId")
+                val usable = id != null && id !is JsonNull && id.isJsonPrimitive &&
+                    id.asJsonPrimitive.isString && id.asString.isNotBlank()
+                if (usable) trusted.add(element)
+            }
+            if (trusted.size() == 0) return emptyList()
+            return try {
+                val parsed: List<T> = Gson().fromJson(trusted, type)
+                parsed
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
     }
 
     private val gson = Gson()
@@ -107,8 +147,7 @@ class ContinueWatchingEnrichmentCache @Inject constructor(
             try {
                 val file = nextUpFile()
                 if (!file.exists()) return@withContext emptyList()
-                gson.fromJson(file.readText(), object : TypeToken<List<CachedNextUpItem>>() {}.type)
-                    ?: emptyList()
+                parseSnapshot(file.readText(), object : TypeToken<List<CachedNextUpItem>>() {}.type)
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read next-up cache: ${e.message}")
                 emptyList()
@@ -153,8 +192,7 @@ class ContinueWatchingEnrichmentCache @Inject constructor(
             try {
                 val file = inProgressFile()
                 if (!file.exists()) return@withContext emptyList()
-                gson.fromJson(file.readText(), object : TypeToken<List<CachedInProgressItem>>() {}.type)
-                    ?: emptyList()
+                parseSnapshot(file.readText(), object : TypeToken<List<CachedInProgressItem>>() {}.type)
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read in-progress cache: ${e.message}")
                 emptyList()

@@ -1148,7 +1148,11 @@ class WatchProgressRepositoryImpl @Inject constructor(
         watchProgressPreferences.clearAll(profileId)
     }
 
-    override fun isDroppedShow(contentId: String): Boolean {
+    override fun isDroppedShow(contentId: String?): Boolean {
+        // An unknown id is not a dropped show: this is the one place every caller funnels through,
+        // and before it became nullable a null from a cached file or the remote pipeline died here
+        // ("Parameter specified as non-null is null"), closing the app on profile open.
+        if (contentId.isNullOrBlank()) return false
         return activeProgressProviderId
             ?.let(trackingProgressProviders::provider)
             ?.isHiddenFromProgress(contentId) == true

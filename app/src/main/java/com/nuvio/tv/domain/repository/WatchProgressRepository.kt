@@ -165,8 +165,14 @@ interface WatchProgressRepository {
 
     /**
      * Returns true if the show is dropped/hidden from progress on the active source.
+     *
+     * Nullable on purpose: callers pass ids read out of cached files and of the remote pipeline,
+     * and an id that arrives as null means "we don't know this one", not "it is dropped". It used
+     * to be a non-null String, and a null reaching the parameter check threw a
+     * NullPointerException that closed the app the moment a profile was opened — this returns
+     * false instead.
      */
-    fun isDroppedShow(contentId: String): Boolean
+    fun isDroppedShow(contentId: String?): Boolean
 
     fun hasActiveTrackingProgressProvider(): Boolean
     fun activeProviderOwnsCompletedHistoryProjection(): Boolean

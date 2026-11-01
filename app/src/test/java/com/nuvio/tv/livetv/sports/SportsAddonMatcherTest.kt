@@ -342,4 +342,43 @@ class SportsAddonMatcherTest {
         assertNull(SportsAddonMatcher.find(game, epl, emptyList()))
         assertNull(SportsAddonMatcher.find(game, epl, listOf(addon(first = "Brighton", second = "Arsenal", kickoffMs = kickoff + 3 * 60 * minute))))
     }
+
+    @Test
+    fun `the measured Hornets case, pairing names join and localized ones do not`() {
+        // Production, rb_2258769_2 (NBA): the feed shipped title
+        // "Charlotte Hornets vs Philadelphia 76ers" but teams[1].name
+        // "Los del 76 de Filadelfia" — the app compares TEAM names, so the fixture matched
+        // nothing and the detail screen opened with zero links while the server answered
+        // two feeds (TyR, Fubo US). The server now publishes the pairing's names instead
+        // (esencial-sport commit ac28832), which is what this pins from this side.
+        val kickoff = 1_793_484_000_000L // 2026-10-31T22:00:00Z, ESPN and the feed agree
+        val nba = League(
+            id = "basketball/nba", sport = Sport.BASKETBALL, name = "NBA", short = "NBA",
+            espnPath = "basketball/nba", guideWords = listOf("NBA"), minutes = 150,
+        )
+        fun side(name: String, full: String, home: Boolean) = Side(
+            team = TeamInfo(
+                leagueId = nba.id, id = full.lowercase(), name = name, fullName = full,
+                abbr = full.take(3).uppercase(), location = null, color = null, altColor = null, logo = null,
+            ),
+            score = null, record = null, winner = false, home = home,
+        )
+        val espn = SportsEvent(
+            id = "espn:401909897", leagueId = nba.id, startMs = kickoff, hasTime = true,
+            state = GameState.LIVE, title = "Hornets at 76ers", subtitle = null, status = null,
+            home = side("Hornets", "Charlotte Hornets", home = true),
+            away = side("76ers", "Philadelphia 76ers", home = false),
+        )
+        fun feed(secondTeam: String) = AddonEvent(
+            id = "rb_2258769_2", kickoffMs = kickoff,
+            teams = listOf(AddonTeam(1, "Charlotte Hornets", ""), AddonTeam(2, secondTeam, "")),
+            streamUrl = "https://addon.test/2258769_2.m3u8", title = "Charlotte Hornets vs Philadelphia 76ers",
+            leagueName = "NBA", sportType = 2, live = true, status = "live",
+        )
+        // What the server publishes now: the fixture joins and its two feeds reach the picker.
+        assertTrue(SportsAddonMatcher.matches(espn, nba, feed("Philadelphia 76ers")))
+        // What it published before: the localized name matched nothing, so no link ever appeared.
+        assertFalse(SportsAddonMatcher.matches(espn, nba, feed("Los del 76 de Filadelfia")))
+    }
+
 }

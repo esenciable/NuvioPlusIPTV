@@ -22,7 +22,4 @@ internal interface MagisCryptoPort {
     /** [size] cryptographically random bytes (one device fingerprint per mint). */
     fun randomBytes(size: Int): ByteArray
 
-    fun base64Encode(data: ByteArray): String
-
-    fun base64Decode(text: String): ByteArray
 }

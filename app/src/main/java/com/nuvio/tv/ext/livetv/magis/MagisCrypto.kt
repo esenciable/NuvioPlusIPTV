@@ -27,13 +27,13 @@ internal class MagisCrypto(
 
     fun encryptBody(plain: String): String {
         val ciphertext = port.tripleDesEcbPkcs5(key, plain.toByteArray(Charsets.UTF_8), encrypt = true)
-        val b64 = port.base64Encode(ciphertext)
+        val b64 = MagisBase64.encode(ciphertext)
         return bytesToHex(b64.toByteArray(Charsets.US_ASCII))
     }
 
     fun decryptBlob(wire: String): String {
         val inner = String(hexToBytes(wire), Charsets.US_ASCII)
-        val plain = port.tripleDesEcbPkcs5(key, port.base64Decode(inner), encrypt = false)
+        val plain = port.tripleDesEcbPkcs5(key, MagisBase64.decode(inner), encrypt = false)
         return String(plain, Charsets.UTF_8)
     }
 }

@@ -3,7 +3,6 @@ package com.nuvio.tv.ext.livetv.platform
 import com.nuvio.tv.ext.livetv.magis.MagisCryptoPort
 import java.security.MessageDigest
 import java.security.SecureRandom
-import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 
@@ -28,8 +27,4 @@ internal object AndroidMagisCryptoPort : MagisCryptoPort {
 
     override fun randomBytes(size: Int): ByteArray =
         ByteArray(size).also { random.nextBytes(it) }
-
-    override fun base64Encode(data: ByteArray): String = Base64.getEncoder().encodeToString(data)
-
-    override fun base64Decode(text: String): ByteArray = Base64.getDecoder().decode(text)
 }

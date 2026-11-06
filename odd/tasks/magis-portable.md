@@ -23,11 +23,11 @@ cliente de TV. Preparación del WU2 del plan (`docs/06-plan-multiplataforma.md` 
 
 | ID | Qué | Criterio |
 | --- | --- | --- |
-| T1 | Test de frontera `MagisPortabilityTest` (whitelist de imports + glue declarado) | Hoy ROJO con la lista exacta de violaciones; verde al cerrar T2-T5 |
-| T2 | Cripto y azar detrás de un port (`MagisCipher`, `MagisDigest`) + implementación Android | `MagisCrypto` y `MagisDevice` sin `javax.crypto`/`java.security`; sus tests actuales verdes |
-| T3 | Almacenamiento de sesión y config detrás de un port (`MagisKeyValueStore`) | `MagisSession` y `MagisRemoteConfig` sin `androidx.datastore`/`android.*`; sus tests verdes |
-| T4 | HTTP detrás de un port (`MagisHttp`) y lookup de título (`MagisTitleLookup`) | `MagisPortal` sin `okhttp3`; `MagisVodTitleLookup` sin `com.nuvio.tv.core.tmdb` |
-| T5 | JSON a `kotlinx.serialization` en los 8 archivos que usan `org.json` | Cero `org.json`; mismos valores decodificados (tests actuales) |
+| T1 ✅ | Test de frontera `MagisPortabilityTest` (whitelist de imports + glue declarado) | ROJO medido (43 violaciones) y **verde** al cerrar T2-T5 |
+| T2 ✅ | Cripto y azar detrás de un port (`MagisCipher`, `MagisDigest`) + implementación Android | `MagisCrypto` y `MagisDevice` sin `javax.crypto`/`java.security`; sus tests actuales verdes |
+| T3 ✅ | Almacenamiento de sesión y config detrás de un port (`MagisKeyValueStore`) | `MagisSession` y `MagisRemoteConfig` sin `androidx.datastore`/`android.*`; sus tests verdes |
+| T4 ✅ | HTTP detrás de un port (`MagisHttp`) y lookup de título (`MagisTitleLookup`) | `MagisPortal` sin `okhttp3`; `MagisVodTitleLookup` sin `com.nuvio.tv.core.tmdb` |
+| T5 ✅ | JSON a `kotlinx.serialization` en los 8 archivos que usan `org.json` | Cero `org.json`; mismos valores decodificados (tests actuales) |
 
 ## Log
 
@@ -41,3 +41,14 @@ cliente de TV. Preparación del WU2 del plan (`docs/06-plan-multiplataforma.md` 
   `MagisDevice` javax.crypto+java.security); `org.json` aparece en 8 archivos con 81 llamadas
   (24 `optString`, 20 `optJSONArray`, 7 `optJSONObject`, 6 `length`, 5 `toString`, 1 `put`,
   1 `optInt`, 39 constructores). El cliente de TV **ya** tiene `kotlinx.serialization.json`.
+
+- **L4** — (2026-11-07) T1-T5 cerrados. Frontera **verde: 43 → 0 violaciones**. Suite del paquete
+  `ext.livetv.*`: 138 tests, 0 fallos (incluye los 2 del test de frontera). Suite completa del
+  cliente: **2.487 tests, 3 fallos** — exactamente el baseline conocido
+  (`TraktAuthServiceTest`, `TraktProgressServiceRefreshTest`, `SettingsCatalogTest`), o sea cero
+  regresiones. El paquete quedó con: `MagisCryptoPort` (implementado por
+  `platform/AndroidMagisCryptoPort`), `MagisJsonObject`/`MagisJsonArray` sobre kotlinx (con la
+  semántica laxa de `org.json` centralizada), `MagisPortalLike`, `MagisSessionStore`,
+  `MagisConfigStore` y `MagisTitleLookup`. En `ext/livetv/platform/` viven las cuatro
+  implementaciones Android: portal OkHttp, los dos stores DataStore, el fetcher del config remoto
+  y el lookup de TMDB.

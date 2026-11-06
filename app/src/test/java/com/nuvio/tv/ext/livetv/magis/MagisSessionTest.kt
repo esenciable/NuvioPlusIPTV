@@ -1,7 +1,8 @@
 package com.nuvio.tv.ext.livetv.magis
 
+import com.nuvio.tv.ext.livetv.magis.MagisDevice
+import com.nuvio.tv.ext.livetv.platform.AndroidMagisCryptoPort
 import kotlinx.coroutines.test.runTest
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -28,13 +29,13 @@ class MagisSessionTest {
      */
     private class FakePortal(
         /** path -> answer; anything unlisted falls back to [fallback]. */
-        private val script: Map<String, (MagisResult<JSONObject>) -> MagisResult<JSONObject>> = emptyMap(),
+        private val script: Map<String, (MagisResult<MagisJsonObject>) -> MagisResult<MagisJsonObject>> = emptyMap(),
     ) : MagisPortalLike {
         val calls = mutableListOf<String>()
         var activeCallCount = 0
         private fun ok(vararg pairs: Pair<String, Any?>) =
             MagisResult.Ok(
-                JSONObject(
+                MagisJsonObject(
                     mapOf(
                         "userId" to "u1",
                         "userToken" to "t1",
@@ -50,7 +51,7 @@ class MagisSessionTest {
             userId: String,
             userToken: String,
             sn: String?,
-        ): MagisResult<JSONObject> {
+        ): MagisResult<MagisJsonObject> {
             calls += path
             if (path == "v8/active") activeCallCount++
             val answer = script[path]?.invoke(ok()) ?: ok()
@@ -59,7 +60,7 @@ class MagisSessionTest {
     }
 
     private fun session(portal: MagisPortalLike, store: FakeStore = FakeStore()) =
-        MagisSession(portal, store)
+        MagisSession(portal, store, MagisDevice(AndroidMagisCryptoPort))
 
     @Test(timeout = 5_000)
     fun `withValidSession recovers after a portal rejection instead of deadlocking`() = runTest {
@@ -75,7 +76,7 @@ class MagisSessionTest {
         val result = s.withValidSession {
             attempts++
             if (attempts == 1) MagisResult.PortalError("portal100001", "rejected")
-            else MagisResult.Ok(JSONObject("""{"ok":true}"""))
+            else MagisResult.Ok(MagisJsonObject("""{"ok":true}"""))
         }
 
         // The block itself is not a portal call: the rejection path must reauth (mint/activate)

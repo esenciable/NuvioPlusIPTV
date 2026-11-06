@@ -1,8 +1,8 @@
 package com.nuvio.tv.ext.livetv.magis
 
+import com.nuvio.tv.ext.livetv.magis.MagisDevice
+import com.nuvio.tv.ext.livetv.platform.AndroidMagisCryptoPort
 import kotlinx.coroutines.test.runTest
-import org.json.JSONArray
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -29,7 +29,7 @@ class MagisVodSourceTest {
 
     /** Portal recording every path; per-path answers overridable, default an empty Ok. */
     private class FakePortal(
-        private val answers: Map<String, MagisResult<JSONObject>.() -> MagisResult<JSONObject>> = emptyMap(),
+        private val answers: Map<String, MagisResult<MagisJsonObject>.() -> MagisResult<MagisJsonObject>> = emptyMap(),
     ) : MagisPortalLike {
         val paths = mutableListOf<String>()
         override suspend fun call(
@@ -39,12 +39,12 @@ class MagisVodSourceTest {
             userId: String,
             userToken: String,
             sn: String?,
-        ): MagisResult<JSONObject> {
+        ): MagisResult<MagisJsonObject> {
             paths += path
             // Default covers the session mint (v3/snToken needs snToken; the session fields are
             // what MagisVodClientTest's default carries).
             val ok = MagisResult.Ok(
-                JSONObject(mapOf("snToken" to "ST-fake", "userId" to "u1", "userToken" to "t1")),
+                MagisJsonObject(mapOf("snToken" to "ST-fake", "userId" to "u1", "userToken" to "t1")),
             )
             return (answers[path] ?: { ok }).invoke(ok)
         }
@@ -61,33 +61,33 @@ class MagisVodSourceTest {
 
     private fun client(portal: MagisPortalLike) = MagisVodClient(
         portal = portal,
-        session = MagisSession(portal, FakeStore()),
+        session = MagisSession(portal, FakeStore(), MagisDevice(AndroidMagisCryptoPort)),
         configProvider = { config() },
         titleLookup = FakeTitleLookup(),
     )
 
     private fun searchAnswer() = MagisResult.Ok(
-        JSONObject().put(
+        MagisJsonObject().put(
             "searchItem",
-            JSONArray().put(JSONObject().put("contentId", "C1").put("name", "Coco")),
+            MagisJsonArray().put(MagisJsonObject().put("contentId", "C1").put("name", "Coco")),
         ),
     )
 
-    private fun playAnswer() = JSONObject().put(
+    private fun playAnswer() = MagisJsonObject().put(
         "episodeList",
-        JSONArray().put(
-            JSONObject().put(
+        MagisJsonArray().put(
+            MagisJsonObject().put(
                 "totalMovieList",
-                JSONArray().put(
-                    JSONObject().put(
+                MagisJsonArray().put(
+                    MagisJsonObject().put(
                         "movieList",
-                        JSONArray().put(
-                            JSONObject()
+                        MagisJsonArray().put(
+                            MagisJsonObject()
                                 .put("contentId", "MEDIA1")
                                 .put("encodeFormat", "h264")
                                 .put("videoFormat", "ts")
                                 .put("height", 1080)
-                                .put("licenseList", JSONArray().put(JSONObject().put("license", "lic"))),
+                                .put("licenseList", MagisJsonArray().put(MagisJsonObject().put("license", "lic"))),
                         ),
                     ),
                 ),
@@ -95,18 +95,18 @@ class MagisVodSourceTest {
         ),
     )
 
-    private fun slbAnswer() = JSONObject()
+    private fun slbAnswer() = MagisJsonObject()
         .put("invalidTime", 14400)
         .put(
             "cdn_list",
-            JSONArray().put(
-                JSONObject()
+            MagisJsonArray().put(
+                MagisJsonObject()
                     .put("tag", "vod")
                     .put("main_addr", "cdn.example.com")
                     .put(
                         "url_list",
-                        JSONArray().put(
-                            JSONObject().put("tag", "free").put("url", "auth=abc&sign_type=cfl"),
+                        MagisJsonArray().put(
+                            MagisJsonObject().put("tag", "free").put("url", "auth=abc&sign_type=cfl"),
                         ),
                     ),
             ),

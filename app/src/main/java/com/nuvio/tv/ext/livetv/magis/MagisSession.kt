@@ -1,16 +1,8 @@
 package com.nuvio.tv.ext.livetv.magis
 
-import android.content.Context
-import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.emptyPreferences
-import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStoreFile
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import org.json.JSONObject
 
 /**
  * The Magis portal's session as seen from the device. Port of the TS reference
@@ -25,6 +17,7 @@ import org.json.JSONObject
 internal class MagisSession(
     private val portal: MagisPortalLike,
     private val store: MagisSessionStore,
+    private val device: MagisDevice,
 ) {
 
     /** Activating is "read-modify-write" over the store: two coroutines at once would mint two
@@ -86,11 +79,11 @@ internal class MagisSession(
      * fingerprint, and two devices with the same fingerprint would be the same device.
      */
     private suspend fun mintDevice(): MagisResult<Unit> {
-        val r = portal.call("v3/snToken", MagisDevice.hardwareFingerprint(), baseFields = false)
+        val r = portal.call("v3/snToken", device.hardwareFingerprint(), baseFields = false)
         val j = r.getOrNull() ?: return r.map { }
         val snToken = j.optString("snToken").takeIf { it.isNotBlank() }
             ?: return MagisResult.PortalError("snToken_failed", "el portal no devolvió snToken")
-        val sn = MagisDevice.snFromSnToken(snToken, portalSn = j.optString("sn"))
+        val sn = device.snFromSnToken(snToken, portalSn = j.optString("sn"))
         // The `sn` is saved BEFORE activating because it's what the device dict has to carry in
         // that same call (`MagisPortalClient` reads it from the store).
         store.save(StoredSession(userId = "", userToken = "", sn = sn))
@@ -136,7 +129,7 @@ internal class MagisSession(
         return ensureAnonymous()
     }
 
-    private fun saveFromResponse(j: JSONObject) {
+    private fun saveFromResponse(j: MagisJsonObject) {
         val previous = store.read()
         store.save(
             StoredSession(
@@ -169,56 +162,11 @@ internal data class StoredSession(
     val sn: String,
 )
 
-/** Persistence for [MagisSession], kept as an interface so tests (and alternate stores) can swap it. */
+/**
+ * Persistence for [MagisSession]. An interface on purpose: the Android client backs it with its
+ * own DataStore file, the mobile client with whatever it has, and tests with a map.
+ */
 internal interface MagisSessionStore {
     fun save(s: StoredSession)
     fun read(): StoredSession?
-}
-
-/**
- * DataStore-backed store, following the fork's livetv persistence conventions
- * (`LiveTvStore`/`ProfileDataStoreFactory` store settings as preference keys). The Magis
- * device identity is DEVICE-scoped, not profile-scoped — two profiles sharing a device must
- * not kick each other out of the portal — so it gets its own standalone DataStore file
- * instead of the per-profile factory.
- *
- * TODO(M2/M3 DI): provide through Hilt (`@Singleton`, `@ApplicationContext`), like
- *  `LiveTvEpgModule` does for the EPG bindings.
- */
-internal class DataStoreMagisSessionStore(context: Context) : MagisSessionStore {
-
-    private val dataStore: DataStore<Preferences> = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
-        produceFile = { context.preferencesDataStoreFile(FILE) },
-    )
-
-    override fun save(s: StoredSession) {
-        kotlinx.coroutines.runBlocking {
-            dataStore.edit { prefs ->
-                prefs[KEY_USER_ID] = s.userId
-                prefs[KEY_USER_TOKEN] = s.userToken
-                prefs[KEY_SN] = s.sn
-            }
-        }
-    }
-
-    override fun read(): StoredSession? {
-        val prefs = kotlinx.coroutines.runBlocking {
-            kotlinx.coroutines.withTimeoutOrNull(READ_TIMEOUT_MS) { dataStore.data.first() }
-                ?: emptyPreferences()
-        }
-        val sn = prefs[KEY_SN] ?: return null
-        return StoredSession(
-            userId = prefs[KEY_USER_ID].orEmpty(),
-            userToken = prefs[KEY_USER_TOKEN].orEmpty(),
-            sn = sn,
-        )
-    }
-
-    private companion object {
-        const val FILE = "magis_session"
-        const val READ_TIMEOUT_MS = 2_000L
-        val KEY_USER_ID = stringPreferencesKey("magis_user_id")
-        val KEY_USER_TOKEN = stringPreferencesKey("magis_user_token")
-        val KEY_SN = stringPreferencesKey("magis_sn")
-    }
 }

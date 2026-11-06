@@ -4,13 +4,16 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.nuvio.tv.ext.livetv.platform.AndroidMagisCryptoPort
 
 /** The device fingerprint is pure: no Android APIs, so it can be tested on the JVM. */
 class MagisDeviceTest {
+    private val device = MagisDevice(AndroidMagisCryptoPort)
+
 
     @Test
     fun `the fingerprint carries the emulator's fixed identity fields`() {
-        val fp = MagisDevice.hardwareFingerprint()
+        val fp = device.hardwareFingerprint()
         assertEquals("ranchu", fp["hardware"])
         assertEquals("goldfish_arm64", fp["board"])
         assertEquals("google", fp["brand"])
@@ -21,8 +24,8 @@ class MagisDeviceTest {
 
     @Test
     fun `the identifying fields are randomized per fingerprint`() {
-        val a = MagisDevice.hardwareFingerprint()
-        val b = MagisDevice.hardwareFingerprint()
+        val a = device.hardwareFingerprint()
+        val b = device.hardwareFingerprint()
         // Two minted devices must never be the same device: the portal hands out one device
         // per fingerprint.
         assertNotEquals(a["androidId"], b["androidId"])
@@ -34,7 +37,7 @@ class MagisDeviceTest {
 
     @Test
     fun `random fields are well-formed`() {
-        val fp = MagisDevice.hardwareFingerprint()
+        val fp = device.hardwareFingerprint()
         val hexFields = listOf("androidId", "cpuId", "serialNumber")
         hexFields.forEach { key ->
             val value = fp[key] as String
@@ -62,12 +65,12 @@ class MagisDeviceTest {
         // Vector computed externally: md5("someTestToken" + SNTOKEN_SALT).
         assertEquals(
             "f0eaea3b1d90bb24d28e492feab5c93a",
-            MagisDevice.snFromSnToken("someTestToken"),
+            device.snFromSnToken("someTestToken"),
         )
         // The portal's own sn always wins over the derived one.
         assertEquals(
             "fromportal",
-            MagisDevice.snFromSnToken("someTestToken", portalSn = "  fromportal\n"),
+            device.snFromSnToken("someTestToken", portalSn = "  fromportal\n"),
         )
     }
 }

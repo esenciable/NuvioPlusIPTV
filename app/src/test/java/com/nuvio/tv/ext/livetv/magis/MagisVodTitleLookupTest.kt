@@ -10,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import retrofit2.Response
+import com.nuvio.tv.ext.livetv.platform.TmdbTitleLookup
 
 /**
  * The TMDB title lookup behind the Magis VOD flow: it must ask TMDB in SPANISH (`es-MX`, the

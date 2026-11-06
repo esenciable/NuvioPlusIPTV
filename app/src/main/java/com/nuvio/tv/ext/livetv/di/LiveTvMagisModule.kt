@@ -8,19 +8,21 @@ import com.nuvio.tv.ext.livetv.data.MagisChannelLoader
 import com.nuvio.tv.ext.livetv.data.MagisStreamResolver
 import com.nuvio.tv.ext.livetv.data.NativeLiveSources
 import com.nuvio.tv.ext.livetv.data.NativeVodSources
-import com.nuvio.tv.ext.livetv.magis.DataStoreMagisConfigStore
-import com.nuvio.tv.ext.livetv.magis.DataStoreMagisSessionStore
+import com.nuvio.tv.ext.livetv.platform.DataStoreMagisConfigStore
+import com.nuvio.tv.ext.livetv.platform.DataStoreMagisSessionStore
 import com.nuvio.tv.ext.livetv.magis.MagisConfigProvider
 import com.nuvio.tv.ext.livetv.magis.MagisConfigStore
 import com.nuvio.tv.ext.livetv.magis.MagisCryptoHolder
+import com.nuvio.tv.ext.livetv.magis.MagisDevice
+import com.nuvio.tv.ext.livetv.platform.AndroidMagisCryptoPort
 import com.nuvio.tv.ext.livetv.magis.MagisLiveCatalogApi
 import com.nuvio.tv.ext.livetv.magis.MagisLiveClient
 import com.nuvio.tv.ext.livetv.magis.MagisLivePlaybackApi
-import com.nuvio.tv.ext.livetv.magis.MagisPortalClient
+import com.nuvio.tv.ext.livetv.platform.MagisPortalClient
 import com.nuvio.tv.ext.livetv.magis.MagisVodClient
 import com.nuvio.tv.ext.livetv.magis.MagisVodSource
-import com.nuvio.tv.ext.livetv.magis.MagisRemoteConfig
-import com.nuvio.tv.ext.livetv.magis.TmdbTitleLookup
+import com.nuvio.tv.ext.livetv.platform.MagisRemoteConfig
+import com.nuvio.tv.ext.livetv.platform.TmdbTitleLookup
 import com.nuvio.tv.ext.livetv.magis.MagisRuntimeConfig
 import com.nuvio.tv.ext.livetv.magis.MagisSession
 import com.nuvio.tv.ext.livetv.magis.readOr
@@ -90,7 +92,7 @@ object LiveTvMagisModule {
         // The crypto rebuilds ONLY when the config's 3DES key changes, so a key rotation lands
         // without a restart; the portal/live/vod clients read the config PER USE and never
         // capture a snapshot.
-        val holder = MagisCryptoHolder { provider.current.threeDesKeyHex }
+        val holder = MagisCryptoHolder(AndroidMagisCryptoPort) { provider.current.threeDesKeyHex }
         // Background refresh: launched ASYNC on a process-lifetime scope the moment the stack is
         // provisioned — the first fetch fires without blocking injection, and the loop keeps
         // retrying on its tick until a VALID result arms the few-hours interval. It runs even
@@ -106,7 +108,7 @@ object LiveTvMagisModule {
             // changes it live, so it is READ per call, never captured.
             snProvider = { store.read()?.sn.orEmpty() },
         )
-        return MagisPortalStack(portal = portal, session = MagisSession(portal, store))
+        return MagisPortalStack(portal = portal, session = MagisSession(portal, store, MagisDevice(AndroidMagisCryptoPort)))
     }
 
     /**

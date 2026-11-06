@@ -1,8 +1,8 @@
 package com.nuvio.tv.ext.livetv.magis
 
+import com.nuvio.tv.ext.livetv.magis.MagisDevice
+import com.nuvio.tv.ext.livetv.platform.AndroidMagisCryptoPort
 import kotlinx.coroutines.test.runTest
-import org.json.JSONArray
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -25,7 +25,7 @@ class MagisLiveClientTest {
 
     /** Scripted portal: per-path answers, recording every (path, bean) pair. */
     private class FakePortal(
-        private val script: MutableMap<String, MagisResult<JSONObject>.() -> MagisResult<JSONObject>> = mutableMapOf(),
+        private val script: MutableMap<String, MagisResult<MagisJsonObject>.() -> MagisResult<MagisJsonObject>> = mutableMapOf(),
     ) : MagisPortalLike {
         data class Call(val path: String, val bean: Map<String, Any?>)
 
@@ -38,12 +38,12 @@ class MagisLiveClientTest {
             userId: String,
             userToken: String,
             sn: String?,
-        ): MagisResult<JSONObject> {
+        ): MagisResult<MagisJsonObject> {
             calls += Call(path, bean)
-            val default: MagisResult<JSONObject>.() -> MagisResult<JSONObject> = {
-                MagisResult.Ok(JSONObject(mapOf("userId" to "u1", "userToken" to "t1", "snToken" to "ST-fake")))
+            val default: MagisResult<MagisJsonObject>.() -> MagisResult<MagisJsonObject> = {
+                MagisResult.Ok(MagisJsonObject(mapOf("userId" to "u1", "userToken" to "t1", "snToken" to "ST-fake")))
             }
-            return (script[path] ?: default).invoke(MagisResult.Ok(JSONObject()))
+            return (script[path] ?: default).invoke(MagisResult.Ok(MagisJsonObject()))
         }
     }
 
@@ -61,35 +61,35 @@ class MagisLiveClientTest {
         portal: FakePortal,
         nowMs: () -> Long = { 1_700_000_000_000L },
     ): MagisLiveClient =
-        MagisLiveClient(portal, MagisSession(portal, FakeStore()), { config }, nowMs)
+        MagisLiveClient(portal, MagisSession(portal, FakeStore(), MagisDevice(AndroidMagisCryptoPort)), { config }, nowMs)
 
     // --- canned answers ------------------------------------------------------
 
     private fun categoriesAnswer(vararg pairs: Pair<Int, String>) = MagisResult.Ok(
-        JSONObject().put(
+        MagisJsonObject().put(
             "recommendList",
-            JSONArray().apply {
-                pairs.forEach { (id, name) -> put(JSONObject().put("columnId", id).put("name", name)) }
+            MagisJsonArray().apply {
+                pairs.forEach { (id, name) -> put(MagisJsonObject().put("columnId", id).put("name", name)) }
             },
         ),
     )
 
     private fun liveDataAnswer(vararg channels: Triple<String, String, Int>) = MagisResult.Ok(
-        JSONObject().put(
+        MagisJsonObject().put(
             "channelList",
-            JSONArray().apply {
+            MagisJsonArray().apply {
                 channels.forEach { (code, name, num) ->
-                    put(JSONObject().put("channelCode", code).put("name", name).put("channelNumber", num))
+                    put(MagisJsonObject().put("channelCode", code).put("name", name).put("channelNumber", num))
                 }
             },
         ),
     )
 
     private fun startPlayLiveAnswer(license: String = "lic-1", playCode: String = "pc-1") = MagisResult.Ok(
-        JSONObject().put(
+        MagisJsonObject().put(
             "liveAddressList",
-            JSONArray().put(
-                JSONObject().put("playCode", playCode).put("license", license),
+            MagisJsonArray().put(
+                MagisJsonObject().put("playCode", playCode).put("license", license),
             ),
         ),
     )
@@ -97,17 +97,17 @@ class MagisLiveClientTest {
     private fun slbLiveAnswer(
         vararg cdns: Pair<String, String>, // main_addr -> cfl url
     ) = MagisResult.Ok(
-        JSONObject()
+        MagisJsonObject()
             .put("invalidTime", 14400)
             .put(
                 "cdn_list",
-                JSONArray().apply {
+                MagisJsonArray().apply {
                     cdns.forEach { (mainAddr, url) ->
                         put(
-                            JSONObject()
+                            MagisJsonObject()
                                 .put("tag", "live")
                                 .put("main_addr", mainAddr)
-                                .put("url_list", JSONArray().put(JSONObject().put("url", url))),
+                                .put("url_list", MagisJsonArray().put(MagisJsonObject().put("url", url))),
                         )
                     }
                 },
@@ -198,7 +198,7 @@ class MagisLiveClientTest {
         assertEquals("cyx-RCNHD", play.bean["channelCode"])
         // getSlbInfo is asked with the CHANNEL's code, not the playCode.
         val slb = portal.calls.first { it.path == "v14/getSlbInfo" }
-        val liveCodes = slb.bean["liveCodeList"] as JSONArray
+        val liveCodes = slb.bean["liveCodeList"] as MagisJsonArray
         assertEquals(listOf("cyx-RCNHD"), (0 until liveCodes.length()).map { liveCodes.getString(it) })
     }
 
@@ -208,11 +208,11 @@ class MagisLiveClientTest {
             script = mutableMapOf(
                 "v4/startPlayLive" to {
                     MagisResult.Ok(
-                        JSONObject().put(
+                        MagisJsonObject().put(
                             "liveAddressList",
-                            JSONArray()
-                                .put(JSONObject().put("playCode", "").put("license", "lic-A"))
-                                .put(JSONObject().put("playCode", "pc-B").put("license", "lic-B")),
+                            MagisJsonArray()
+                                .put(MagisJsonObject().put("playCode", "").put("license", "lic-A"))
+                                .put(MagisJsonObject().put("playCode", "pc-B").put("license", "lic-B")),
                         ),
                     )
                 },
@@ -231,7 +231,7 @@ class MagisLiveClientTest {
         // No addresses at all.
         val noAddr = FakePortal(
             script = mutableMapOf(
-                "v4/startPlayLive" to { MagisResult.Ok(JSONObject()) },
+                "v4/startPlayLive" to { MagisResult.Ok(MagisJsonObject()) },
                 "v14/getSlbInfo" to { slbLiveAnswer("cdn1.example" to cflUrl1) },
             ),
         )
@@ -331,11 +331,11 @@ class MagisLiveClientTest {
 
     @Test(timeout = 10_000)
     fun `signalFrom returns null only when there is no license at all`() {
-        val withLicenseNoCode = JSONObject().put(
+        val withLicenseNoCode = MagisJsonObject().put(
             "liveAddressList",
-            JSONArray().put(JSONObject().put("playCode", "").put("license", "lic")),
+            MagisJsonArray().put(MagisJsonObject().put("playCode", "").put("license", "lic")),
         )
         assertEquals("" to "lic", signalFrom(withLicenseNoCode))
-        assertNull(signalFrom(JSONObject().put("liveAddressList", JSONArray())))
+        assertNull(signalFrom(MagisJsonObject().put("liveAddressList", MagisJsonArray())))
     }
 }

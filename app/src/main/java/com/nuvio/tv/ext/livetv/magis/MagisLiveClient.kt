@@ -2,8 +2,6 @@ package com.nuvio.tv.ext.livetv.magis
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import org.json.JSONArray
-import org.json.JSONObject
 
 /**
  * Facade over the Magis portal for LIVE TV: categories, channel pages, `v4/startPlayLive` +
@@ -275,7 +273,7 @@ data class MagisChannelSession(
  * The original app (decompiled `sources/h8/v3.java`) compares the same way: first COMPLETE
  * entry, else the first useful license.
  */
-internal fun signalFrom(play: JSONObject): Pair<String, String>? {
+internal fun signalFrom(play: MagisJsonObject): Pair<String, String>? {
     val list = play.optJSONArray("liveAddressList") ?: return null
     var firstLicense = ""
     for (i in 0 until list.length()) {
@@ -294,7 +292,7 @@ internal fun signalFrom(play: JSONObject): Pair<String, String>? {
  * `sign_type=cfl`, not a similar-looking prefix (`cflx`): `url` is a loose querystring with no
  * scheme, so it's split on `?`/`&` rather than parsed as a URL.
  */
-internal fun liveCdns(slb: JSONObject): List<MagisChannelCdn> {
+internal fun liveCdns(slb: MagisJsonObject): List<MagisChannelCdn> {
     val output = mutableListOf<MagisChannelCdn>()
     val cdnList = slb.optJSONArray("cdn_list") ?: return output
     for (i in 0 until cdnList.length()) {
@@ -318,7 +316,7 @@ internal fun bareHost(mainAddr: String): String = mainAddr
     .removePrefix("http://")
     .substringBefore('/')
 
-/** Walks a `JSONArray` of objects without writing the index by hand every place. */
-internal inline fun JSONArray.forEachObject(action: (JSONObject) -> Unit) {
+/** Walks a `MagisJsonArray` of objects without writing the index by hand every place. */
+internal inline fun MagisJsonArray.forEachObject(action: (MagisJsonObject) -> Unit) {
     for (i in 0 until length()) optJSONObject(i)?.let(action)
 }

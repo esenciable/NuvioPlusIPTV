@@ -10,6 +10,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.nuvio.tv.ext.livetv.platform.MagisRemoteConfig
+import com.nuvio.tv.ext.livetv.platform.AndroidMagisCryptoPort
 
 /**
  * The remote config contract (`odd/tasks/magis-remote-config.md`): all-or-nothing validation,
@@ -265,7 +267,7 @@ class MagisRemoteConfigTest {
     @Test(timeout = 5_000)
     fun `MagisCryptoHolder rebuilds only when the key changes`() {
         val provider = MagisConfigProvider(diskConfig)
-        val holder = MagisCryptoHolder { provider.current.threeDesKeyHex }
+        val holder = MagisCryptoHolder(AndroidMagisCryptoPort) { provider.current.threeDesKeyHex }
         val first = holder.get()
         assertNotNull(first)
         assertSame("misma clave: sin rebuild", first, holder.get())

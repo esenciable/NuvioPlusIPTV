@@ -1,6 +1,5 @@
 package com.nuvio.tv.ext.livetv.magis
 
-import org.json.JSONObject
 
 /**
  * The resolved Magis VOD stream: a direct `{base}/vod/{contentId}_media.{ts|mp4}` URL plus the
@@ -81,7 +80,7 @@ internal class MagisVodClient(
         //    next title (the reference's per-title catch), but when NOTHING worked the last
         //    error surfaces — a resolved flow never ends in a silent empty result.
         var lastError: MagisResult<Nothing>? = null
-        var selected: JSONObject? = null
+        var selected: MagisJsonObject? = null
         for (title in titles) {
             val response = session.withValidSession {
                 portal.call(

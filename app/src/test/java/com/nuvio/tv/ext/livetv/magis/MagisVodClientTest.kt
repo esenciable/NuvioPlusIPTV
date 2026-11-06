@@ -1,8 +1,8 @@
 package com.nuvio.tv.ext.livetv.magis
 
+import com.nuvio.tv.ext.livetv.magis.MagisDevice
+import com.nuvio.tv.ext.livetv.platform.AndroidMagisCryptoPort
 import kotlinx.coroutines.test.runTest
-import org.json.JSONArray
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -40,8 +40,8 @@ class MagisVodClientTest {
      *  is set it runs FIRST and can answer per-call (e.g. `v4/getItemData` dispatched by
      *  `bean["contentId"]`, which the season flow needs: the same path is called twice). */
     private class FakePortal(
-        private val script: MutableMap<String, MagisResult<JSONObject>.() -> MagisResult<JSONObject>> = mutableMapOf(),
-        private val dynamicScript: ((path: String, bean: Map<String, Any?>) -> MagisResult<JSONObject>?)? = null,
+        private val script: MutableMap<String, MagisResult<MagisJsonObject>.() -> MagisResult<MagisJsonObject>> = mutableMapOf(),
+        private val dynamicScript: ((path: String, bean: Map<String, Any?>) -> MagisResult<MagisJsonObject>?)? = null,
     ) : MagisPortalLike {
         data class Call(val path: String, val bean: Map<String, Any?>)
 
@@ -54,13 +54,13 @@ class MagisVodClientTest {
             userId: String,
             userToken: String,
             sn: String?,
-        ): MagisResult<JSONObject> {
+        ): MagisResult<MagisJsonObject> {
             calls += Call(path, bean)
             dynamicScript?.invoke(path, bean)?.let { return it }
-            val default: MagisResult<JSONObject>.() -> MagisResult<JSONObject> = {
-                MagisResult.Ok(JSONObject(mapOf("userId" to "u1", "userToken" to "t1", "snToken" to "ST-fake")))
+            val default: MagisResult<MagisJsonObject>.() -> MagisResult<MagisJsonObject> = {
+                MagisResult.Ok(MagisJsonObject(mapOf("userId" to "u1", "userToken" to "t1", "snToken" to "ST-fake")))
             }
-            return (script[path] ?: default).invoke(MagisResult.Ok(JSONObject()))
+            return (script[path] ?: default).invoke(MagisResult.Ok(MagisJsonObject()))
         }
     }
 
@@ -73,19 +73,19 @@ class MagisVodClientTest {
         threeDesKeyHex = "e7af1ed7de1ffddd7bd3fe37ebdffde9ef3fe1ae39edfeb8",
     )
 
-    private fun searchItem(contentId: String, name: String, programType: String = "") = JSONObject()
+    private fun searchItem(contentId: String, name: String, programType: String = "") = MagisJsonObject()
         .put("contentId", contentId).put("name", name).put("programType", programType)
 
-    private fun searchAnswer(vararg items: JSONObject) = MagisResult.Ok(
-        JSONObject().put("searchItem", JSONArray().apply { items.forEach { put(it) } }),
+    private fun searchAnswer(vararg items: MagisJsonObject) = MagisResult.Ok(
+        MagisJsonObject().put("searchItem", MagisJsonArray().apply { items.forEach { put(it) } }),
     )
 
     private fun itemDataAnswer(vararg episodes: Pair<Int, String>) = MagisResult.Ok(
-        JSONObject().put(
+        MagisJsonObject().put(
             "assetData",
-            JSONObject().put(
+            MagisJsonObject().put(
                 "simpleProgramList",
-                JSONArray().apply { episodes.forEach { (n, id) -> put(JSONObject().put("seriesNumber", n).put("contentId", id)) } },
+                MagisJsonArray().apply { episodes.forEach { (n, id) -> put(MagisJsonObject().put("seriesNumber", n).put("contentId", id)) } },
             ),
         ),
     )
@@ -96,36 +96,36 @@ class MagisVodClientTest {
         seasons: List<Pair<Int, String>>,
         episodes: List<Pair<Int, String>>,
     ) = MagisResult.Ok(
-        JSONObject().put(
+        MagisJsonObject().put(
             "assetData",
-            JSONObject()
+            MagisJsonObject()
                 .put(
                     "sameSeasonSeriesList",
-                    JSONArray().apply { seasons.forEach { (n, id) -> put(JSONObject().put("seasonNumber", n).put("contentId", id)) } },
+                    MagisJsonArray().apply { seasons.forEach { (n, id) -> put(MagisJsonObject().put("seasonNumber", n).put("contentId", id)) } },
                 )
                 .put(
                     "simpleProgramList",
-                    JSONArray().apply { episodes.forEach { (n, id) -> put(JSONObject().put("seriesNumber", n).put("contentId", id)) } },
+                    MagisJsonArray().apply { episodes.forEach { (n, id) -> put(MagisJsonObject().put("seriesNumber", n).put("contentId", id)) } },
                 ),
         ),
     )
 
     private fun playAnswer(mediaContentId: String, videoFormat: String, license: String = "lic-1") = MagisResult.Ok(
-        JSONObject().put(
+        MagisJsonObject().put(
             "episodeList",
-            JSONArray().put(
-                JSONObject().put(
+            MagisJsonArray().put(
+                MagisJsonObject().put(
                     "totalMovieList",
-                    JSONArray().put(
-                        JSONObject().put(
+                    MagisJsonArray().put(
+                        MagisJsonObject().put(
                             "movieList",
-                            JSONArray().put(
-                                JSONObject()
+                            MagisJsonArray().put(
+                                MagisJsonObject()
                                     .put("contentId", mediaContentId)
                                     .put("encodeFormat", "h264")
                                     .put("videoFormat", videoFormat)
                                     .put("height", 1080)
-                                    .put("licenseList", JSONArray().put(JSONObject().put("license", license))),
+                                    .put("licenseList", MagisJsonArray().put(MagisJsonObject().put("license", license))),
                             ),
                         ),
                     ),
@@ -135,15 +135,15 @@ class MagisVodClientTest {
     )
 
     private fun slbAnswer(mainAddr: String = "cdn.example.com/") = MagisResult.Ok(
-        JSONObject()
+        MagisJsonObject()
             .put("invalidTime", 14400)
             .put(
                 "cdn_list",
-                JSONArray().put(
-                    JSONObject()
+                MagisJsonArray().put(
+                    MagisJsonObject()
                         .put("tag", "vod")
                         .put("main_addr", mainAddr)
-                        .put("url_list", JSONArray().put(JSONObject().put("url", "a=1&sign_type=cfl").put("tag", "free"))),
+                        .put("url_list", MagisJsonArray().put(MagisJsonObject().put("url", "a=1&sign_type=cfl").put("tag", "free"))),
                 ),
             ),
     )
@@ -153,7 +153,7 @@ class MagisVodClientTest {
         store: FakeStore = FakeStore(),
         lookup: MagisTitleLookup = FakeTitleLookup(),
     ): MagisVodClient {
-        val session = MagisSession(portal, store)
+        val session = MagisSession(portal, store, MagisDevice(AndroidMagisCryptoPort))
         return MagisVodClient(
             portal = portal,
             session = session,
@@ -368,14 +368,14 @@ class MagisVodClientTest {
                 "v3/searchByName" to { searchAnswer(searchItem("c-series", "Ted Lasso", programType = "series")) },
                 "v4/getItemData" to {
                     MagisResult.Ok(
-                        JSONObject().put(
+                        MagisJsonObject().put(
                             "assetData",
-                            JSONObject().put(
+                            MagisJsonObject().put(
                                 "sameSeasonSeriesList",
-                                JSONArray(),
+                                MagisJsonArray(),
                             ).put(
                                 "simpleProgramList",
-                                JSONArray().put(JSONObject().put("seriesNumber", 1).put("contentId", "ep-1")),
+                                MagisJsonArray().put(MagisJsonObject().put("seriesNumber", 1).put("contentId", "ep-1")),
                             ),
                         ),
                     )
@@ -453,7 +453,7 @@ class MagisVodClientTest {
 
         // Empty list = season 1: a single-season series is not listed in its own list.
         val single = MagisResult.Ok(
-            JSONObject().put("assetData", JSONObject().put("sameSeasonSeriesList", JSONArray())),
+            MagisJsonObject().put("assetData", MagisJsonObject().put("sameSeasonSeriesList", MagisJsonArray())),
         ).let { (it as MagisResult.Ok).data }
         assertEquals(1, magisSeasonOfDetail(single, "c-x"))
     }
@@ -518,7 +518,7 @@ class MagisVodClientTest {
         val noMedia = FakePortal(
             script = mutableMapOf(
                 "v3/searchByName" to { searchAnswer(searchItem("c-movie", "Coco")) },
-                "v10/startPlayVOD" to { MagisResult.Ok(JSONObject().put("episodeList", JSONArray())) },
+                "v10/startPlayVOD" to { MagisResult.Ok(MagisJsonObject().put("episodeList", MagisJsonArray())) },
             ),
         )
         val r1 = client(noMedia).resolveDetailed("1234", "movie")
@@ -541,7 +541,7 @@ class MagisVodClientTest {
             script = mutableMapOf(
                 "v3/searchByName" to { searchAnswer(searchItem("c-movie", "Coco")) },
                 "v10/startPlayVOD" to { playAnswer("m", videoFormat = "mp4") },
-                "v14/getSlbInfo" to { MagisResult.Ok(JSONObject()) },
+                "v14/getSlbInfo" to { MagisResult.Ok(MagisJsonObject()) },
             ),
         )
         val result = client(portal).resolveDetailed("1234", "movie")
@@ -578,7 +578,7 @@ class MagisVodClientTest {
                 "v14/getSlbInfo" to { slbAnswer() },
             ),
         )
-        val session = MagisSession(portal, FakeStore())
+        val session = MagisSession(portal, FakeStore(), MagisDevice(AndroidMagisCryptoPort))
         val c = MagisVodClient(
             portal = portal,
             session = session,

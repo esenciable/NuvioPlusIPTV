@@ -1,7 +1,5 @@
 package com.nuvio.tv.ext.livetv.magis
 
-import org.json.JSONArray
-import org.json.JSONObject
 
 /**
  * VOD-side copy of the `v14/getSlbInfo` request body.
@@ -15,7 +13,7 @@ internal const val MAGIS_LIVE_ROOT = "masnew_live"
 
 /**
  * `v14/getSlbInfo` is the same call for VOD and for live; for live, the channel being resolved
- * goes into `liveCodeList`. Explicit `JSONArray`: Android's `JSONObject(Map)` does NOT convert a
+ * goes into `liveCodeList`. Explicit `MagisJsonArray`: Android's `MagisJsonObject(Map)` does NOT convert a
  * Kotlin `List`, it serializes it as the text `[cyx-XXX]` and the portal gets garbage.
  */
 internal fun slbRequestParams(apkVersion: String, liveCodes: List<String>): Map<String, Any?> = mapOf(
@@ -25,7 +23,7 @@ internal fun slbRequestParams(apkVersion: String, liveCodes: List<String>): Map<
     "appVer" to apkVersion,
     "lang" to "es",
     "encMediaSupported" to 1,
-    "liveCodeList" to JSONArray(liveCodes),
+    "liveCodeList" to MagisJsonArray(liveCodes),
     "appParams" to "",
     "reserve1" to "02:00:00:00:00:00",
     "pipFlag" to "0",
@@ -36,5 +34,5 @@ internal fun slbRequestParams(apkVersion: String, liveCodes: List<String>): Map<
  * the same default [MagisVodSlbCache] relies on. Verbatim from `MagisLiveClient.kt` in the fork
  * (see the port note above): the VOD SLB cache is its only caller in the base.
  */
-internal fun ttlOf(slb: JSONObject): Long =
+internal fun ttlOf(slb: MagisJsonObject): Long =
     slb.optString("invalidTime").toLongOrNull()?.takeIf { it > 0 } ?: 300L

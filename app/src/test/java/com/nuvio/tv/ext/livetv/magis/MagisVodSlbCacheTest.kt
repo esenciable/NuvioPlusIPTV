@@ -1,6 +1,5 @@
 package com.nuvio.tv.ext.livetv.magis
 
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -13,8 +12,8 @@ import org.junit.Test
  */
 class MagisVodSlbCacheTest {
 
-    private fun slb(invalidTime: Long = 14400): JSONObject =
-        if (invalidTime > 0) JSONObject().put("invalidTime", invalidTime) else JSONObject()
+    private fun slb(invalidTime: Long = 14400): MagisJsonObject =
+        if (invalidTime > 0) MagisJsonObject().put("invalidTime", invalidTime) else MagisJsonObject()
 
     /** 1h of fake clock starting at t=1_000_000; the cache reads it per call. */
     private class Clock(var now: Long = 1_000_000L)

@@ -3,10 +3,11 @@ package com.nuvio.tv.ext.livetv.magis
 import kotlinx.coroutines.test.runTest
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.nuvio.tv.ext.livetv.platform.AndroidMagisCryptoPort
+import com.nuvio.tv.ext.livetv.platform.MagisPortalClient
 
 /**
  * R2 of the remote-config contract: the portal reads the config PER USE — a provider swap must
@@ -49,7 +50,7 @@ class MagisPortalConfigTest {
                     spkgVer = "2025-08-07 05:40:11_36_16_",
                 ),
             )
-            val holder = MagisCryptoHolder { provider.current.threeDesKeyHex }
+            val holder = MagisCryptoHolder(AndroidMagisCryptoPort) { provider.current.threeDesKeyHex }
             val portal = MagisPortalClient(
                 configProvider = { provider.current },
                 cryptoProvider = { holder.get() },
@@ -57,12 +58,12 @@ class MagisPortalConfigTest {
             )
 
             // --- call 1: config A ---
-            assertTrue(portal.call("v8/active", baseFields = false) is MagisResult.Ok)
+            assertTrue(portal.call("v8/active", baseFields = false) is MagisResult.Ok<*>)
             val r1 = server.takeRequest()
             assertEquals("com.android.msandroid", r1.getHeader("apk"))
             assertEquals("43404", r1.getHeader("apkVer"))
             assertEquals("2025-08-07 05:40:11_36_16_", r1.getHeader("spkgVer"))
-            val dict1 = JSONObject(MagisCrypto(keyA).decryptBlob(r1.body.readUtf8()))
+            val dict1 = MagisJsonObject(MagisCrypto(AndroidMagisCryptoPort, keyA).decryptBlob(r1.body.readUtf8()))
             assertEquals("49902", dict1.getString("apkVersion"))
             assertEquals("2025-08-07 05:40:11_36_16_", dict1.getString("sysVersion"))
 
@@ -77,12 +78,12 @@ class MagisPortalConfigTest {
             )
 
             // --- call 2: config B, no restart ---
-            assertTrue(portal.call("v8/active", baseFields = false) is MagisResult.Ok)
+            assertTrue(portal.call("v8/active", baseFields = false) is MagisResult.Ok<*>)
             val r2 = server.takeRequest()
             assertEquals("43405", r2.getHeader("apkVer"))
             assertEquals("2026-01-01 00:00:00_36_16_", r2.getHeader("spkgVer"))
             // The body must now decrypt with the NEW key: a rotation lands on the next call.
-            val dict2 = JSONObject(MagisCrypto(keyB).decryptBlob(r2.body.readUtf8()))
+            val dict2 = MagisJsonObject(MagisCrypto(AndroidMagisCryptoPort, keyB).decryptBlob(r2.body.readUtf8()))
             assertEquals("49902", dict2.getString("apkVersion"))
             assertEquals("2026-01-01 00:00:00_36_16_", dict2.getString("sysVersion"))
         } finally {
@@ -98,7 +99,7 @@ class MagisPortalConfigTest {
             val provider = MagisConfigProvider(
                 config("${server.hostName}:${server.port}", key = "no-es-hex", "43404", "2025-08-07"),
             )
-            val holder = MagisCryptoHolder { provider.current.threeDesKeyHex }
+            val holder = MagisCryptoHolder(AndroidMagisCryptoPort) { provider.current.threeDesKeyHex }
             val portal = MagisPortalClient(
                 configProvider = { provider.current },
                 cryptoProvider = { holder.get() },
@@ -130,13 +131,13 @@ class MagisPortalConfigTest {
             )
             val portal = MagisPortalClient(
                 configProvider = { provider.current },
-                cryptoProvider = { MagisCrypto(provider.current.threeDesKeyHex) },
+                cryptoProvider = { MagisCrypto(AndroidMagisCryptoPort, provider.current.threeDesKeyHex) },
                 scheme = "http",
             )
 
             portal.call("v8/active", baseFields = false)
 
-            val dict = JSONObject(MagisCrypto(keyA).decryptBlob(server.takeRequest().body.readUtf8()))
+            val dict = MagisJsonObject(MagisCrypto(AndroidMagisCryptoPort, keyA).decryptBlob(server.takeRequest().body.readUtf8()))
             assertEquals("49903", dict.getString("apkVersion"))
             assertEquals("otro.appId", dict.getString("appId"))
         } finally {

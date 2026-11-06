@@ -4,6 +4,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
+import com.nuvio.tv.ext.livetv.platform.AndroidMagisCryptoPort
 
 /**
  * Vectors from the TS reference (`kino-light-addon/src/magis/crypto.test.ts` semantics):
@@ -20,30 +21,30 @@ class MagisCryptoTest {
     fun `encryptBody produces the exact wire for a known vector`() {
         val plain = """{"hola":"mundo"}"""
         val expected = "336b6e7968596c346c48552f313276566c5134474951646642336151306b4f32"
-        assertEquals(expected, MagisCrypto(key).encryptBody(plain))
+        assertEquals(expected, MagisCrypto(AndroidMagisCryptoPort, key).encryptBody(plain))
     }
 
     @Test
     fun `decryptBlob reverses encryptBody`() {
         val plain = """{"hola":"mundo","nested":{"list":[1,2,3]},"unicode":"español"}"""
-        val crypto = MagisCrypto(key)
+        val crypto = MagisCrypto(AndroidMagisCryptoPort, key)
         assertEquals(plain, crypto.decryptBlob(crypto.encryptBody(plain)))
     }
 
     @Test
     fun `decryptBlob reads the known wire`() {
         val wire = "336b6e7968596c346c48552f313276566c5134474951646642336151306b4f32"
-        assertEquals("""{"hola":"mundo"}""", MagisCrypto(key).decryptBlob(wire))
+        assertEquals("""{"hola":"mundo"}""", MagisCrypto(AndroidMagisCryptoPort, key).decryptBlob(wire))
     }
 
     @Test
     fun `the key must be 48 hex characters`() {
-        assertThrows(IllegalArgumentException::class.java) { MagisCrypto("short") }
+        assertThrows(IllegalArgumentException::class.java) { MagisCrypto(AndroidMagisCryptoPort, "short") }
         assertThrows(IllegalArgumentException::class.java) {
-            MagisCrypto("e7af1ed7de1ffddd7bd3fe37ebdffde9ef3fe1ae39edfebZ") // 48 chars, not hex
+            MagisCrypto(AndroidMagisCryptoPort, "e7af1ed7de1ffddd7bd3fe37ebdffde9ef3fe1ae39edfebZ") // 48 chars, not hex
         }
         assertThrows(IllegalArgumentException::class.java) {
-            MagisCrypto(key + "aa") // 50 chars
+            MagisCrypto(AndroidMagisCryptoPort, key + "aa") // 50 chars
         }
     }
 

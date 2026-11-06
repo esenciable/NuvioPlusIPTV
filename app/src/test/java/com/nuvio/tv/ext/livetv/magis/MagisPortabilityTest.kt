@@ -21,6 +21,7 @@ class MagisPortabilityTest {
     /** Archivos que NO tienen que ser portables, y por qué. */
     private val appGlue = mapOf(
         "MagisLiveSource.kt" to "produce LiveChannel, el modelo de la app de TV (en el teléfono lo mapea su propio adaptador)",
+        "MagisVodSource.kt" to "produce NativeVodSource/NativeVodStream, modelos del pipeline de streams de la app de TV",
     )
 
     @Test

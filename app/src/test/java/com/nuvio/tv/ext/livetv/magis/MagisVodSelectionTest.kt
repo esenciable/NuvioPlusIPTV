@@ -1,7 +1,5 @@
 package com.nuvio.tv.ext.livetv.magis
 
-import org.json.JSONArray
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -51,9 +49,9 @@ class MagisVodSelectionTest {
 
     @Test
     fun `searchItems prefers the direct searchItem list`() {
-        val response = JSONObject()
-            .put("searchItem", JSONArray().put(JSONObject().put("contentId", "a")))
-            .put("searchItemList", JSONArray().put(JSONObject().put("itemList", JSONArray())))
+        val response = MagisJsonObject()
+            .put("searchItem", MagisJsonArray().put(MagisJsonObject().put("contentId", "a")))
+            .put("searchItemList", MagisJsonArray().put(MagisJsonObject().put("itemList", MagisJsonArray())))
         val items = magisSearchItems(response)
         assertEquals(1, items.size)
         assertEquals("a", items[0].optString("contentId"))
@@ -61,11 +59,11 @@ class MagisVodSelectionTest {
 
     @Test
     fun `searchItems flattens grouped searchItemList`() {
-        val response = JSONObject().put(
+        val response = MagisJsonObject().put(
             "searchItemList",
-            JSONArray()
-                .put(JSONObject().put("itemList", JSONArray().put(JSONObject().put("contentId", "g1"))))
-                .put(JSONObject().put("itemList", JSONArray().put(JSONObject().put("contentId", "g2")))),
+            MagisJsonArray()
+                .put(MagisJsonObject().put("itemList", MagisJsonArray().put(MagisJsonObject().put("contentId", "g1"))))
+                .put(MagisJsonObject().put("itemList", MagisJsonArray().put(MagisJsonObject().put("contentId", "g2")))),
         )
         val items = magisSearchItems(response)
         assertEquals(listOf("g1", "g2"), items.map { it.optString("contentId") })
@@ -73,20 +71,20 @@ class MagisVodSelectionTest {
 
     @Test
     fun `searchItems falls back to assetList and then list`() {
-        val asset = JSONObject().put("assetList", JSONArray().put(JSONObject().put("contentId", "x")))
+        val asset = MagisJsonObject().put("assetList", MagisJsonArray().put(MagisJsonObject().put("contentId", "x")))
         assertEquals(listOf("x"), magisSearchItems(asset).map { it.optString("contentId") })
-        val list = JSONObject().put("list", JSONArray().put(JSONObject().put("contentId", "y")))
+        val list = MagisJsonObject().put("list", MagisJsonArray().put(MagisJsonObject().put("contentId", "y")))
         assertEquals(listOf("y"), magisSearchItems(list).map { it.optString("contentId") })
     }
 
     @Test
     fun `searchItems is empty for an empty response`() {
-        assertTrue(magisSearchItems(JSONObject()).isEmpty())
+        assertTrue(magisSearchItems(MagisJsonObject()).isEmpty())
     }
 
     // --- magisSelectCandidate ----------------------------------------------------
 
-    private fun item(contentId: String, name: String, programType: String = "") = JSONObject()
+    private fun item(contentId: String, name: String, programType: String = "") = MagisJsonObject()
         .put("contentId", contentId)
         .put("name", name)
         .put("programType", programType)
@@ -137,7 +135,7 @@ class MagisVodSelectionTest {
     @Test
     fun `selectCandidate ignores items without contentId`() {
         val items = listOf(
-            JSONObject().put("name", "Coco"), // no contentId
+            MagisJsonObject().put("name", "Coco"), // no contentId
             item("c1", "Coco"),
         )
         val best = magisSelectCandidate(items, "Coco", isSeries = false)
@@ -147,21 +145,21 @@ class MagisVodSelectionTest {
     @Test
     fun `selectCandidate returns null on empty or unusable results`() {
         assertNull(magisSelectCandidate(emptyList(), "Coco", isSeries = false))
-        assertNull(magisSelectCandidate(listOf(JSONObject().put("name", "Coco")), "Coco", isSeries = false))
+        assertNull(magisSelectCandidate(listOf(MagisJsonObject().put("name", "Coco")), "Coco", isSeries = false))
     }
 
     @Test
     fun `selectCandidate scores with name then viewPoint then alias`() {
-        val byAlias = listOf(item("c1", ""), JSONObject().put("contentId", "c2").put("alias", "Coco"))
+        val byAlias = listOf(item("c1", ""), MagisJsonObject().put("contentId", "c2").put("alias", "Coco"))
         assertEquals("c2", magisSelectCandidate(byAlias, "Coco", isSeries = false)?.optString("contentId"))
-        val byViewPoint = listOf(item("c1", ""), JSONObject().put("contentId", "c2").put("viewPoint", "Coco"))
+        val byViewPoint = listOf(item("c1", ""), MagisJsonObject().put("contentId", "c2").put("viewPoint", "Coco"))
         assertEquals("c2", magisSelectCandidate(byViewPoint, "Coco", isSeries = false)?.optString("contentId"))
     }
 
     // --- coverage / year / portal-score selection rules (parity with flat-magis-core.js) ---
 
     private fun itemWith(contentId: String, name: String, releaseTime: String? = null, score: Int? = null, programType: String = "") =
-        JSONObject().put("contentId", contentId).put("name", name).put("programType", programType).apply {
+        MagisJsonObject().put("contentId", contentId).put("name", name).put("programType", programType).apply {
             releaseTime?.let { put("releaseTime", it) }
             score?.let { put("score", it) }
         }
@@ -263,13 +261,13 @@ class MagisVodSelectionTest {
 
     @Test
     fun `episodeId picks the episode by seriesNumber`() {
-        val detail = JSONObject().put(
+        val detail = MagisJsonObject().put(
             "assetData",
-            JSONObject().put(
+            MagisJsonObject().put(
                 "simpleProgramList",
-                JSONArray()
-                    .put(JSONObject().put("seriesNumber", 1).put("contentId", "ep1"))
-                    .put(JSONObject().put("seriesNumber", 2).put("contentId", "ep2")),
+                MagisJsonArray()
+                    .put(MagisJsonObject().put("seriesNumber", 1).put("contentId", "ep1"))
+                    .put(MagisJsonObject().put("seriesNumber", 2).put("contentId", "ep2")),
             ),
         )
         assertEquals("ep2", magisEpisodeId(detail, wanted = 2))
@@ -278,24 +276,24 @@ class MagisVodSelectionTest {
 
     @Test
     fun `episodeId returns null when the episode is missing`() {
-        val detail = JSONObject().put(
+        val detail = MagisJsonObject().put(
             "assetData",
-            JSONObject().put(
+            MagisJsonObject().put(
                 "simpleProgramList",
-                JSONArray().put(JSONObject().put("seriesNumber", 1).put("contentId", "ep1")),
+                MagisJsonArray().put(MagisJsonObject().put("seriesNumber", 1).put("contentId", "ep1")),
             ),
         )
         assertNull(magisEpisodeId(detail, wanted = 5))
-        assertNull(magisEpisodeId(JSONObject(), wanted = 1))
+        assertNull(magisEpisodeId(MagisJsonObject(), wanted = 1))
     }
 
     // --- media scoring / best media ----------------------------------------------
 
     @Test
     fun `scoreMedia prefers h264 over other codecs and mp4 over other containers`() {
-        val h264mp4 = JSONObject().put("encodeFormat", "h264").put("videoFormat", "mp4").put("height", 1080)
-        val h264ts = JSONObject().put("encodeFormat", "h264").put("videoFormat", "ts").put("height", 1080)
-        val h265mp4 = JSONObject().put("encodeFormat", "h265").put("videoFormat", "mp4").put("height", 2160)
+        val h264mp4 = MagisJsonObject().put("encodeFormat", "h264").put("videoFormat", "mp4").put("height", 1080)
+        val h264ts = MagisJsonObject().put("encodeFormat", "h264").put("videoFormat", "ts").put("height", 1080)
+        val h265mp4 = MagisJsonObject().put("encodeFormat", "h265").put("videoFormat", "mp4").put("height", 2160)
         assertTrue(magisScoreMedia(h264mp4) < magisScoreMedia(h264ts))
         assertTrue(magisScoreMedia(h264ts) < magisScoreMedia(h265mp4))
     }
@@ -304,41 +302,41 @@ class MagisVodSelectionTest {
     fun `scoreMedia breaks container ties by height, taller is slightly better`() {
         // Same codec/container: the formula is -height/1000, so the TALLER media scores lower
         // (a gentle tie-break; codec/container dominate, exactly like the reference).
-        val lower = JSONObject().put("encodeFormat", "h264").put("videoFormat", "mp4").put("height", 720)
-        val higher = JSONObject().put("encodeFormat", "h264").put("videoFormat", "mp4").put("height", 1080)
+        val lower = MagisJsonObject().put("encodeFormat", "h264").put("videoFormat", "mp4").put("height", 720)
+        val higher = MagisJsonObject().put("encodeFormat", "h264").put("videoFormat", "mp4").put("height", 1080)
         assertTrue(magisScoreMedia(higher) < magisScoreMedia(lower))
     }
 
     @Test
     fun `bestMedia flattens totalMovieList groups and picks the lowest score`() {
-        val episode = JSONObject().put(
+        val episode = MagisJsonObject().put(
             "totalMovieList",
-            JSONArray()
-                .put(JSONObject().put("movieList", JSONArray().put(h265()).put(h264mp4())))
-                .put(JSONObject().put("movieList", JSONArray().put(h264ts()))),
+            MagisJsonArray()
+                .put(MagisJsonObject().put("movieList", MagisJsonArray().put(h265()).put(h264mp4())))
+                .put(MagisJsonObject().put("movieList", MagisJsonArray().put(h264ts()))),
         )
         assertEquals("mp4", magisBestMedia(episode)?.optString("contentId"))
     }
 
     @Test
     fun `bestMedia returns null with no candidates`() {
-        assertNull(magisBestMedia(JSONObject()))
+        assertNull(magisBestMedia(MagisJsonObject()))
         assertNull(
-            magisBestMedia(JSONObject().put("totalMovieList", JSONArray().put(JSONObject().put("movieList", JSONArray())))),
+            magisBestMedia(MagisJsonObject().put("totalMovieList", MagisJsonArray().put(MagisJsonObject().put("movieList", MagisJsonArray())))),
         )
     }
 
-    private fun h264mp4() = JSONObject().put("contentId", "mp4").put("encodeFormat", "h264").put("videoFormat", "mp4").put("height", 1080)
-    private fun h264ts() = JSONObject().put("contentId", "ts").put("encodeFormat", "h264").put("videoFormat", "ts").put("height", 1080)
-    private fun h265() = JSONObject().put("contentId", "h265").put("encodeFormat", "h265").put("videoFormat", "mp4").put("height", 2160)
+    private fun h264mp4() = MagisJsonObject().put("contentId", "mp4").put("encodeFormat", "h264").put("videoFormat", "mp4").put("height", 1080)
+    private fun h264ts() = MagisJsonObject().put("contentId", "ts").put("encodeFormat", "h264").put("videoFormat", "ts").put("height", 1080)
+    private fun h265() = MagisJsonObject().put("contentId", "h265").put("encodeFormat", "h265").put("videoFormat", "mp4").put("height", 2160)
 
     // --- vod CDN selection --------------------------------------------------------
 
-    private fun slb(vararg cdns: JSONObject) = JSONObject().put("cdn_list", JSONArray().apply { cdns.forEach { put(it) } })
-    private fun cdn(tag: String, mainAddr: String, vararg urls: JSONObject) =
-        JSONObject().put("tag", tag).put("main_addr", mainAddr).put("url_list", JSONArray().apply { urls.forEach { put(it) } })
-    private fun url(url: String, tag: String = "free", signType: String? = null): JSONObject {
-        val o = JSONObject().put("url", url).put("tag", tag)
+    private fun slb(vararg cdns: MagisJsonObject) = MagisJsonObject().put("cdn_list", MagisJsonArray().apply { cdns.forEach { put(it) } })
+    private fun cdn(tag: String, mainAddr: String, vararg urls: MagisJsonObject) =
+        MagisJsonObject().put("tag", tag).put("main_addr", mainAddr).put("url_list", MagisJsonArray().apply { urls.forEach { put(it) } })
+    private fun url(url: String, tag: String = "free", signType: String? = null): MagisJsonObject {
+        val o = MagisJsonObject().put("url", url).put("tag", tag)
         signType?.let { o.put("sign_type", it) }
         return o
     }
@@ -379,7 +377,7 @@ class MagisVodSelectionTest {
     @Test
     fun `vodCdn skips entries without main_addr`() {
         val slb = slb(
-            JSONObject().put("tag", "vod").put("url_list", JSONArray().put(url("a=1&sign_type=cfl"))),
+            MagisJsonObject().put("tag", "vod").put("url_list", MagisJsonArray().put(url("a=1&sign_type=cfl"))),
             cdn("vod", "https://ok.example.com", url("a=1&sign_type=cfl")),
         )
         assertEquals("https://ok.example.com", magisVodCdn(slb)?.base)
@@ -388,7 +386,7 @@ class MagisVodSelectionTest {
     @Test
     fun `vodCdn returns null without a vod entry`() {
         assertNull(magisVodCdn(slb(cdn("live", "https://live.example.com", url("a=1&sign_type=cfl")))))
-        assertNull(magisVodCdn(JSONObject()))
+        assertNull(magisVodCdn(MagisJsonObject()))
     }
 
     // --- extension choice ---------------------------------------------------------

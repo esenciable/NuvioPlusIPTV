@@ -1,8 +1,5 @@
 package com.nuvio.tv.ext.livetv.magis
 
-import java.security.MessageDigest
-import java.security.SecureRandom
-
 /**
  * The device identity the Magis protocol speaks about. Port of the TS reference's device
  * handling (`kino-light-addon` device minting, materialized in
@@ -11,17 +8,10 @@ import java.security.SecureRandom
  * emulator's, the one the protocol was captured with — changing them is untested and the
  * portal validates some of them against the minted device.
  *
- * Pure on purpose: no Android APIs, so minting and the `sn` seed derivation are unit-testable.
+ * Randomness and the MD5 seed arrive through [MagisCryptoPort], so this stays platform-free.
+ * An instance per client: the port is the only thing that differs between Android and iOS.
  */
-internal object MagisDevice {
-
-    private val random = SecureRandom()
-
-    /** The MAC the original app sends, fixed and fake. */
-    const val FIXED_MAC = "02:00:00:00:00:00"
-
-    /** Salt for `sn = md5(snToken + salt)` when the portal doesn't hand an `sn` back. */
-    const val SNTOKEN_SALT = "ntFT65w6itH!lHCPw7D=@qnsFC5adD28"
+internal class MagisDevice(private val port: MagisCryptoPort) {
 
     /**
      * The fingerprint `v3/snToken` expects (`SnTokenBean` in the decompiled app). The original
@@ -64,12 +54,19 @@ internal object MagisDevice {
             ?: md5Hex(snToken + SNTOKEN_SALT).lowercase()
 
     private fun randomHex(bytes: Int): String =
-        ByteArray(bytes).also { random.nextBytes(it) }.joinToString("") { "%02x".format(it) }
+        port.randomBytes(bytes).joinToString("") { "%02x".format(it) }
 
     private fun randomMac(): String =
-        ByteArray(6).also { random.nextBytes(it) }.joinToString(":") { "%02x".format(it) }
+        port.randomBytes(6).joinToString(":") { "%02x".format(it) }
 
-    private fun md5Hex(s: String): String = MessageDigest.getInstance("MD5")
-        .digest(s.toByteArray(Charsets.UTF_8))
-        .joinToString("") { "%02x".format(it) }
+    private fun md5Hex(s: String): String =
+        port.md5(s.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+
+    internal companion object {
+        /** The MAC the original app sends, fixed and fake. */
+        const val FIXED_MAC = "02:00:00:00:00:00"
+
+        /** Salt for `sn = md5(snToken + salt)` when the portal doesn't hand an `sn` back. */
+        const val SNTOKEN_SALT = "ntFT65w6itH!lHCPw7D=@qnsFC5adD28"
+    }
 }

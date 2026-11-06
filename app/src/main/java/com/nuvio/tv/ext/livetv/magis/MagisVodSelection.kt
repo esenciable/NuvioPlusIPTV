@@ -1,9 +1,5 @@
 package com.nuvio.tv.ext.livetv.magis
 
-import org.json.JSONArray
-import org.json.JSONObject
-import java.text.Normalizer
-
 /**
  * Pure selection heuristics for the Magis VOD flow, ported 1:1 from the VERIFIED plugin core
  * (`esencial-play-providers/lib/flat-magis-core.js`: `magisPortalQuery`, `magisTokens`,
@@ -19,13 +15,13 @@ internal val MAGIS_SERIES_TYPES = setOf("teleplay", "series", "variety")
 
 /**
  * The JS reference's `flatStr`: trims strings, coerces numbers, empty for null/missing. The
- * `isNull` guard matters because org.json's `optString` renders `JSONObject.NULL` as `"null"`.
+ * `isNull` guard matters because org.json's `optString` renders `MagisJsonObject.NULL` as `"null"`.
  */
-internal fun JSONObject.flatStr(key: String): String =
+internal fun MagisJsonObject.flatStr(key: String): String =
     if (isNull(key)) "" else optString(key).trim()
 
 /** The reference's `magisObjects`: keep only real objects from a JSON array. */
-internal fun magisObjects(array: JSONArray?): List<JSONObject> {
+internal fun magisObjects(array: MagisJsonArray?): List<MagisJsonObject> {
     if (array == null) return emptyList()
     return (0 until array.length()).mapNotNull { array.optJSONObject(it) }
 }
@@ -44,8 +40,7 @@ internal fun magisPortalQuery(title: String): String {
  * (so `Amélie` matches `amelie`), alphanumeric runs of 3+ characters, deduplicated.
  */
 internal fun magisTokens(value: String): Set<String> {
-    val normalized = Normalizer.normalize(value.lowercase(), Normalizer.Form.NFKD)
-        .replace(Regex("[\\u0300-\\u036f]"), "")
+    val normalized = magisFoldDiacritics(value.lowercase()).replace(COMBINING_MARKS, "")
     return Regex("[a-z0-9]{3,}").findAll(normalized).map { it.value }.toSet()
 }
 
@@ -53,7 +48,7 @@ internal fun magisTokens(value: String): Set<String> {
  * The search response's item list, unwrapped through every shape the portal has answered with:
    direct `searchItem` → grouped `searchItemList[].itemList` → `assetList` → `list`.
  */
-internal fun magisSearchItems(response: JSONObject): List<JSONObject> {
+internal fun magisSearchItems(response: MagisJsonObject): List<MagisJsonObject> {
     magisObjects(response.optJSONArray("searchItem")).takeIf { it.isNotEmpty() }?.let { return it }
     val grouped = magisObjects(response.optJSONArray("searchItemList"))
         .flatMap { magisObjects(it.optJSONArray("itemList")) }
@@ -97,22 +92,22 @@ internal fun magisReleaseYear(releaseTime: String): Int? {
 }
 
 internal fun magisSelectCandidate(
-    items: List<JSONObject>,
+    items: List<MagisJsonObject>,
     title: String,
     isSeries: Boolean,
     year: Int? = null,
-): JSONObject? {
+): MagisJsonObject? {
     val wanted = magisTokens(title)
-    fun displayName(item: JSONObject): String = sequenceOf("name", "viewPoint", "alias")
+    fun displayName(item: MagisJsonObject): String = sequenceOf("name", "viewPoint", "alias")
         .map { item.flatStr(it) }
         .firstOrNull { it.isNotEmpty() }
         .orEmpty()
-    fun coverage(item: JSONObject): Double {
+    fun coverage(item: MagisJsonObject): Double {
         if (wanted.isEmpty()) return 0.0
         val itemTokens = magisTokens(displayName(item))
         return wanted.count { itemTokens.contains(it) }.toDouble() / wanted.size
     }
-    fun yearMatches(item: JSONObject): Boolean {
+    fun yearMatches(item: MagisJsonObject): Boolean {
         if (year == null) return true
         val itemYear = magisReleaseYear(item.flatStr("releaseTime")) ?: return true
         return Math.abs(itemYear - year) <= 1
@@ -136,8 +131,8 @@ internal fun magisSelectCandidate(
  * whose `seriesNumber` equals [wanted], or the first one when [wanted] is 0. `null` when the
  * portal has no such episode.
  */
-internal fun magisEpisodeId(detail: JSONObject, wanted: Int): String? {
-    val assetData = detail.optJSONObject("assetData") ?: JSONObject()
+internal fun magisEpisodeId(detail: MagisJsonObject, wanted: Int): String? {
+    val assetData = detail.optJSONObject("assetData") ?: MagisJsonObject()
     val episodes = magisObjects(assetData.optJSONArray("simpleProgramList"))
     val selected = if (wanted > 0) {
         episodes.firstOrNull { it.optDouble("seriesNumber", Double.NaN) == wanted.toDouble() }
@@ -157,8 +152,8 @@ internal fun magisEpisodeId(detail: JSONObject, wanted: Int): String? {
  * significa temporada 1 — una serie de una sola temporada no aparece en su propia lista —, no "no
  * sé cuál es". `null` cuando la lista no identifica al detalle pedido.
  */
-internal fun magisSeasonOfDetail(detail: JSONObject, seriesContentId: String): Int? {
-    val assetData = detail.optJSONObject("assetData") ?: JSONObject()
+internal fun magisSeasonOfDetail(detail: MagisJsonObject, seriesContentId: String): Int? {
+    val assetData = detail.optJSONObject("assetData") ?: MagisJsonObject()
     val seasons = magisObjects(assetData.optJSONArray("sameSeasonSeriesList"))
     if (seasons.isEmpty()) return 1
     val own = seasons.firstOrNull { it.flatStr("contentId") == seriesContentId } ?: return null
@@ -171,8 +166,8 @@ internal fun magisSeasonOfDetail(detail: JSONObject, seriesContentId: String): I
  * `contentIdForSeason`, same parity note as [magisSeasonOfDetail]). `null` cuando la lista no
  * trae esa temporada.
  */
-internal fun magisContentIdForSeason(detail: JSONObject, wanted: Int): String? {
-    val assetData = detail.optJSONObject("assetData") ?: JSONObject()
+internal fun magisContentIdForSeason(detail: MagisJsonObject, wanted: Int): String? {
+    val assetData = detail.optJSONObject("assetData") ?: MagisJsonObject()
     val seasons = magisObjects(assetData.optJSONArray("sameSeasonSeriesList"))
     val match = seasons.firstOrNull { it.optDouble("seasonNumber", Double.NaN) == wanted.toDouble() }
     return match?.let { it.flatStr("contentId").takeIf { id -> id.isNotEmpty() } }
@@ -182,7 +177,7 @@ internal fun magisContentIdForSeason(detail: JSONObject, wanted: Int): String? {
  * Media score (the reference's `magisScoreMedia`): codec dominates (h264 = 0, else 2), then
  * container (mp4 = 0, else 1), then height as a small tie-break. LOWER wins.
  */
-internal fun magisScoreMedia(media: JSONObject): Double {
+internal fun magisScoreMedia(media: MagisJsonObject): Double {
     val codec = if (media.flatStr("encodeFormat").lowercase() == "h264") 0.0 else 2.0
     val container = if (media.flatStr("videoFormat").lowercase() == "mp4") 0.0 else 1.0
     val height = media.optDouble("height", Double.NaN).takeUnless { it.isNaN() } ?: 0.0
@@ -193,7 +188,7 @@ internal fun magisScoreMedia(media: JSONObject): Double {
  * The episode's best playable media: every `totalMovieList[].movieList` entry flattened, lowest
  * score wins (first on ties — `minByOrNull` matches the reference's reduce).
  */
-internal fun magisBestMedia(episode: JSONObject): JSONObject? {
+internal fun magisBestMedia(episode: MagisJsonObject): MagisJsonObject? {
     val candidates = magisObjects(episode.optJSONArray("totalMovieList"))
         .flatMap { magisObjects(it.optJSONArray("movieList")) }
     return candidates.minByOrNull { magisScoreMedia(it) }
@@ -212,7 +207,7 @@ internal data class MagisVodCdn(val base: String, val auth: String)
  * (or whose `sign_type` field says so). `main_addr` loses one trailing slash and gains
  * `https://` when the portal sent it bare. `null` when nothing qualifies.
  */
-internal fun magisVodCdn(slb: JSONObject): MagisVodCdn? {
+internal fun magisVodCdn(slb: MagisJsonObject): MagisVodCdn? {
     for (cdn in magisObjects(slb.optJSONArray("cdn_list"))) {
         if (cdn.flatStr("tag") != "vod") continue
         for (entry in magisObjects(cdn.optJSONArray("url_list"))) {
@@ -245,14 +240,14 @@ internal class MagisVodSlbCache(private val nowMs: () -> Long = { System.current
 
     private var tokenOwner: String? = null
     private var expiresAt: Long = 0L
-    private var slb: JSONObject? = null
+    private var slb: MagisJsonObject? = null
 
     /** The cached slb answer when [tokenOwner] still owns it and it has not expired. */
-    fun get(tokenOwner: String): JSONObject? =
+    fun get(tokenOwner: String): MagisJsonObject? =
         slb?.takeIf { this.tokenOwner == tokenOwner && nowMs() < expiresAt }
 
     /** Caches [slb] for [tokenOwner]; the TTL comes from the answer's `invalidTime` (300 s fallback). */
-    fun put(tokenOwner: String, slb: JSONObject) {
+    fun put(tokenOwner: String, slb: MagisJsonObject) {
         val ttlSeconds = ttlOf(slb)
         this.tokenOwner = tokenOwner
         this.slb = slb
@@ -262,4 +257,39 @@ internal class MagisVodSlbCache(private val nowMs: () -> Long = { System.current
     private companion object {
         const val SLB_MARGIN_MS = 300_000L
     }
+}
+
+/**
+ * Diacritic folding without `java.text.Normalizer`, which is JVM-only.
+ *
+ * The reference does `NFKD` + strip of U+0300..U+036F, which for Latin script means exactly
+ * "remove the accents". The only inputs this sees are catalog titles, so folding the Latin
+ * accented letters directly gives the same tokens — and the combining-mark strip is kept for
+ * titles that already arrive decomposed.
+ */
+private val COMBINING_MARKS = Regex("[\\u0300-\\u036f]")
+
+private val DIACRITICS: Map<Char, Char> = buildMap {
+    fun fold(plain: Char, accented: String) = accented.forEach { put(it, plain) }
+    fold('a', "áàâäãåāăą")
+    fold('c', "çćčĉċ")
+    fold('d', "ďđ")
+    fold('e', "éèêëēĕėęě")
+    fold('g', "ĝğġģ")
+    fold('h', "ĥ")
+    fold('i', "íìîïĩīįı")
+    fold('j', "ĵ")
+    fold('l', "ĺļľł")
+    fold('n', "ñńņň")
+    fold('o', "óòôöõōŏő")
+    fold('r', "ŕŗř")
+    fold('s', "śŝşš")
+    fold('t', "ţťŧ")
+    fold('u', "úùûüũūŭůűų")
+    fold('y', "ýÿŷ")
+    fold('z', "źżž")
+}
+
+internal fun magisFoldDiacritics(value: String): String = buildString(value.length) {
+    value.forEach { append(DIACRITICS[it] ?: it) }
 }

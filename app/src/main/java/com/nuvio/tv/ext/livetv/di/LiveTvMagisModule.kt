@@ -184,6 +184,11 @@ object LiveTvMagisModule {
                     resolver = MagisStreamResolver(playbackApi),
                 )
             } else null,
+            // PremiumTV: a static provider list, always configured — no portal, no credentials.
+            com.nuvio.tv.ext.livetv.data.NativeLiveSources.NativeLiveEntry(
+                loader = com.nuvio.tv.ext.livetv.premiumtv.PremiumTvChannelLoader(),
+                resolver = com.nuvio.tv.ext.livetv.premiumtv.PremiumTvStreamResolver(),
+            ),
         ),
     )
 }

@@ -11,8 +11,8 @@ import java.io.IOException
  * read back by the parser the page already uses.
  *
  * The fixtures are real, trimmed captures — an EuroLeague season document from the competition's v2
- * API, the current ACB round out of the Next.js payload, and an NBA scoreboard straight from ESPN
- * so the leagues that were already there are pinned too.
+ * API, the current ACB round out of the competition's own JSON API, and an NBA scoreboard straight
+ * from ESPN so the leagues that were already there are pinned too.
  */
 class BasketballProviderFeedsTest {
 
@@ -25,9 +25,9 @@ class BasketballProviderFeedsTest {
     @Test
     fun `euroleague season document becomes a scoreboard`() {
         val raw = fixture("euroleague-games.json")
-        val feeds = BasketballFeeds { url ->
+        val feeds = BasketballFeeds(get = { url ->
             if (url.contains("/competitions/E/seasons/")) raw else throw IOException("unexpected $url")
-        }
+        })
         val league = league("euroleague")
 
         val events = SportsFeeds.parseScoreboard(league, feeds.scoreboard(league))
@@ -46,29 +46,53 @@ class BasketballProviderFeedsTest {
     }
 
     @Test
-    fun `acb round payload becomes a scoreboard with its channels`() {
-        val html = fixture("acb-round-current.html")
-        val feeds = BasketballFeeds { url ->
-            // Only the round the page opens with: the rounds either side are fetched too, and a
-            // failure there is meant to be harmless.
-            if (url == "https://acb.com/es/liga/partidos") html else throw IOException("no round for $url")
-        }
+    fun `acb round from its api becomes a scoreboard with its channels`() {
+        val json = fixture("acb-round.json")
+        val feeds = BasketballFeeds(
+            get = { url -> throw IOException("the ACB source needs its key, not a plain fetch: $url") },
+            getWithHeaders = { url, headers ->
+                // The key rides on the request: without it the API answers 401.
+                check(headers["X-APIKEY"]?.isNotBlank() == true) { "the ACB key must be sent" }
+                check(url.startsWith("https://api2.acb.com/api/seasondata/Competition/matches?competitionId=1")) {
+                    "unexpected $url"
+                }
+                // Only the round the competition points at answers here. The rounds either side are
+                // asked for too, and one that fails must be skipped, never empty the list.
+                if (url.contains("roundId=")) throw IOException("no round for $url")
+                json
+            }
+        )
         val league = league("acb")
 
         val events = SportsFeeds.parseScoreboard(league, feeds.scoreboard(league))
 
-        assertEquals("nine games a round", 9, events.size)
+        assertEquals("nine games a round, from the one round that answered", 9, events.size)
         val first = events.first { it.home?.team?.abbr == "K&U" }
-        assertNotNull("the home side resolves through its teams:N reference", first.home)
-        assertEquals("MOB", first.away?.team?.abbr)
+        assertEquals("teams resolve by id, not by an index into the page", "MOB", first.away?.team?.abbr)
         assertEquals("100", first.home?.score)
         assertEquals("99", first.away?.score)
         assertEquals(GameState.POST, first.state)
         assertNotNull("the home club's colour", first.home?.team?.color)
         assertNotNull("the home club's crest", first.home?.team?.logo)
         assertTrue("the round is named", first.subtitle?.contains("Jornada 7") == true)
-        assertTrue("the TV channels come across", first.broadcasts.contains("DAZN"))
-        assertTrue("all of them", first.broadcasts.containsAll(listOf("Movistar Plus +", "Orange", "Vodafone TV")))
+        // The API's broadcast list is flat with a primary flag, not the page's {primary, secondary}.
+        assertEquals(
+            "the primary channels, in ACB's own order",
+            listOf("DAZN", "Movistar Plus +", "Orange", "Vodafone TV"),
+            first.broadcasts
+        )
+    }
+
+    @Test
+    fun `an acb answer with no matches fails instead of hiding the round`() {
+        val feeds = BasketballFeeds(
+            get = { url -> throw IOException("unexpected $url") },
+            getWithHeaders = { _, _ -> "{\"teams\":[],\"matches\":[]}" }
+        )
+
+        val failure = runCatching { feeds.scoreboard(league("acb")) }
+
+        assertTrue("an empty answer is a failure, not an empty league", failure.isFailure)
     }
 
     @Test

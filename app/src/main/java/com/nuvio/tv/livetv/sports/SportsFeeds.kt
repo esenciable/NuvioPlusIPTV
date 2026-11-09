@@ -27,12 +27,15 @@ internal class SportsFeeds {
         .retryOnConnectionFailure(true)
         .build()
 
-    private fun get(url: String): String {
-        val req = Request.Builder().url(url)
+    private fun get(url: String): String = get(url, emptyMap())
+
+    /** The same fetch with request headers, for a source that wants a key of its own. */
+    private fun get(url: String, headers: Map<String, String>): String {
+        val builder = Request.Builder().url(url)
             .header("Accept", "application/json")
             .header("User-Agent", "Mozilla/5.0 (Linux; Android 12; TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36")
-            .build()
-        http.newCall(req).execute().use { r ->
+        headers.forEach { (name, value) -> builder.header(name, value) }
+        http.newCall(builder.build()).execute().use { r ->
             if (!r.isSuccessful) throw java.io.IOException("HTTP ${r.code}")
             return r.body?.string() ?: throw java.io.IOException("empty answer")
         }
@@ -44,7 +47,10 @@ internal class SportsFeeds {
      * Leagues ESPN doesn't carry (see [BasketballFeeds]): their own source, rewritten into the shape
      * of an ESPN scoreboard so [parseScoreboard] reads it like any other.
      */
-    private val otherFeeds = BasketballFeeds { url -> get(url) }
+    private val otherFeeds = BasketballFeeds(
+        get = { url -> get(url) },
+        getWithHeaders = { url, headers -> get(url, headers) }
+    )
 
     /** Raw scoreboard for [league] over the days [fromDay]..[toDay] ("yyyyMMdd", US Eastern days). */
     fun scoreboardRaw(league: League, fromDay: String, toDay: String): String =

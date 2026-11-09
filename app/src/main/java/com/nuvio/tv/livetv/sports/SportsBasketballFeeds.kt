@@ -13,17 +13,22 @@ import java.util.TimeZone
  *
  * Neither can be read from ESPN — the ACB isn't in its catalogue at all, and its EuroLeague entry
  * (league 52) is an empty shell with no events and no standings — so each is read from the
- * competition's own site and rewritten into the shape of an ESPN scoreboard. Everything downstream
+ * competition's own API and rewritten into the shape of an ESPN scoreboard. Everything downstream
  * (the parser, logos, colours, clocks, the channel matcher) then works without knowing the source.
  *
  *  - EuroLeague: its own v2 API, no key, one JSON document holding the whole season.
- *  - ACB: no API exists (api.acb.com doesn't resolve and the back office wants credentials), so the
- *    match list is read out of the Next.js payload embedded in the page. Brittle by nature: if ACB
- *    redeploys and the payload moves, this throws and the page keeps what it had cached.
+ *  - ACB: its own JSON API, one answer per round. It asks for an `X-APIKEY` header, and the key is
+ *    the one ACB's own site ships inside its public JavaScript bundle: public, but ACB can rotate
+ *    it, so it lives in one constant and a rejected key fails loudly instead of looking like an
+ *    empty round.
  *
  * Neither source publishes a clock, so a game in progress shows its quarter instead of a countdown.
  */
-internal class BasketballFeeds(private val get: (String) -> String) {
+internal class BasketballFeeds(
+    private val get: (String) -> String,
+    /** The same fetch with request headers: the ACB API wants a key and [get] sends none. */
+    private val getWithHeaders: (String, Map<String, String>) -> String = { url, _ -> get(url) },
+) {
 
     /** A scoreboard document for [league], in the shape ESPN would have answered with. */
     fun scoreboard(league: League): String = when (league.provider) {
@@ -147,181 +152,99 @@ internal class BasketballFeeds(private val get: (String) -> String) {
     // ------------------------------------------------------------------ ACB
 
     /**
-     * The page has no API behind it, so the round is read out of the page itself: the one it opens
-     * with (a pointer to the current round), plus the round either side of it, which is enough to
-     * cover the weeks the day chips reach.
+     * The competition's own API, one request per round: the round it currently points at plus the
+     * rounds either side of it, which is enough to cover the weeks the day chips reach. A round that
+     * fails is skipped, so the rest of the list still shows.
      */
     private fun acb(): String {
-        val base = acbPage(get(ACB_URL), round = null)
-        val current = base.currentRoundId
-        val pages = ArrayList<AcbPage>()
-        pages += base
-        if (current != null) {
-            for (round in intArrayOf(current - 1, current + 1)) {
-                runCatching { acbPage(get("$ACB_URL?jornada=$round"), round) }.getOrNull()?.let { pages += it }
-            }
-        }
+        val base = acbRound(roundId = null)
+        val wanted = LinkedHashSet<Int?>()
+        wanted += base.round
+        neighbour(base, base.round, -1)?.let { wanted += it }
+        neighbour(base, base.round, +1)?.let { wanted += it }
+
         val seen = HashSet<String>()
         val events = ArrayList<JSONObject>()
-        for (page in pages) {
-            for (match in page.matches) {
+        for (roundId in wanted) {
+            val round = if (roundId == base.round) base
+            else runCatching { acbRound(roundId) }.getOrNull() ?: continue
+            for (match in round.matches) {
                 val id = number(match, "id")?.toString() ?: continue
                 if (!seen.add(id)) continue
-                acbEvent(page, match)?.let { events += it }
+                acbEvent(round, match)?.let { events += it }
             }
         }
-        // An empty answer means the payload moved: fail so the page keeps the rounds it had.
+        // An empty answer means the API changed under us: fail so the page keeps the rounds it had.
         if (events.isEmpty()) throw IOException("ACB answered no matches")
         return scoreboardJson(events)
     }
 
     /**
-     * The page without a `jornada` shows the competition's current round, and `currentRoundId` names
-     * that round whichever one was asked for — so the round a page belongs to comes from the request
-     * and only falls back to the pointer when nothing was asked.
+     * One round of the competition. Without `roundId` the answer is the round the competition
+     * currently points at, which is what the site opens with.
+     *
+     * Only `roundId` is ever sent: the API also accepts `round`, answers 200 to it and then ignores
+     * the value, so a wrong-looking request would look like a success.
      */
-    private fun acbPage(html: String, round: Int?): AcbPage {
-        val payload = flightPayload(html)
-        if (payload.isEmpty()) throw IOException("ACB page carried no payload")
-        val roots = ArrayList<Any>()
-        // One flight chunk carries a row per line; a single document is taken as it comes.
-        val whole = runCatching { JSONObject(payload) }.getOrNull()
-            ?: runCatching { JSONArray(payload) }.getOrNull()
-        if (whole != null) {
-            roots += whole
-        } else {
-            for (line in payload.split('\n')) {
-                val id = line.substringBefore(':', "")
-                if (id.isEmpty() || id.length > ROW_ID_MAX || !id.all { it in '0'..'9' || it in 'a'..'f' }) continue
-                val body = line.substring(id.length + 1)
-                val row = runCatching { JSONObject(body) }.getOrNull()
-                    ?: runCatching { JSONArray(body) }.getOrNull()
-                    ?: continue
-                roots += row
-            }
+    private fun acbRound(roundId: Int?): AcbRound {
+        val url = buildString {
+            append(ACB_API).append("?competitionId=").append(ACB_COMPETITION)
+            append("&isRoundSelected=true")
+            if (roundId != null) append("&roundId=").append(roundId)
         }
-        var node: JSONObject? = null
-        var rounds: JSONArray? = null
-        for (root in roots) {
-            if (node == null) node = findRoundData(root)
-            if (rounds == null) rounds = findRounds(root)
-            if (node != null && rounds != null) break
-        }
-        val found = node ?: throw IOException("ACB page carried no round")
-        val current = Regex("\"currentRoundId\":(\\d+)").find(payload)?.groupValues?.get(1)?.toIntOrNull()
-        return AcbPage(
-            currentRoundId = current,
-            roundLabel = roundName(rounds, round ?: current),
-            teams = found.optJSONArray("teams") ?: JSONArray(),
-            matches = found.optJSONArray("matches").objects()
+        val raw = getWithHeaders(url, ACB_HEADERS)
+        if (!raw.trimStart().startsWith("{")) throw IOException("ACB answered ${raw.take(40)}")
+        val doc = JSONObject(raw)
+        val selected = doc.optJSONObject("selectedFilters")
+        val selectedRound = number(selected, "round")
+        val teams = HashMap<Int, JSONObject>()
+        for (team in doc.optJSONArray("teams").objects()) number(team, "id")?.let { teams[it] = team }
+        val rounds = doc.optJSONObject("availableFilters")?.optJSONArray("rounds").objects()
+        return AcbRound(
+            round = selectedRound,
+            rounds = rounds,
+            roundLabel = acbRoundLabel(rounds, roundId ?: selectedRound),
+            teams = teams,
+            matches = doc.optJSONArray("matches").objects()
         )
     }
 
-    private fun roundName(rounds: JSONArray?, id: Int?): String? {
-        if (id == null) return null
-        return rounds.objects().firstOrNull { number(it, "id") == id }?.let { text(it, "name") }
+    /** "Jornada 7": the competition's round list carries the number, a round object does not. */
+    private fun acbRoundLabel(rounds: List<JSONObject>, roundId: Int?): String? {
+        if (roundId == null) return null
+        val round = rounds.firstOrNull { number(it, "id") == roundId } ?: return null
+        return number(round, "roundNumber")?.takeIf { it > 0 }?.let { "Jornada $it" }
     }
 
-    private fun JSONArray?.objects(): List<JSONObject> {
-        if (this == null) return emptyList()
-        return (0 until length()).mapNotNull { optJSONObject(it) }
+    /** The round [step] places away from [roundId] in the competition's own list, if there is one. */
+    private fun neighbour(round: AcbRound, roundId: Int?, step: Int): Int? {
+        if (roundId == null || round.rounds.isEmpty()) return null
+        val index = round.rounds.indexOfFirst { number(it, "id") == roundId }
+        if (index < 0) return null
+        return round.rounds.getOrNull(index + step)?.let { number(it, "id") }
     }
 
-    /**
-     * Next.js streams its page as escaped string chunks pushed into `self.__next_f`. Unescaping them
-     * (by way of a JSON array, which is what they already are) gives one document with the round in it.
-     *
-     * Scanned by hand rather than with a pattern: the alternation over a 20 KB literal makes the
-     * regex engine backtrack itself into a StackOverflowError.
-     */
-    private fun flightPayload(html: String): String {
-        val literals = StringBuilder("[")
-        var found = 0
-        var at = 0
-        while (true) {
-            val marker = html.indexOf(FLIGHT_MARKER, at)
-            if (marker < 0) break
-            val open = html.indexOf('"', marker + FLIGHT_MARKER.length)
-            if (open < 0) break
-            var i = open + 1
-            while (i < html.length) {
-                val c = html[i]
-                if (c == '\\') i += 2 else if (c == '"') break else i++
-            }
-            if (i >= html.length) break
-            if (found > 0) literals.append(',')
-            literals.append(html, open, i + 1)
-            found++
-            at = i + 1
-        }
-        if (found == 0) return ""
-        literals.append(']')
-        val chunks = runCatching { JSONArray(literals.toString()) }.getOrNull() ?: return ""
-        val out = StringBuilder()
-        for (i in 0 until chunks.length()) out.append(chunks.optString(i))
-        return out.toString()
-    }
-
-    /**
-     * The round's own object, wherever its row buries it: the one carrying both the team list the
-     * matches point into and the matches themselves.
-     */
-    private fun findRoundData(node: Any?, depth: Int = 0): JSONObject? {
-        if (depth > DEPTH_LIMIT) return null
-        when (node) {
-            is JSONObject -> {
-                val matches = node.optJSONArray("matches")
-                if (node.optJSONArray("teams") != null && matches != null &&
-                    matches.optJSONObject(0)?.has("homeTeam") == true
-                ) return node
-                for (key in node.keys()) findRoundData(node.opt(key), depth + 1)?.let { return it }
-            }
-            is JSONArray -> for (i in 0 until node.length()) findRoundData(node.opt(i), depth + 1)?.let { return it }
-        }
-        return null
-    }
-
-    /** The competition's round list (id and name), to say which round a page is. */
-    private fun findRounds(node: Any?, depth: Int = 0): JSONArray? {
-        if (depth > DEPTH_LIMIT) return null
-        when (node) {
-            is JSONArray -> {
-                if (node.optJSONObject(0)?.has("roundNumber") == true) return node
-                for (i in 0 until node.length()) findRounds(node.opt(i), depth + 1)?.let { return it }
-            }
-            is JSONObject -> for (key in node.keys()) findRounds(node.opt(key), depth + 1)?.let { return it }
-        }
-        return null
-    }
-
-    /**
-     * A match names its two teams by reference into the page's own team list
-     * (`"$3d:props:children:…:data:teams:11"`): the number is the index. A team already written out
-     * in full is taken as it is.
-     */
-    private fun acbTeam(match: JSONObject, key: String, teams: JSONArray): JSONObject? =
-        when (val value = match.opt(key)) {
-            is JSONObject -> value
-            is String -> value.substringAfterLast(':').toIntOrNull()?.let { teams.optJSONObject(it) }
-            else -> null
-        }
-
-    private fun acbEvent(page: AcbPage, m: JSONObject): JSONObject? {
+    private fun acbEvent(round: AcbRound, m: JSONObject): JSONObject? {
         val id = number(m, "id") ?: return null
         val start = parseUtc(text(m, "startDateTime")) ?: return null
-        val home = acbTeam(m, "homeTeam", page.teams) ?: return null
-        val away = acbTeam(m, "awayTeam", page.teams) ?: return null
+        // Teams are named by id and listed once for the whole round, so they resolve by lookup.
+        val home = round.teams[number(m, "homeTeamId")] ?: return null
+        val away = round.teams[number(m, "awayTeamId")] ?: return null
 
         val status = text(m, "matchStatus").orEmpty()
         val quarter = number(m, "currentQuarter") ?: 0
         val homeScore = number(m, "homeScore")
         val awayScore = number(m, "awayScore")
-        // Only two values were ever seen: NOT_STARTED and FINALIZED. Anything else is taken as a
-        // game in progress rather than dropped, and a quarter beyond the fourth is overtime.
+        // NOT_STARTED, NOT_SCHEDULED and FINALIZED are the only values ever measured, and no
+        // in-progress one was seen. So an unknown status is read as live only when the rest of the
+        // answer agrees: a score already on the board and a start inside the game's own window.
+        // Anything else stays scheduled — a game is never labelled live on a guess.
+        val inPlay = homeScore != null && awayScore != null &&
+            System.currentTimeMillis() - start in 0L..LIVE_WINDOW_MS
         val state = when {
-            status == "NOT_STARTED" -> "pre"
             status == "FINALIZED" -> "post"
-            status.isNotEmpty() -> "in"
+            status == "NOT_STARTED" || status == "NOT_SCHEDULED" -> "pre"
+            inPlay -> "in"
             else -> "pre"
         }
         val score = state != "pre"
@@ -343,23 +266,15 @@ internal class BasketballFeeds(private val get: (String) -> String) {
             logo = text(away, "logo")
         )
 
-        val channels = LinkedHashSet<String>()
-        m.optJSONObject("broadcastChannels")?.let { c ->
-            for (group in arrayOf("primary", "secondary")) {
-                val list = c.optJSONArray(group) ?: continue
-                for (i in 0 until list.length()) text(list.optJSONObject(i), "name")?.let { channels += it }
-            }
-        }
-
         return eventJson(
             id = id.toString(),
             startMs = start,
             state = state,
             period = if (state == "pre") 0 else quarter,
             shortDetail = if (state == "in") quarterLabel(quarter) else null,
-            headline = page.roundLabel,
+            headline = round.roundLabel,
             venue = null,
-            broadcasts = channels.toList(),
+            broadcasts = acbChannels(m),
             home = homeTeam,
             away = awayTeam,
             homeScore = if (score) homeScore else null,
@@ -369,6 +284,26 @@ internal class BasketballFeeds(private val get: (String) -> String) {
             homeWon = state == "post" && homeScore != null && awayScore != null && homeScore > awayScore,
             awayWon = state == "post" && homeScore != null && awayScore != null && awayScore > homeScore
         )
+    }
+
+    /**
+     * The ways to watch a game. The API sends a flat list of `{broadcaster, primary, order}` —
+     * not the `{primary[], secondary[]}` object the site's page payload used to carry — so the
+     * primary channel is a flag per entry, and a non-primary one is still a way to watch.
+     */
+    private fun acbChannels(m: JSONObject): List<String> {
+        val entries = m.optJSONArray("broadcastChannels").objects()
+        if (entries.isEmpty()) return emptyList()
+        val primary = entries.filter { it.optBoolean("primary", false) }
+        val chosen = if (primary.isEmpty()) entries else primary
+        return chosen.sortedBy { number(it, "order") ?: Int.MAX_VALUE }
+            .mapNotNull { text(it, "broadcaster") }
+            .distinct()
+    }
+
+    private fun JSONArray?.objects(): List<JSONObject> {
+        if (this == null) return emptyList()
+        return (0 until length()).mapNotNull { optJSONObject(it) }
     }
 
     // ------------------------------------------------------------------ ESPN's shape
@@ -519,27 +454,40 @@ internal class BasketballFeeds(private val get: (String) -> String) {
     private fun number(o: JSONObject?, name: String): Int? =
         o?.optInt(name, Int.MIN_VALUE)?.takeIf { it != Int.MIN_VALUE }
 
-    private data class AcbPage(
-        val currentRoundId: Int?,
+    /** One round of the ACB competition: who plays, against whom, and the rounds either side. */
+    private data class AcbRound(
+        val round: Int?,
+        val rounds: List<JSONObject>,
         val roundLabel: String?,
-        val teams: JSONArray,
+        val teams: Map<Int, JSONObject>,
         val matches: List<JSONObject>
     )
 
     private companion object {
         const val EUROLEAGUE_V2 = "https://api-live.euroleague.net/v2"
-        const val ACB_URL = "https://acb.com/es/liga/partidos"
+
+        /** The competition's own API; one answer per round. */
+        const val ACB_API = "https://api2.acb.com/api/seasondata/Competition/matches"
+
+        /** Liga Endesa. The same endpoint serves the Copa, the Supercopa and the Minicopa. */
+        const val ACB_COMPETITION = 1
+
+        /**
+         * ACB's own front-end key. It is not a secret — it ships inside the public JavaScript
+         * bundle of acb.com, which is how it was found — but ACB can rotate it at any time, so a
+         * 401 from here has to surface as a failure, never as "no matches this round".
+         */
+        const val ACB_API_KEY = "0dd94928-6f57-4c08-a3bd-b1b2f092976e"
+
+        val ACB_HEADERS = mapOf(
+            "X-APIKEY" to ACB_API_KEY,
+            "Accept" to "application/json",
+            "Origin" to "https://acb.com",
+            "Referer" to "https://acb.com/"
+        )
 
         /** A basketball game plus its breaks: past this, a game still marked unplayed is taken as over. */
         const val LIVE_WINDOW_MS = 150L * 60 * 1000
-
-        /** Serialised rows name themselves with a short hex id. */
-        const val ROW_ID_MAX = 4
-
-        /** How deep into a serialised row the round's own object can sit. */
-        const val DEPTH_LIMIT = 40
-
-        val FLIGHT_MARKER = "self.__next_f.push([1,"
 
         val ISO_PATTERNS = listOf(
             "yyyy-MM-dd'T'HH:mm:ss'Z'",

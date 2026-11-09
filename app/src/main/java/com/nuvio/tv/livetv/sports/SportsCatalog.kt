@@ -24,6 +24,15 @@ object SportsCatalog {
         // ---- Basketball
         League("basketball/nba", Sport.BASKETBALL, "NBA", "NBA", "basketball/nba", guideWords = listOf("NBA"),
             regions = EVERYWHERE, minutes = 150, color = 0xFF1D428A),
+        // ESPN carries neither of these: its catalogue has no ACB at all and its EuroLeague entry is
+        // an empty shell, so both are read from the competition's own site (BasketballFeeds).
+        // Shown everywhere on purpose: a Spanish league and a European one are worth seeing abroad.
+        League("acb", Sport.BASKETBALL, "Liga Endesa", "ACB",
+            guideWords = listOf("Liga Endesa", "ACB", "Liga ACB"),
+            regions = EVERYWHERE, minutes = 125, color = 0xFFE30613, provider = SportProvider.ACB),
+        League("euroleague", Sport.BASKETBALL, "EuroLeague", "EUROLEAGUE",
+            guideWords = listOf("EuroLeague", "Euro League", "Euroliga", "ULEB"),
+            regions = EVERYWHERE, minutes = 125, color = 0xFF0B3B8C, provider = SportProvider.EUROLEAGUE),
         League("basketball/wnba", Sport.BASKETBALL, "WNBA", "WNBA", "basketball/wnba", guideWords = listOf("WNBA"),
             regions = NA, minutes = 120, color = 0xFFC8102E),
         League("basketball/mens-college-basketball", Sport.BASKETBALL, "Men's College Basketball", "NCAAM",

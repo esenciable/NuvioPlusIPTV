@@ -36,6 +36,13 @@ enum class Sport(val label: String, val icon: String) {
 enum class LeagueKind { TEAMS, EVENT }
 
 /**
+ * Where a league's games come from: ESPN's public feeds, or the competition's own site for the two
+ * basketball leagues ESPN doesn't carry (its ACB entry doesn't exist and its EuroLeague one is an
+ * empty shell). See [BasketballFeeds].
+ */
+enum class SportProvider { ESPN, ACB, EUROLEAGUE }
+
+/**
  * One competition the Sports page knows about.
  *  - [espnPath]: its ESPN feed ("football/nfl"), or null for one found only in your guide.
  *  - [guideWords]: how guides usually name it, to find it in the TV guide.
@@ -70,10 +77,15 @@ data class League(
     /** National teams (England, France, USA…): following one covers all their competitions. */
     val national: Boolean = false,
     /** Women's national teams: their own countries list (ESPN's England women aren't England men). */
-    val women: Boolean = false
+    val women: Boolean = false,
+    /** Where its games come from; ESPN's feeds unless the competition has its own source. */
+    val provider: SportProvider = SportProvider.ESPN
 ) {
     /** National leagues that share a countries list: same sport, men's or women's. */
     val nationalGroup: String get() = sport.name + if (women) "|w" else ""
+
+    /** Whether there's a feed to ask for its games: ESPN's, or the competition's own. */
+    val hasFeed: Boolean get() = espnPath != null || provider != SportProvider.ESPN
 
     companion object {
         val ALL_REGIONS = setOf("US", "UK", "IE", "CA", "AU", "OTHER")

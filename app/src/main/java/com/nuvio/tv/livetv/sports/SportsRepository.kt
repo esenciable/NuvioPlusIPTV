@@ -127,7 +127,7 @@ class SportsRepository @Inject constructor(
             .groupBy { SportsCatalog.league(it.leagueId)?.sport }
         fun coveredByEspn(ev: SportsEvent): Boolean {
             val league = SportsCatalog.league(ev.leagueId) ?: return false
-            if (league.espnPath != null) return false
+            if (league.hasFeed) return false
             val same = espnBySport[league.sport] ?: return false
             val t = SportsCatalog.norm(ev.title + " " + (ev.subtitle ?: ""))
             return same.any { r ->
@@ -401,7 +401,7 @@ class SportsRepository @Inject constructor(
             .filter { (_, list) -> list.any { it.channel.key == playingKey && it.sure } }
             .keys.mapNotNull { id -> events.value.firstOrNull { it.id == id && it.state == GameState.LIVE }?.leagueId }.toSet()
         val due = activeLeagues(s, f).filter { l ->
-            if (l.espnPath == null) return@filter false
+            if (!l.hasFeed) return@filter false
             val d = data[l.id]
             val age = now - (d?.fetchedAt ?: 0L)
             val live = d?.events?.any { it.state == GameState.LIVE || (it.state == GameState.PRE && it.startMs in (now - 15 * MINUTE)..(now + 10 * MINUTE)) } == true
@@ -708,6 +708,9 @@ class SportsRepository @Inject constructor(
      * feed won't take that, one request per day; failing that, whatever day the feed picks.
      */
     private fun fetchScoreboard(l: League, @Suppress("UNUSED_PARAMETER") from: String, @Suppress("UNUSED_PARAMETER") to: String, days: List<String>): List<String> {
+        // A league with its own source answers with the whole round in one go; ESPN doesn't, so it
+        // has to be asked a day at a time.
+        if (l.provider != SportProvider.ESPN) return listOf(feeds.scoreboardDefaultRaw(l))
         // ESPN turns down a range of days ("20261019-20261021": HTTP 400, in every league), so
         // a day at a time (the ESPN check in nuvio-data showed it).
         var firstError: Throwable? = null
@@ -762,7 +765,7 @@ class SportsRepository @Inject constructor(
         val now = System.currentTimeMillis()
         val m = HashMap<String, LeagueData>()
         for (l in SportsCatalog.leagues) {
-            if (l.espnPath == null) continue
+            if (!l.hasFeed) continue
             val file = File(dir, "sb_${safe(l.id)}.json")
             if (!file.exists()) continue
             runCatching {

@@ -40,17 +40,26 @@ internal class SportsFeeds {
 
     // ------------------------------------------------------------------ ESPN
 
+    /**
+     * Leagues ESPN doesn't carry (see [BasketballFeeds]): their own source, rewritten into the shape
+     * of an ESPN scoreboard so [parseScoreboard] reads it like any other.
+     */
+    private val otherFeeds = BasketballFeeds { url -> get(url) }
+
     /** Raw scoreboard for [league] over the days [fromDay]..[toDay] ("yyyyMMdd", US Eastern days). */
     fun scoreboardRaw(league: League, fromDay: String, toDay: String): String =
-        get("$ESPN${league.espnPath}/scoreboard?dates=$fromDay-$toDay&limit=1000${league.espnQuery}")
+        if (league.provider != SportProvider.ESPN) otherFeeds.scoreboard(league)
+        else get("$ESPN${league.espnPath}/scoreboard?dates=$fromDay-$toDay&limit=1000${league.espnQuery}")
 
     /** One day only (for leagues whose feed won't take a range of days). */
     fun scoreboardDayRaw(league: League, day: String): String =
-        get("$ESPN${league.espnPath}/scoreboard?dates=$day&limit=1000${league.espnQuery}")
+        if (league.provider != SportProvider.ESPN) otherFeeds.scoreboard(league)
+        else get("$ESPN${league.espnPath}/scoreboard?dates=$day&limit=1000${league.espnQuery}")
 
     /** The feed's own pick of days (no date asked for): the last resort. */
     fun scoreboardDefaultRaw(league: League): String =
-        get("$ESPN${league.espnPath}/scoreboard?limit=1000${league.espnQuery}")
+        if (league.provider != SportProvider.ESPN) otherFeeds.scoreboard(league)
+        else get("$ESPN${league.espnPath}/scoreboard?limit=1000${league.espnQuery}")
 
     fun teamsRaw(league: League): String = get("$ESPN${league.espnPath}/teams?limit=1000")
 
@@ -660,6 +669,8 @@ internal class SportsFeeds {
                 Sport.BASKETBALL -> when (league.id) {
                     "basketball/nba" -> countdown(4, 720.0)
                     "basketball/mens-college-basketball" -> countdown(2, 1200.0)
+                    // Liga Endesa and the EuroLeague: four quarters of ten minutes, like the rest.
+                    "acb", "euroleague" -> countdown(4, 600.0)
                     else -> countdown(4, 600.0)
                 }
                 Sport.HOCKEY -> countdown(3, 1200.0)

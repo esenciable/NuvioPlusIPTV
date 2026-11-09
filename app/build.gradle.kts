@@ -136,7 +136,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 1074
-        versionName = "1.1.0-beta.8.3"
+        versionName = "1.1.0-beta.9"
 
         buildConfigField("String", "PARENTAL_GUIDE_API_URL", "\"${localProperties.getProperty("PARENTAL_GUIDE_API_URL", "")}\"")
         buildConfigField("String", "INTRODB_API_URL", "\"${localProperties.getProperty("INTRODB_API_URL", "")}\"")

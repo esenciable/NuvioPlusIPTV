@@ -14,8 +14,12 @@ name: Sync Nuvio releases
 # "repo" and "workflow" scopes. Optional app-key secrets are listed in the
 # "Write app keys" step.
 on:
-  schedule:
-    - cron: "17 * * * *"   # hourly check
+  # Schedule removed in this fork. This workflow mirrors Nuvio's own releases into
+  # $GITHUB_REPOSITORY under Nuvio's tag names, and the in-app updater reads
+  # `releases/latest` here: a mirrored 1.1.0-beta.7 would outrank our own builds and the app
+  # would offer somebody else's APK. Upstream code still arrives through
+  # "Merge Nuvio release (manual)", and our update stream is built by
+  # "Release Nuvio + IPTV update".
   workflow_dispatch:
     inputs:
       tag:
